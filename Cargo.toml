@@ -1,0 +1,29 @@
+[package]
+name = "EngineR"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+blake2 = "0.10"
+base64ct = "1.3"
+rand = "0.8.4"
+rocket = "0.5.0-rc.1"
+lazy_static = "1.4.0"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+#serde-hjson = "0.9.1"
+serde_derive = "1.0"
+chrono = { version = "0.4", features = ["serde", "rustc-serialize"] }
+#log ="0.4"
+config = "0.11"
+sled = "0.34"
+postgres = "0.19"
+bcrypt = "0.12.1"
+sqlx = { version = "0.5", features = [  "runtime-async-std-native-tls", "postgres" ] }
+async-std = { version = "1", features = [ "attributes" ] }
+
+
