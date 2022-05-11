@@ -35,7 +35,7 @@ impl Repository {
         res
     }
 
-    async fn getObjectTypeFromAlias(&mut self, alias: String) -> ObjectType {
+    pub async fn getObjectTypeFromAlias(alias: String) -> ObjectType {
         let fields_rows = sql(format!("select * from fields where table = '{}'", alias).as_str()).await;
 
         let fields = Repository::getFieldsFromRows(fields_rows);
@@ -49,7 +49,7 @@ impl Repository {
         }
     }
 
-    async fn getObjectTypeFromObjectId(&mut self, id: String) -> ObjectType {
+    pub async fn getObjectTypeFromObjectId(id: String) -> ObjectType {
         let fields_rows = sql(format!("select f.* from object o join fields f on f.table=o.alias where o.id = '{}'", id).as_str()).await;
         let fields = Repository::getFieldsFromRows(fields_rows);
 
@@ -65,8 +65,8 @@ impl Repository {
     }
 
 
-    async fn hydrateFilledObjectType(&mut self, alias: String, id: String) -> Object {
-        let mut objectType = self.getObjectTypeFromObjectId(id.clone()).await;
+    pub async fn hydrateFilledObjectType(alias: String, id: String) -> Object {
+        let mut objectType = Self::getObjectTypeFromObjectId(id.clone()).await;
         let row = sql_one(format!("select * from {} where id='{}'", alias, id.clone()).as_str()).await;
         for field in &mut objectType.fields {
             field.value = Some(row.get::<String, &str>(field.alias.as_str()).to_string());

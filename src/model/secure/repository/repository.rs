@@ -1,70 +1,65 @@
 use std::collections::LinkedList;
 use std::vec;
-use postgres::{Client, Error, NoTls, Row, RowIter};
 use rocket::futures::future::err;
 use rocket::shield::Feature::Accelerometer;
+use sqlx::Row;
+use crate::controllers::pool::pool::sql;
 use crate::model::link::entity::link::Link;
 use crate::model::object::entity::object::{Field, Object, ObjectType};
 use crate::model::secure::entity::permission::{Access, Group, Permission, PermissionKind, PermissionLevel, PermissionsGroup};
 use crate::model::user::entity::user::User;
 
-pub struct Repository<'a> {
-    db: &'a mut Client,
-}
+pub struct Repository {}
 
-impl Repository<'_> {
-    pub fn new(db: &'static mut Client) -> Self {
-        Repository { db }
+impl Repository {
+    pub fn new() -> Self {
+        Repository {}
     }
 
-    pub fn getPermissionsByGroup(&mut self, group: Group) -> Vec<Permission> {
-        match self.db.query(format!("select * from permissions where group_alias={}", &group.alias).as_str(), &[]) {
-            Ok(rows) => {
-                let mut res: Vec<Permission> = Vec::new();
-                for row in rows {
-                    let access = match row.get::<_, &str>("access") {
-                        "allow" => Access::allow,
-                        "denied" => Access::deny,
+    pub async fn getPermissionsByGroup(group: Group) -> Vec<Permission> {
+        let rows = sql(format!("select * from permissions where group_alias={}", &group.alias).as_str()).await;
 
-                        _ => Access::deny
-                    };
-                    let alias = row.get::<_, String>("alias");
-                    let level = match row.get::<_, &str>("access") {
-                        "system" => PermissionLevel::system,
-                        "object" => PermissionLevel::object,
-                        "object_type" => PermissionLevel::object_type,
-                        "link" => PermissionLevel::link,
-                        "link_type" => PermissionLevel::link_type,
+        let mut res: Vec<Permission> = Vec::new();
+        for row in rows {
+            let access = match row.get::<&str, &str>("access") {
+                "allow" => Access::allow,
+                "denied" => Access::deny,
 
-                        _ => PermissionLevel::system
-                    };
-                    let kind = match row.get::<_, &str>("access") {
-                        "create" => PermissionKind::create,
-                        "read" => PermissionKind::read,
-                        "edit" => PermissionKind::edit,
+                _ => Access::deny
+            };
+            let alias = row.get::<String, &str>("alias");
+            let level = match row.get::<&str, &str>("access") {
+                "system" => PermissionLevel::system,
+                "object" => PermissionLevel::object,
+                "object_type" => PermissionLevel::object_type,
+                "link" => PermissionLevel::link,
+                "link_type" => PermissionLevel::link_type,
 
-                        _ => PermissionKind::read
-                    };
-                    let name = row.get::<_, String>("name");
-                    let object = row.get::<_, String>("object");
-                    res.push(Permission {
-                        access,
-                        alias,
-                        level,
-                        kind,
-                        name,
-                        object,
-                    });
-                }
-                res
-            }
-            Err(error) => {
-                panic!("{}", error.to_string().as_str())
-            }
+                _ => PermissionLevel::system
+            };
+            let kind = match row.get::<&str, &str>("access") {
+                "create" => PermissionKind::create,
+                "read" => PermissionKind::read,
+                "edit" => PermissionKind::edit,
+
+                _ => PermissionKind::read
+            };
+            let name = row.get::<String, &str>("name");
+            let object = row.get::<String, &str>("object");
+            res.push(Permission {
+                access,
+                alias,
+                level,
+                kind,
+                name,
+                object,
+            });
         }
+        res
     }
 
-    pub fn getPermissionsGroupByPermissions(&mut self, permissions: Vec<Permission>) -> PermissionsGroup {
+
+    pub fn getPermissionsGroupByPermissions(permissions: Vec<Permission>) -> PermissionsGroup {
         let mut system = Vec::<Permission>::new();
         let mut object = Vec::<Permission>::new();
         let mut object_type = Vec::<Permission>::new();
@@ -105,39 +100,34 @@ impl Repository<'_> {
         }
     }
 
-    pub fn getUserGroupsbyUser(&mut self, user: User) -> Vec<Group> {
-        match self.db.query(format!("select * from user_group_permissions where user_alias={}", &user.login).as_str(), &[]) {
-            Ok(rows) => {
-                let mut res: Vec<Group> = Vec::new();
-                for row in rows {
-                    let alias = row.get::<_, String>("alias");
-                    let name = row.get::<_, String>("name");
-                    let permissions_vec = self.getPermissionsByGroup(Group {
-                        alias,
-                        name,
-                        permissions: PermissionsGroup {
-                            system: vec![],
-                            object: vec![],
-                            object_type: vec![],
-                            object_type_field: vec![],
-                            link: vec![],
-                            link_type: vec![],
-                        },
-                    });
-                    let alias = row.get::<_, String>("alias");
-                    let name = row.get::<_, String>("name");
-                    let permissions = self.getPermissionsGroupByPermissions(permissions_vec);
-                    res.push(Group {
-                        alias,
-                        name,
-                        permissions,
-                    });
-                }
-                res
-            }
-            Err(error) => {
-                panic!("{}", error.to_string().as_str())
-            }
+    pub async fn getUserGroupsbyUser(user: User) -> Vec<Group> {
+        let rows = sql(format!("select * from user_group_permissions where user_alias={}", &user.login).as_str()).await;
+
+        let mut res: Vec<Group> = Vec::new();
+        for row in rows {
+            let alias = row.get::<String, &str>("alias");
+            let name = row.get::<String, &str>("name");
+            let permissions_vec = Self::getPermissionsByGroup(Group {
+                alias,
+                name,
+                permissions: PermissionsGroup {
+                    system: vec![],
+                    object: vec![],
+                    object_type: vec![],
+                    object_type_field: vec![],
+                    link: vec![],
+                    link_type: vec![],
+                },
+            }).await;
+            let alias = row.get::<String, &str>("alias");
+            let name = row.get::<String, &str>("name");
+            let permissions = Self::getPermissionsGroupByPermissions(permissions_vec);
+            res.push(Group {
+                alias,
+                name,
+                permissions,
+            });
         }
+        res
     }
 }

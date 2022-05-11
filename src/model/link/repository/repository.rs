@@ -37,7 +37,7 @@ impl Repository {
         res
     }
 
-    async fn getObjectTypeFromAlias(&mut self, alias: String) -> ObjectType {
+    pub async fn getObjectTypeFromAlias(alias: String) -> ObjectType {
         let fields_rows = sql(format!("select * from fields where table = '{}'", alias).as_str()).await;
         let fields = Repository::getFieldsFromRows(fields_rows);
         let row = sql_one(format!("select kind from object_type where alias = '{}' limit 1", alias).as_str()).await;
@@ -51,7 +51,7 @@ impl Repository {
         }
     }
 
-    async fn getObjectTypeFromObjectId(&mut self, id: String) -> ObjectType {
+    pub async fn getObjectTypeFromObjectId(id: String) -> ObjectType {
         let fields_rows = sql(format!("select f.* from object o join fields f on f.table=o.alias where o.id = '{}'", id).as_str()).await;
         let fields = Repository::getFieldsFromRows(fields_rows);
 
@@ -65,20 +65,20 @@ impl Repository {
         }
     }
 
-    async fn getLinkRowsByToId(&mut self, id: String, limit: u64, skip: u64) -> Vec<PgRow> {
+    pub async fn getLinkRowsByToId(id: String, limit: u64, skip: u64) -> Vec<PgRow> {
         sql(format!("select o1.kind as 'from_kind', o1.alias as 'from_alias', o1.id as 'from_id', o2.kind as 'to_kind', o2.alias as 'to_alias', o2.id as 'to_id', l.* from links l join object o1 on l.id1=o1.id join object o2 on l.id2=02.id where id2 = '{}' limit {} offset {}", &id, limit, skip).as_str()).await
     }
 
-    async fn getLinkRowsByFromId(&mut self, id: String, limit: u64, skip: u64) -> Vec<PgRow> {
+    pub async fn getLinkRowsByFromId(id: String, limit: u64, skip: u64) -> Vec<PgRow> {
         sql(format!("select o1.kind as 'from_kind', o1.alias as 'from_alias', o1.id as 'from_id', o2.kind as 'to_kind', o2.alias as 'to_alias', o2.id as 'to_id', l.* from links l join object o1 on l.id1=o1.id join object o2 on l.id2=02.id where id1 = '{}' limit {} offset {}", &id, limit, skip).as_str()).await
     }
 
-    async fn getLinkRowsByAssignId(&mut self, id: String, limit: u64, skip: u64) -> Vec<PgRow> {
+    async fn getLinkRowsByAssignId(id: String, limit: u64, skip: u64) -> Vec<PgRow> {
         sql(format!("select o1.kind as 'from_kind', o1.alias as 'from_alias', o1.id as 'from_id', o2.kind as 'to_kind', o2.alias as 'to_alias', o2.id as 'to_id', l.* from links l join object o1 on l.id1=o1.id join object o2 on l.id2=02.id where id1 = '{}' or id2 = '{}' limit {} offset {}", &id, &id, limit, skip).as_str()).await
     }
 
-    async fn hydrateFilledObjectType(&mut self, alias: String, id: String) -> Object {
-        let mut objectType = self.getObjectTypeFromObjectId(id.clone()).await;
+    pub async fn hydrateFilledObjectType(alias: String, id: String) -> Object {
+        let mut objectType = Self::getObjectTypeFromObjectId(id.clone()).await;
 
         let row = sql_one(format!("select * from {} where id='{}'", alias, id.clone()).as_str()).await;
 
@@ -91,13 +91,13 @@ impl Repository {
         }
     }
 
-    async fn getEnityFromRow(&'static mut self, row: PgRow) -> Link {
-        let from = self.hydrateFilledObjectType(
+    pub async fn getEnityFromRow(&'static mut self, row: PgRow) -> Link {
+        let from = Self::hydrateFilledObjectType(
             row.get::<String, &str>("from_alias").to_string(),
             row.get::<String, &str>("from_id").to_string(),
         ).await;
 
-        let to = self.hydrateFilledObjectType(
+        let to = Self::hydrateFilledObjectType(
             row.get::<String, &str>("to_alias").to_string(),
             row.get::<String, &str>("to_id").to_string(),
         ).await;
@@ -118,13 +118,13 @@ impl Repository {
         }
     }
 
-    async fn setLink(&mut self, id1: String, id2: String, userName: String) {
+    pub async fn setLink(id1: String, id2: String, userName: String) {
         let sql = format!("insert into links (id1,id2,userLinked,dateLinked) values ({},{},{},{})",
                           id1, id2, userName, chrono::offset::Utc::now().to_rfc3339());
         sql_one(sql.as_str()).await;
     }
 
-    async fn unsetLink(&mut self, id: String, userName: String) {
+    pub async fn unsetLink(id: String, userName: String) {
         let sql = format!("update links set userUnlinked = '{}', dateUnlinked = '{}' where id = '{}'",
                           userName, chrono::offset::Utc::now().to_rfc3339(), id);
         sql_one(sql.as_str()).await;
