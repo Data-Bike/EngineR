@@ -21,9 +21,9 @@ async fn get(id:usize) -> Html<String> {
     Html(object.kind)
 }
 //
-#[get("/reg/<login>")]
+#[post("/add/<login>")]
 fn reg( login: &str) -> Html<String> {
-
+    // Repository::
     Html(format!("Token:  <br> Hashed:  <br> Login: "))
 }
 //

@@ -13,28 +13,28 @@ impl Repository {
         Repository {}
     }
 
-    pub async fn getUserById(&mut self, id: String) -> User {
+    pub async fn getUserById(id: String) -> User {
         let row = sql_one(format!("select * from user where id={}", &id).as_str()).await;
         User {
             id,
             login: row.get::<String, &str>("login").to_string(),
-            token_hashed: row.get::<String, &str>("token_hashed").to_string(),
+            password: row.get::<String, &str>("token_hashed").to_string(),
             groups: vec![],
         }
     }
 
-    pub async fn getUserByLogin(&mut self, login: String) -> User {
+    pub async fn getUserByLogin(login: String) -> User {
         let row = sql_one(format!("select * from user where login={}", &login).as_str()).await;
         User {
             id: "".to_string(),
             login: row.get::<String, &str>("login").to_string(),
-            token_hashed: row.get::<String, &str>("token_hashed").to_string(),
+            password: row.get::<String, &str>("token_hashed").to_string(),
             groups: vec![],
         }
     }
 
-    pub async fn get_token_hashed_by_login(&mut self, login: String) -> String {
-        let user = self.getUserByLogin(login).await;
-        user.token_hashed
+    pub async fn get_token_hashed_by_login(login: String) -> String {
+        let user = Self::getUserByLogin(login).await;
+        user.password
     }
 }

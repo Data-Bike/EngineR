@@ -5,6 +5,6 @@ use crate::model::secure::entity::permission::Group;
 pub struct User {
     pub id: String,
     pub login: String,
-    pub token_hashed: String,
+    pub password: String,
     pub groups:Vec<Group>
 }

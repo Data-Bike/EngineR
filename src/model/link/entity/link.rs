@@ -3,10 +3,10 @@ use crate::model::object::entity::object::Object;
 use crate::model::user::entity::user::User;
 
 pub struct Link {
-    pub from:Object,
-    pub to:Object,
-    pub userLinked:User,
-    pub userUnlinked:Option<User>,
-    pub dateLinked:DateTime<FixedOffset>,
-    pub dateUnlinked:Option<DateTime<FixedOffset>>
+    pub object_from:Object,
+    pub object_to:Object,
+    pub user_created:User,
+    pub user_deleted:Option<User>,
+    pub date_created:DateTime<FixedOffset>,
+    pub date_deleted:Option<DateTime<FixedOffset>>
 }
