@@ -20,14 +20,14 @@ impl Repository {
 
     fn getFieldFromRow(row: PgRow) -> Field {
         Field {
-            alias: row.get::<String, &str>("alias").to_string(),
-            kind: row.get::<String, &str>("kind").to_string(),
-            name: row.get::<String, &str>("name").to_string(),
+            alias: row.get::<String, &str>("alias"),
+            kind: row.get::<String, &str>("kind"),
+            name: row.get::<String, &str>("name"),
             default: if row.get::<String, &str>("kind") == "" { None } else { Some(row.get::<String, &str>("kind").to_string()) },
             value: None,
-            require: row.get::<String, &str>("require").to_string() == "1",
-            index: row.get::<String, &str>("index").to_string() == "1",
-            preview: row.get::<String, &str>("preview").to_string() == "1",
+            require: row.get::<bool, &str>("require"),
+            index: row.get::<bool, &str>("index"),
+            preview: row.get::<bool, &str>("preview"),
         }
     }
 
@@ -40,7 +40,7 @@ impl Repository {
     }
 
     pub async fn getObjectTypeFromAlias(alias: String) -> ObjectType {
-        let fields_rows = sql(format!("select * from fields where table = '{}'", alias).as_str()).await;
+        let fields_rows = sql(format!("select * from field where alias = '{}'", alias).as_str()).await;
 
         let fields = Repository::getFieldsFromRows(fields_rows);
 
@@ -54,7 +54,7 @@ impl Repository {
     }
 
     pub async fn getObjectTypeFromObjectId(id: String) -> ObjectType {
-        let fields_rows = sql(format!("select f.* from object o join fields f on f.table=o.alias where o.id = '{}'", id).as_str()).await;
+        let fields_rows = sql(format!("select f.* from object o join field f on f.alias=o.alias where o.id = '{}'", id).as_str()).await;
         let fields = Repository::getFieldsFromRows(fields_rows);
 
         let kind_alias_row = sql_one(format!("select * from object where id = '{}' limit 1", id).as_str()).await;
@@ -73,7 +73,7 @@ impl Repository {
         let mut objectType = Self::getObjectTypeFromObjectId(id.clone()).await;
         let row = sql_one(format!("select * from {} where id='{}'", objectType.alias.clone(), id.clone()).as_str()).await;
         for field in &mut objectType.fields {
-            field.value = Some(row.get::<String, &str>(field.alias.as_str()).to_string());
+            field.value = Some(row.get::<String, &str>(field.alias.as_str()));
         }
         let object_row = sql_one(format!("select * from object where id = '{}' limit 1", id).as_str()).await;
 
@@ -89,7 +89,7 @@ impl Repository {
                 Some(v) => Some(model::user::repository::repository::Repository::getUserById(v).await),
                 None => None
             },
-            hash: row.get::<String, &str>("hash").to_string(),
+            hash: row.get::<String, &str>("hash"),
         }
     }
 

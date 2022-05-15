@@ -23,11 +23,12 @@ impl Repository {
         Field {
             alias: row.get::<String, &str>("alias").to_string(),
             kind: row.get::<String, &str>("kind").to_string(),
+            name: row.get::<String, &str>("name").to_string(),
             default: if row.get::<String, &str>("kind") == "" { None } else { Some(row.get::<String, &str>("kind").to_string()) },
             value: None,
-            require: row.get::<String, &str>("require").to_string() == "true",
-            index: row.get::<String, &str>("index").to_string() == "true",
-            preview: row.get::<String, &str>("preview").to_string() == "true",
+            require: row.get::<bool, &str>("require"),
+            index: row.get::<bool, &str>("index"),
+            preview: row.get::<bool, &str>("preview"),
         }
     }
 
@@ -40,7 +41,7 @@ impl Repository {
     }
 
     pub async fn getObjectTypeFromAlias(alias: String) -> ObjectType {
-        let fields_rows = sql(format!("select * from fields where table = '{}'", alias).as_str()).await;
+        let fields_rows = sql(format!("select * from field where alias = '{}'", alias).as_str()).await;
         let fields = Repository::getFieldsFromRows(fields_rows);
         let row = sql_one(format!("select kind from object_type where alias = '{}' limit 1", alias).as_str()).await;
 
@@ -54,7 +55,7 @@ impl Repository {
     }
 
     pub async fn getObjectTypeFromObjectId(id: String) -> ObjectType {
-        let fields_rows = sql(format!("select f.* from object o join fields f on f.table=o.alias where o.id = '{}'", id).as_str()).await;
+        let fields_rows = sql(format!("select f.* from object o join field f on f.alias=o.alias where o.id = '{}'", id).as_str()).await;
         let fields = Repository::getFieldsFromRows(fields_rows);
 
         let kind_alias_row = sql_one(format!("select kind, alias from object where id = '{}' limit 1", id).as_str()).await;
