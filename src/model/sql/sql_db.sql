@@ -403,7 +403,16 @@ begin
     update "public"."t_rise_u_model" set "c_u_version"=3,"c_u_versionSequenceNumber"=24 where "c_u_prefix"='enginer' and "c_u_guid"='bd74e3ae-bca3-41f8-a0be-9cf5d8f9e943';
   end if;
 
-  return 24;
+  -- #25 New permission attributes name
+  if not exists(select * from "public"."t_rise_u_log" where "c_r_model"=v_model_id and "c_u_sequenceNumber"=25) then
+    insert into "public"."t_rise_u_log" ("c_r_model","c_u_sequenceNumber","c_u_timeStamp","c_u_xml") values (v_model_id,25,now(),'<rise:newAttribute xmlns:rise="http://www.r2bsoftware/ns/rise/"><rise:sequenceNumber>25</rise:sequenceNumber><rise:timeStamp>2022-05-16T01:00:44</rise:timeStamp><rise:entity><rise:name>permission</rise:name><rise:attribute><rise:name>name</rise:name><rise:dataTypeAlias /><rise:dataType>string</rise:dataType><rise:dataSize>50</rise:dataSize><rise:mustBeUnique>False</rise:mustBeUnique><rise:mustExist>True</rise:mustExist><rise:description /></rise:attribute><rise:maxID>0</rise:maxID></rise:entity></rise:newAttribute>');
+    if not exists (select * from pg_catalog.pg_type t join pg_catalog.pg_namespace n on (n.oid = t.typnamespace) join pg_catalog.pg_attribute a on (a.attstattarget = -1 and t.typrelid = a.attrelid) where n.nspname='public' and t.typname='permission' and a.attname='name') then
+      alter table "public"."permission" add column "name" varchar(50) null;
+      alter table "public"."permission" alter column "name" set not null;
+    end if;
+  end if;
+
+  return 25;
 end;
 $$ language plpgsql;
 select "public"."f_rise_enginer"();
