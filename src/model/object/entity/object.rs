@@ -1,6 +1,9 @@
 use chrono::{DateTime, Utc};
 use crate::model::user::entity::user::User;
 
+use serde::{Serialize, Deserialize};
+
+#[derive(Serialize, Deserialize, Debug,  Clone)]
 pub struct Field {
     pub alias: String,
     pub kind: String,
@@ -12,12 +15,14 @@ pub struct Field {
     pub preview: bool,
 }
 
+#[derive(Serialize, Deserialize, Debug,  Clone)]
 pub struct ObjectType {
     pub fields: Vec<Field>,
     pub kind: String,
     pub alias: String,
 }
 
+#[derive(Serialize, Deserialize, Debug,  Clone)]
 pub struct Object {
     pub(crate) filled: ObjectType,
     pub date_created: DateTime<Utc>,

@@ -114,7 +114,7 @@ impl Repository {
         ).await;
 
         let user_created = repository::Repository::getUserById(row.get::<String, &str>("user_created").to_string()).await;
-        let user_deleted = if row.get::<String, &str>("user_deleted").as_str() != "" { Some(repository::Repository::    getUserById(row.get::<String, &str>("user_deleted")).await) } else { None };
+        let user_deleted = if row.get::<String, &str>("user_deleted").as_str() != "" { Some(repository::Repository::getUserById(row.get::<String, &str>("user_deleted")).await) } else { None };
         let date_created = DateTime::parse_from_rfc3339(row.get::<String, &str>("date_created").as_str()).unwrap();
         let date_deleted = if row.get::<String, &str>("date_deleted").as_str() != "" { Some(DateTime::parse_from_rfc3339(row.get::<String, &str>("date_deleted").as_str()).unwrap()) } else { None };
 
@@ -129,13 +129,13 @@ impl Repository {
     }
 
     pub async fn setLink(id1: String, id2: String, userName: String) {
-        let sql = format!("insert into links (id1,id2,user_created,date_created) values ({},{},{},{})",
+        let sql = format!("insert into link (object_from,object_to,user_created,date_created) values ({},{},{},{})",
                           id1, id2, userName, chrono::offset::Utc::now().to_rfc3339());
         sql_one(sql.as_str()).await;
     }
 
     pub async fn unsetLink(id: String, userName: String) {
-        let sql = format!("update links set user_deleted = '{}', date_deleted = '{}' where id = '{}'",
+        let sql = format!("update link set user_deleted = '{}', date_deleted = '{}' where id = '{}'",
                           userName, chrono::offset::Utc::now().to_rfc3339(), id);
         sql_one(sql.as_str()).await;
     }

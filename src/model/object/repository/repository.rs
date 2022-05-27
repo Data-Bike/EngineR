@@ -1,13 +1,27 @@
 use std::collections::LinkedList;
+use std::future::{Future};
 use std::str::FromStr;
+use std::sync::{Arc, Mutex};
+use std::task::{Context, RawWaker, Waker};
+use futures::task::noop_waker_ref;
 use chrono::{DateTime, Utc};
-use rocket::futures::future::err;
+// use futures_util::async_await::poll;
+use core::convert;
+use std::pin::Pin;
+use std::ptr;
+use async_std::prelude::FutureExt;
+use async_std::task::{block_on, JoinHandle, spawn, spawn_blocking};
+use async_std::task_local;
+use rocket::futures;
+// use core::future::Future;
+use rocket::futures::poll;
 use sqlx::postgres::PgRow;
 use sqlx::Row;
-use crate::controllers::pool::pool::{insert, sql, sql_one};
+use crate::controllers::pool::pool::{create_table, get_insert, insert, sql, sql_one, update};
 use crate::model;
 use crate::model::link::entity::link::Link;
 use crate::model::object::entity::object::{Field, Object, ObjectType};
+use crate::model::secure::entity::permission::PermissionLevel::object;
 use crate::model::user::entity::user::User;
 use crate::model::user::repository::repository;
 
@@ -93,9 +107,9 @@ impl Repository {
         }
     }
 
-    async fn insertObjectToTable(object: &Object) -> String {
-        let table = object.filled.alias.clone();
-        let name_values = object.filled.fields
+    async fn insertObjectToTable(the_object: &Object, id: String) -> String {
+        let table = the_object.filled.alias.clone();
+        let mut name_values = the_object.filled.fields
             .iter()
             .map(
                 |f| (f.alias.clone(), match f.value.clone() {
@@ -104,19 +118,69 @@ impl Repository {
                 })
             )
             .collect::<Vec<_>>();
+        name_values.push(("id".to_string(), id));
         insert(table, name_values).await
     }
 
-    async fn insertObjectToGeneralTable(object: &Object, user: &User) -> String {
-        insert("object".to_string(), vec![
-            ("kind".to_string(), object.filled.kind.clone()),
-            ("alias".to_string(), object.filled.alias.clone()),
-            ("user_created".to_string(), "".to_string()),
-            ("date_created".to_string(), "".to_string()),
+    async fn insertObjectToGeneralTable(the_object: &Object) -> String {
+        insert("object", vec![
+            ("kind", the_object.filled.kind.as_str()),
+            ("alias", the_object.filled.alias.as_str()),
+            ("user_created", the_object.user_created.id.as_str()),
+            ("date_created", the_object.date_created.to_rfc3339().as_str()),
         ]).await
     }
 
-    pub async fn createObject(object: &Object) -> String {
-        "".to_string()
+    pub async fn createObject(the_object: &Object) -> String {
+        let id = Self::insertObjectToGeneralTable(the_object).await;
+        Self::insertObjectToTable(the_object, id.clone()).await;
+        id
+    }
+
+    pub async fn deleteObject(id: &str, user: User) {
+        update("object", vec![
+            ("date_deleted", Utc::now().to_rfc3339().as_str()),
+            ("user_deleted", user.id.as_str()),
+        ], vec![("id", "=", id)]).await;
+    }
+
+    pub async fn createObjectType(object_type: ObjectType) {
+        let fields = object_type
+            .fields
+            .iter()
+            .map(|f| (f.alias.clone(), f.kind.clone()))
+            .collect::<Vec<_>>();
+
+        let id = insert("object_type", vec![
+            ("alias", object_type.alias.as_str()),
+            ("kind", object_type.kind.as_str()),
+        ]).await;
+
+        let mut futures: Vec<JoinHandle<String>> = vec![];
+
+        futures.push(spawn(create_table(object_type.alias.clone(), fields)));
+        for field in object_type.fields.iter() {
+            futures.push(spawn(insert("field".to_string(), vec![
+                ("alias".to_string(), field.alias.clone()),
+                ("name".to_string(), field.name.clone()),
+                ("kind".to_string(), field.kind.clone()),
+                ("default".to_string(), field.default.clone().unwrap_or("".to_string())),
+                ("require".to_string(), if field.require { "1".to_string() } else { "0".to_string() }),
+                ("index".to_string(), if field.index { "1".to_string() } else { "0".to_string() }),
+                ("preview".to_string(), if field.preview { "1".to_string() } else { "0".to_string() }),
+                ("object_type".to_string(), id.to_string()),
+            ])));
+        }
+
+        for future in futures {
+            block_on(future);
+        }
+    }
+
+    pub async fn deleteObjectType(id: &str, user: User) {
+        update("object_type", vec![
+            ("date_deleted", Utc::now().to_rfc3339().as_str()),
+            ("user_deleted", user.id.as_str()),
+        ], vec![("id", "=", id)]).await;
     }
 }

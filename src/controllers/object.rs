@@ -2,8 +2,9 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 
 use rocket::{routes, State};
 
-use rocket::response::content::Html;
+use rocket::response::content::RawHtml;
 use rocket::get;
+use rocket::post;
 use rocket::launch;
 use rocket::fairing::AdHoc;
 // use serde_hjson::value::ToJson;
@@ -16,42 +17,24 @@ use crate::model::object::repository::repository::Repository;
 
 
 #[get("/get/<id>")]
-async fn get(id:usize) -> Html<String> {
-    let object  = Repository::getObjectTypeFromObjectId(id.to_string()).await;
-    Html(object.kind)
+async fn get(id: usize) -> RawHtml<String> {
+    let object = Repository::getObjectTypeFromObjectId(id.to_string()).await;
+    RawHtml(object.kind)
 }
-//
-#[post("/add/<login>")]
-fn reg( login: &str) -> Html<String> {
-    // Repository::
-    Html(format!("Token:  <br> Hashed:  <br> Login: "))
-}
-//
-//
-#[get("/all")]
-fn all() -> Html<String> {
 
-    // Html(all_users)
+#[post("/add")]
+async fn add() -> RawHtml<String> {
+    // Repository::createObject()
+    // let object  = Repository::getObjectTypeFromObjectId(id.to_string()).await;
+    RawHtml("object.kind".to_string())
 }
-//
-//
-//
-// #[database("my_pg_db")]
-// struct PgDb(postgres::Client);
-//
-// #[launch]
-// fn rocket() -> _ {
-//
-//     rocket::build().attach(PgDb::)
-// }
 //
 
 pub fn stage() -> AdHoc {
-
-    AdHoc::on_ignite("Managed user model", move |rocket| async move {
-        rocket.mount("/object", routes![index,reg,all])
-
+    AdHoc::on_ignite("Managing objects", move |rocket| async move {
+        rocket.mount("/object", routes![get,add])
     })
 }
 
-#[cfg(test)] mod tests;
+#[cfg(test)]
+mod tests;

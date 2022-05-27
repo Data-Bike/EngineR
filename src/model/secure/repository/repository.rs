@@ -17,7 +17,7 @@ impl Repository {
     }
 
     pub async fn getPermissionsByGroup(group: Group) -> Vec<Permission> {
-        let rows = sql(format!("select * from permissions where group_alias={}", &group.alias).as_str()).await;
+        let rows = sql(format!("select * from permissions where group={}", &group.id).as_str()).await;
 
         let mut res: Vec<Permission> = Vec::new();
         for row in rows {
@@ -28,7 +28,7 @@ impl Repository {
                 _ => Access::deny
             };
             let alias = row.get::<String, &str>("alias");
-            let level = match row.get::<&str, &str>("access") {
+            let level = match row.get::<&str, &str>("level") {
                 "system" => PermissionLevel::system,
                 "object" => PermissionLevel::object,
                 "object_type" => PermissionLevel::object_type,
@@ -37,7 +37,7 @@ impl Repository {
 
                 _ => PermissionLevel::system
             };
-            let kind = match row.get::<&str, &str>("access") {
+            let kind = match row.get::<&str, &str>("kind") {
                 "create" => PermissionKind::create,
                 "read" => PermissionKind::read,
                 "edit" => PermissionKind::edit,
@@ -46,7 +46,9 @@ impl Repository {
             };
             let name = row.get::<String, &str>("name");
             let object = row.get::<String, &str>("object");
+            let id = row.get::<String, &str>("id");
             res.push(Permission {
+                id,
                 access,
                 alias,
                 level,
@@ -107,7 +109,9 @@ impl Repository {
         for row in rows {
             let alias = row.get::<String, &str>("alias");
             let name = row.get::<String, &str>("name");
+            let id = row.get::<String, &str>("id");
             let permissions_vec = Self::getPermissionsByGroup(Group {
+                id: id.clone(),
                 alias,
                 name,
                 permissions: PermissionsGroup {
@@ -123,6 +127,7 @@ impl Repository {
             let name = row.get::<String, &str>("name");
             let permissions = Self::getPermissionsGroupByPermissions(permissions_vec);
             res.push(Group {
+                id,
                 alias,
                 name,
                 permissions,

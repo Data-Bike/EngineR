@@ -7,6 +7,7 @@ use bcrypt::verify;
 
 use std::fmt;
 use std::io::Stderr;
+use crate::model;
 
 #[derive(Debug)]
 pub struct AuthenticationError {
@@ -54,8 +55,8 @@ impl Strategy {
     pub async fn auth(&mut self, token:&Token)->Result<User,AuthenticationError>{
         let login = token.credentials.login.clone();
         let password = token.credentials.password.clone();
-        let user = self.user_model.getUserByLogin(login).await;
-        let hash = user.token_hashed.clone();
+        let user = model::user::repository::repository::Repository::getUserByLogin(login).await;
+        let hash = user.password.clone();
         if verify(password,hash.as_str()).is_ok(){
             return Ok(user)
         }
