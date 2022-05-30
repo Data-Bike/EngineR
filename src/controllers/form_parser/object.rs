@@ -126,8 +126,8 @@ impl ObjectType {
 }
 
 impl Object {
-    
-    pub fn from_json(json_object:&Value) -> Result<Self, serde_json::Error>{
+
+    pub async fn from_json(json_object:&Value) -> Result<Self, serde_json::Error>{
         let json_object_type: &Value = json_object
             .get("filled")
             .unwrap();
@@ -156,8 +156,8 @@ impl Object {
             .as_str()
             .unwrap();
 
-        let user_created = block_on(user::repository::repository::Repository::getUserById(user_created_id.to_string()));
-        let user_deleted = if user_deleted_id == "" { None } else { Some(block_on(user::repository::repository::Repository::getUserById(user_deleted_id.to_string()))) };
+        let user_created = user::repository::repository::Repository::getUserById(user_created_id.to_string()).await;
+        let user_deleted = if user_deleted_id == "" { None } else { Some(user::repository::repository::Repository::getUserById(user_deleted_id.to_string()).await) };
 
         let date_created = DateTime::<Utc>::from(DateTime::parse_from_rfc3339(date_str_created).unwrap());
         let date_deleted = if date_str_deleted == "" { None } else { Some(DateTime::<Utc>::from(DateTime::parse_from_rfc3339(date_str_deleted).unwrap())) };
@@ -170,21 +170,21 @@ impl Object {
             user_deleted,
             hash: "".to_string(),
         })
-        
+
     }
-    
-    pub fn from_str(string: &str) -> Result<Self, serde_json::Error> {
+
+    pub async fn from_str(string: &str) -> Result<Self, serde_json::Error> {
         let json_object: Value = from_str(string)?;
-        Self::from_json(&json_object)
+        Self::from_json(&json_object).await
     }
 }
-
+#[rocket::async_trait]
 impl<'r> FromData<'r> for Object {
     type Error = ParseError;
 
 
-    fn from_data(req: &Request<'r>, data: Data<'r>) -> rocket::data::Outcome<'r, Self> {
-        let string = match block_on(data.open(LIMIT.bytes()).into_string()) {
+    async fn from_data(req: &'r Request<'_>, data: Data<'r>) -> rocket::data::Outcome<'r, Self> {
+        let string = match data.open(LIMIT.bytes()).into_string().await{
             Ok(string) if string.is_complete() => string.into_inner(),
             Ok(_) => return Failure((Status::PayloadTooLarge, Self::Error { message: "Error".to_string() })),
             Err(e) => return Failure((Status::InternalServerError, Self::Error { message: "Error".to_string() })),
@@ -192,7 +192,7 @@ impl<'r> FromData<'r> for Object {
 
         // We store `string` in request-local cache for long-lived borrows.
         //let string = request::local_cache!(req, string);
-        match Object::from_str(string.as_str()) {
+        match Object::from_str(string.as_str()).await {
             Ok(o) => { Success(o) }
             Err(e) => { Failure((Status { code: 500 }, Self::Error { message: "Error".to_string() })) }
         }
