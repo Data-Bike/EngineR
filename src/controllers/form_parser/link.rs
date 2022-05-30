@@ -27,22 +27,7 @@ impl Display for ParseError {
 
 impl Error for ParseError {}
 
-#[rocket::async_trait]
-impl<'r> FromData<'r> for Link {
-    type Error = ParseError;
 
-    async fn from_data(req: &'r Request<'_>, data: Data<'r>) -> Outcome<'r, Self> {
-        let string = match data.open(LIMIT.bytes()).into_string().await {
-            Ok(string) if string.is_complete() => string.into_inner(),
-            Ok(_) => return Failure((Status::PayloadTooLarge, Self::Error { message: "Error".to_string() })),
-            Err(e) => return Failure((Status::InternalServerError, Self::Error { message: "Error".to_string() })),
-        };
-        match Link::from_str(string.as_str()).await {
-            Ok(o) => { Success(o) }
-            Err(e) => { Failure((Status { code: 500 }, Self::Error { message: "Error".to_string() })) }
-        }
-    }
-}
 
 impl Link {
     pub async fn from_str(string: &str) -> Result<Self, serde_json::Error> {
@@ -69,5 +54,22 @@ impl Link {
             date_created,
             date_deleted,
         })
+    }
+}
+
+#[rocket::async_trait]
+impl<'r> FromData<'r> for Link {
+    type Error = ParseError;
+
+    async fn from_data(req: &'r Request<'_>, data: Data<'r>) -> Outcome<'r, Self> {
+        let string = match data.open(LIMIT.bytes()).into_string().await {
+            Ok(string) if string.is_complete() => string.into_inner(),
+            Ok(_) => return Failure((Status::PayloadTooLarge, Self::Error { message: "Error".to_string() })),
+            Err(e) => return Failure((Status::InternalServerError, Self::Error { message: "Error".to_string() })),
+        };
+        match Link::from_str(string.as_str()).await {
+            Ok(o) => { Success(o) }
+            Err(e) => { Failure((Status { code: 500 }, Self::Error { message: "Error".to_string() })) }
+        }
     }
 }
