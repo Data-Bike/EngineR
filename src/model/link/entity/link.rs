@@ -7,6 +7,6 @@ pub struct Link {
     pub object_to:Object,
     pub user_created:User,
     pub user_deleted:Option<User>,
-    pub date_created:DateTime<FixedOffset>,
-    pub date_deleted:Option<DateTime<FixedOffset>>
+    pub date_created:DateTime<Utc>,
+    pub date_deleted:Option<DateTime<Utc>>
 }
