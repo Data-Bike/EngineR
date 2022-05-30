@@ -54,7 +54,7 @@ impl Link {
         let date_created_str = json_object.get("date_created").unwrap().as_str().unwrap();
         let date_deleted_str = json_object.get("date_deleted").unwrap().as_str().unwrap();
         let object_from = Object_repository::hydrateFilledObjectType(object_from_id.to_string()).await;
-        let object_to = Object_repository::hydrateFilledObjectType(object_from_id.to_string()).await;
+        let object_to = Object_repository::hydrateFilledObjectType(object_to_id.to_string()).await;
         let user_created = User_repository::getUserById(user_created_id.to_string()).await;
         let user_deleted = if user_deleted_id == "" { None } else { Some(User_repository::getUserById(user_deleted_id.to_string()).await) };
         let date_created = DateTime::<Utc>::from(DateTime::parse_from_rfc3339(date_created_str).unwrap());
