@@ -11,7 +11,11 @@ use crate::model::object::entity::object::Object;
 use crate::model::object::repository::repository::Repository as Object_repository;
 use crate::model::secure::entity::permission::Group;
 use crate::model::user::repository::repository::Repository as User_repository;
+use crate::model::secure::repository::repository::Repository as Secure_repository;
 use crate::model::user::entity::user::User;
+
+use rocket::outcome::IntoOutcome;
+use rocket::request::{self, FromRequest};
 
 const LIMIT: u32 = 1024 * 10;
 
@@ -50,39 +54,43 @@ impl User {
         let login = err_resolve!(json_object,"login");
         let password = err_resolve!(json_object,"password");
         let groups = match match json_object.get("groups") {
-            None => { return Err(ParseError { message: format!("Error {} not found","groups") }); }
+            None => { return Err(ParseError { message: format!("Error {} not found", "groups") }); }
             Some(v) => { v }
         }.as_array() {
-            None => { return Err(ParseError { message: format!("Error {} is not array","groups") }); }
+            None => { return Err(ParseError { message: format!("Error {} is not array", "groups") }); }
             Some(v) => { v }
         };
-        groups.iter().map(|g| match g.as_str() {
-            None => { return Err(ParseError { message: format!("Error {} is not array","groups") }); }
-            Some(g_id) => {}
-        } )
 
-        Ok(User{
-            id: "",
-            login,
-            password,
-            groups: vec![]
+        let mut groups_s:Vec<Group> = vec![];
+
+        for g in groups.iter()
+        {
+            match g.as_str() {
+                None => { return Err(ParseError { message: format!("Error {} is not string", "group") }); }
+                Some(g_id) => {
+                    groups_s.push(Secure_repository::getGroupById(g_id).await);
+                }
+            }
+        };
+
+        Ok(User {
+            id: "".to_string(),
+            login: login.to_string(),
+            password: password.to_string(),
+            groups:groups_s,
         })
     }
 }
 
 #[rocket::async_trait]
-impl<'r> FromData<'r> for Link {
-    type Error = ParseError;
+impl<'r> FromRequest<'r> for User {
+    type Error = ();
 
-    async fn from_data(req: &'r Request<'_>, data: Data<'r>) -> Outcome<'r, Self> {
-        let string = match data.open(LIMIT.bytes()).into_string().await {
-            Ok(string) if string.is_complete() => string.into_inner(),
-            Ok(_) => return Failure((Status::PayloadTooLarge, Self::Error { message: "Error".to_string() })),
-            Err(e) => return Failure((Status::InternalServerError, Self::Error { message: "Error".to_string() })),
-        };
-        match Link::from_str(string.as_str()).await {
-            Ok(o) => { Success(o) }
-            Err(e) => { Failure((Status { code: 500 }, Self::Error { message: "Error".to_string() })) }
-        }
+    async fn from_request(request: & Request<'r>) -> request::Outcome<User, ()> {
+        request.cookies()
+            .get_private("user_id")
+            .and_then(|cookie| cookie.value().parse().ok())
+            .map(|id| User_repository::getUserById(id).await)
+            .or_forward(())
     }
 }

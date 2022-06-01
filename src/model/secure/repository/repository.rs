@@ -17,7 +17,11 @@ impl Repository {
     }
 
     pub async fn getPermissionsByGroup(group: Group) -> Vec<Permission> {
-        let rows = sql(format!("select * from permissions where group={}", &group.id).as_str()).await;
+        Self::getPermissionsById(group.id.as_str())
+    }
+
+    pub async fn getPermissionsById(id: &str) -> Vec<Permission> {
+        let rows = sql(format!("select * from permissions where group={}", id).as_str()).await;
 
         let mut res: Vec<Permission> = Vec::new();
         for row in rows {
@@ -138,14 +142,16 @@ impl Repository {
         }
         res
     }
-    pub async fn getGroupById(id:&str)->Group{
-        let group_row = sql_one(format!("select * from group where id = {} limit 1",id).as_str()).await;
-        Group{
-            alias:  group_row.get::<String, &str>("alias"),
-            name:  group_row.get::<String, &str>("name"),
-            level:  group_row.get::<String, &str>("level"),
-            id:  group_row.get::<String, &str>("id"),
-            permissions: PermissionsGroup {}
+    pub async fn getGroupById(id: &str) -> Group {
+        let group_row = sql_one(format!("select * from group where id = {} limit 1", id).as_str()).await;
+        Group {
+            alias: group_row.get::<String, &str>("alias"),
+            name: group_row.get::<String, &str>("name"),
+            level: group_row.get::<String, &str>("level"),
+            id: group_row.get::<String, &str>("id"),
+            permissions: Self::getPermissionsGroupByPermissions(
+                Self::getPermissionsById(id)
+            ),
         }
     }
 }
