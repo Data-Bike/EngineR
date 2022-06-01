@@ -3,7 +3,7 @@ use std::vec;
 use rocket::futures::future::err;
 use rocket::shield::Feature::Accelerometer;
 use sqlx::Row;
-use crate::controllers::pool::pool::sql;
+use crate::controllers::pool::pool::{sql, sql_one};
 use crate::model::link::entity::link::Link;
 use crate::model::object::entity::object::{Field, Object, ObjectType};
 use crate::model::secure::entity::permission::{Access, Group, Permission, PermissionKind, PermissionLevel, PermissionsGroup};
@@ -103,16 +103,18 @@ impl Repository {
     }
 
     pub async fn getUserGroupsbyUser(user: User) -> Vec<Group> {
-        let rows = sql(format!("select * from user_group_permissions where user_alias={}", &user.login).as_str()).await;
+        let rows = sql(format!("select g.* from user_group join group on user_group.user_id={} and user_group.group_id=group.id ", &user.id).as_str()).await;
 
         let mut res: Vec<Group> = Vec::new();
         for row in rows {
             let alias = row.get::<String, &str>("alias");
             let name = row.get::<String, &str>("name");
+            let level = row.get::<String, &str>("level");
             let id = row.get::<String, &str>("id");
             let permissions_vec = Self::getPermissionsByGroup(Group {
                 id: id.clone(),
                 alias,
+                level: level.clone(),
                 name,
                 permissions: PermissionsGroup {
                     system: vec![],
@@ -129,10 +131,21 @@ impl Repository {
             res.push(Group {
                 id,
                 alias,
+                level,
                 name,
                 permissions,
             });
         }
         res
+    }
+    pub async fn getGroupById(id:&str)->Group{
+        let group_row = sql_one(format!("select * from group where id = {} limit 1",id).as_str()).await;
+        Group{
+            alias:  group_row.get::<String, &str>("alias"),
+            name:  group_row.get::<String, &str>("name"),
+            level:  group_row.get::<String, &str>("level"),
+            id:  group_row.get::<String, &str>("id"),
+            permissions: PermissionsGroup {}
+        }
     }
 }

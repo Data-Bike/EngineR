@@ -126,8 +126,7 @@ impl ObjectType {
 }
 
 impl Object {
-
-    pub async fn from_json(json_object:&Value) -> Result<Self, serde_json::Error>{
+    pub async fn from_json(json_object: &Value) -> Result<Self, serde_json::Error> {
         let json_object_type: &Value = json_object
             .get("filled")
             .unwrap();
@@ -170,7 +169,6 @@ impl Object {
             user_deleted,
             hash: "".to_string(),
         })
-
     }
 
     pub async fn from_str(string: &str) -> Result<Self, serde_json::Error> {
@@ -178,13 +176,14 @@ impl Object {
         Self::from_json(&json_object).await
     }
 }
+
 #[rocket::async_trait]
 impl<'r> FromData<'r> for Object {
     type Error = ParseError;
 
 
     async fn from_data(req: &'r Request<'_>, data: Data<'r>) -> rocket::data::Outcome<'r, Self> {
-        let string = match data.open(LIMIT.bytes()).into_string().await{
+        let string = match data.open(LIMIT.bytes()).into_string().await {
             Ok(string) if string.is_complete() => string.into_inner(),
             Ok(_) => return Failure((Status::PayloadTooLarge, Self::Error { message: "Error".to_string() })),
             Err(e) => return Failure((Status::InternalServerError, Self::Error { message: "Error".to_string() })),

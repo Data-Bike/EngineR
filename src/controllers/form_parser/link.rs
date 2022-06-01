@@ -28,16 +28,36 @@ impl Display for ParseError {
 impl Error for ParseError {}
 
 
-
 impl Link {
-    pub async fn from_str(string: &str) -> Result<Self, serde_json::Error> {
-        let json_object: Value = from_str(string)?;
-        let object_from_id = json_object.get("object_from_id").unwrap().as_str().unwrap();
-        let object_to_id = json_object.get("object_to_id").unwrap().as_str().unwrap();
-        let user_created_id = json_object.get("user_created_id").unwrap().as_str().unwrap();
-        let user_deleted_id = json_object.get("user_deleted_id").unwrap().as_str().unwrap();
-        let date_created_str = json_object.get("date_created").unwrap().as_str().unwrap();
-        let date_deleted_str = json_object.get("date_deleted").unwrap().as_str().unwrap();
+    pub async fn from_str(string: &str) -> Result<Self, ParseError> {
+        macro_rules! err_resolve {
+            ( $x:expr, $key:expr ) => {
+                match match $x.get($key) {
+                    None => { return Err(ParseError { message: format!("Error {} not found",$key) }); }
+                    Some(v) => { v }
+                }.as_str() {
+                    None => { return Err(ParseError { message: format!("Error {} is not string",$key) }); }
+                    Some(v) => { v }
+                }
+            };
+        }
+
+        let json_object: Value = match from_str::<Value>(string) {
+            Ok(v) => { v }
+            Err(e) => { return Err(ParseError { message: "Error cannot parse JSON".to_string() }); }
+        };
+        let object_from_id = match match json_object.get("object_from_id") {
+            None => { return Err(ParseError { message: "Error object_from_id not found".to_string() }); }
+            Some(v) => { v }
+        }.as_str() {
+            None => { return Err(ParseError { message: "Error object_from_id is not string".to_string() }); }
+            Some(v) => { v }
+        };
+        let object_to_id = err_resolve!(json_object,"object_to_id");
+        let user_created_id = err_resolve!(json_object,"user_created_id");
+        let user_deleted_id = err_resolve!(json_object,"user_deleted_id");
+        let date_created_str = err_resolve!(json_object,"date_created");
+        let date_deleted_str = err_resolve!(json_object,"date_deleted");
         let object_from = Object_repository::hydrateFilledObjectType(object_from_id.to_string()).await;
         let object_to = Object_repository::hydrateFilledObjectType(object_to_id.to_string()).await;
         let user_created = User_repository::getUserById(user_created_id.to_string()).await;

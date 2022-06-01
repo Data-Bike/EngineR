@@ -36,6 +36,7 @@ pub struct PermissionsGroup {
 pub struct Group {
     pub alias: String,
     pub name: String,
+    pub level: String,
     pub id: String,
     pub permissions: PermissionsGroup,
 }
