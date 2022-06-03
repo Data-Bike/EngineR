@@ -131,6 +131,21 @@ impl Repository {
         ]).await
     }
 
+    pub async fn getObjectTypeFromId(id: String) -> ObjectType {
+        let fields_rows = sql(format!("select * from field where id = '{}'", id).as_str()).await;
+        let fields = Repository::getFieldsFromRows(fields_rows);
+        let row = sql_one(format!("select kind from object_type where id = '{}' limit 1", id).as_str()).await;
+
+        let kind = row.get::<String, &str>("kind").to_string();
+        let alias = row.get::<String, &str>("alias").to_string();
+
+        ObjectType {
+            fields,
+            kind,
+            alias,
+        }
+    }
+
     pub async fn createObject(the_object: &Object) -> String {
         let id = Self::insertObjectToGeneralTable(the_object).await;
         Self::insertObjectToTable(the_object, id.clone()).await;
