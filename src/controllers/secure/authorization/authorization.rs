@@ -6,7 +6,7 @@ use crate::model::user::entity::user::User;
 pub struct Authorization {}
 
 impl Authorization {
-    pub fn auth(user: User, token: Token) -> bool {
+    pub fn auth(user: &User, token: &Token) -> bool {
         Strategy::resolve(user, token)
     }
 }

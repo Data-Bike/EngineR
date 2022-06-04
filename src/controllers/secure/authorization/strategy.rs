@@ -21,30 +21,30 @@ impl Strategy {
     }
 
 
-    pub fn resolve(user: User, token: Token) -> bool {
-        if !SystemVote::allow(&user, &token) { return false; };
+    pub fn resolve(user: &User, token: &Token) -> bool {
+        if !SystemVote::allow(user, token) { return false; };
 
         if token.requestLevel == PermissionLevel::object {
-            if !ObjectVote::allow(&user, &token) { return false; };
-            if !ObjectTypeVote::allow(&user, &token) { return false; };
+            if !ObjectVote::allow(user, token) { return false; };
+            if !ObjectTypeVote::allow(user, token) { return false; };
         }
 
         if token.requestLevel == PermissionLevel::object_type {
-            if !ObjectTypeVote::allow(&user, &token) { return false; };
+            if !ObjectTypeVote::allow(user, token) { return false; };
         }
 
         if token.requestLevel == PermissionLevel::object_type_field {
-            if !ObjectTypeVote::allow(&user, &token) { return false; };
-            if !ObjectTypeFieldVote::allow(&user, &token) { return false; };
+            if !ObjectTypeVote::allow(user, token) { return false; };
+            if !ObjectTypeFieldVote::allow(user, token) { return false; };
         }
 
         if token.requestLevel == PermissionLevel::link {
-            if !LinkVote::allow(&user, &token) { return false; };
-            if !LinkTypeVote::allow(&user, &token) { return false; };
+            if !LinkVote::allow(user, token) { return false; };
+            if !LinkTypeVote::allow(user, token) { return false; };
         }
 
         if token.requestLevel == PermissionLevel::link_type {
-            if !LinkTypeVote::allow(&user, &token) { return false; };
+            if !LinkTypeVote::allow(user, token) { return false; };
         }
         true
     }

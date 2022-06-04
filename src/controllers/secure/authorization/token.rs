@@ -1,6 +1,8 @@
+use crate::controllers::secure::authorization::authorization::Authorization;
 use crate::model::link::entity::link::{Link, LinkType};
 use crate::model::object::entity::object::{Field, Object, ObjectType};
 use crate::model::secure::entity::permission::{PermissionKind, PermissionLevel};
+use crate::model::user::entity::user::User;
 
 pub struct Token {
     pub requestLevel: PermissionLevel,
@@ -11,10 +13,37 @@ pub struct Token {
     pub object: Option<Object>,
     pub link_type: Option<LinkType>,
     pub link: Option<Link>,
-    pub authorized: Option<bool>,
+    authorized: Option<bool>,
 }
 
+
 impl Token {
+    pub fn fromObject(requestKind: PermissionKind, system: String, object: &Object) -> Token {
+        Token {
+            requestLevel: PermissionLevel::object,
+            requestKind,
+            system,
+            object_type: Some(object.filled.clone()),
+            object_type_field: None,
+            object: Some(object.clone()),
+            link_type: None,
+            link: None,
+            authorized: None,
+        }
+    }
+    pub fn fromLink(requestKind: PermissionKind, system: String, link: &Link) -> Token {
+        Token {
+            requestLevel: PermissionLevel::link,
+            requestKind,
+            system,
+            object_type: None,
+            object_type_field: None,
+            object: None,
+            link_type: Some(link.link_type.clone()),
+            link: Some(link.clone()),
+            authorized: None,
+        }
+    }
     pub fn is_authorized(&self) -> Option<bool> {
         self.authorized
     }
@@ -25,5 +54,11 @@ impl Token {
 
     pub fn decline(&mut self) {
         self.authorized = Some(false);
+    }
+
+    pub fn authorize(&mut self, user: &User)->bool {
+        let is_auth = Authorization::auth(user, self);
+        self.authorized = Some(is_auth);
+        return is_auth;
     }
 }

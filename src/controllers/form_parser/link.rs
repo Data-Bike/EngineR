@@ -6,6 +6,7 @@ use chrono::{DateTime, Utc};
 use rocket::http::Method::Post;
 use rocket::http::{Method, Status};
 use rocket::outcome::Outcome::{Failure, Success};
+use rocket::request::FromRequest;
 use serde_json::{from_str, json, Value};
 use crate::controllers::secure::authorization::token::Token;
 use crate::model::link::entity::link::Link;
@@ -31,7 +32,7 @@ impl Display for ParseError {
 
 impl Error for ParseError {}
 
-pub fn getToken(req: &Request<'_>, link: Link) -> Token {
+pub fn getToken(req: &Request<'_>, link: &Link) -> Token {
     let requestKind = match req.method() {
         Method::Get => { PermissionKind::read }
         Method::Post => { PermissionKind::edit }
@@ -39,17 +40,7 @@ pub fn getToken(req: &Request<'_>, link: Link) -> Token {
     };
 
     let system = req.get_param(0).unwrap().unwrap().to_string();
-    Token {
-        requestLevel: PermissionLevel::link,
-        requestKind,
-        system,
-        object_type: None,
-        object_type_field: None,
-        object: None,
-        link_type: Some(link.link_type.clone()),
-        link: Some(link),
-        authorized: None,
-    }
+    Token::fromLink(requestKind, system, link)
 }
 
 impl Link {
@@ -119,8 +110,21 @@ impl<'r> FromData<'r> for Link {
             Ok(_) => return Failure((Status::PayloadTooLarge, Self::Error { message: "Error".to_string() })),
             Err(e) => return Failure((Status::InternalServerError, Self::Error { message: "Error".to_string() })),
         };
+        let user = match User::from_request(req).await {
+            Success(u) => {
+                u
+            }
+            r => {
+                r.and_then(|x| Failure((Status { code: 401, reason: "Error" }, ())))
+            }
+        };
         match Link::from_str(string.as_str()).await {
-            Ok(o) => { Success(o) }
+            Ok(o) => {
+                if !getToken(req, &o).authorize(&user) {
+                    Failure((Status { code: 403, reason: "Error" }, Self::Error { message: "Error".to_string() }))
+                }
+                Success(o)
+            }
             Err(e) => { Failure((Status { code: 500, reason: "Error" }, Self::Error { message: "Error".to_string() })) }
         }
     }
