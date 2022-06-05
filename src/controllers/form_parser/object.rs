@@ -108,38 +108,6 @@ impl Field {
     }
 }
 
-impl ObjectType {
-    pub fn from_json(json: &Value) -> Result<Self, serde_json::Error> {
-        Ok(ObjectType {
-            fields: match json.get("fields") {
-                None => { vec![] }
-                Some(v) => {
-                    match v.as_array() {
-                        None => { vec![] }
-                        Some(v) => {
-                            v
-                                .iter()
-                                .map(|f| Field::from_json(f).unwrap())
-                                .collect()
-                        }
-                    }
-                }
-            },
-            kind: json
-                .get("kind")
-                .unwrap_or(&Value::String("".to_string()))
-                .as_str()
-                .unwrap_or("")
-                .to_string(),
-            alias: json
-                .get("alias")
-                .unwrap_or(&Value::String("".to_string()))
-                .as_str()
-                .unwrap_or("")
-                .to_string(),
-        })
-    }
-}
 
 impl Object {
     pub async fn from_json(json_object: &Value) -> Result<Self, serde_json::Error> {

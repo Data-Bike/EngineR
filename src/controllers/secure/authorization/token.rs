@@ -31,6 +31,19 @@ impl Token {
             authorized: None,
         }
     }
+    pub fn fromObjectType(requestKind: PermissionKind, system: String, object_type: &ObjectType) -> Token {
+        Token {
+            requestLevel: PermissionLevel::object_type,
+            requestKind,
+            system,
+            object_type: Some(object_type.clone()),
+            object_type_field: None,
+            object: None,
+            link_type: None,
+            link: None,
+            authorized: None,
+        }
+    }
     pub fn fromLink(requestKind: PermissionKind, system: String, link: &Link) -> Token {
         Token {
             requestLevel: PermissionLevel::link,
