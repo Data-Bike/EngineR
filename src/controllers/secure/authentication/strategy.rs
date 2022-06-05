@@ -16,7 +16,7 @@ pub struct AuthenticationError {
 
 impl fmt::Display for AuthenticationError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{}",self.source)
+        write!(f, "{}", self.source)
     }
 }
 
@@ -39,29 +39,23 @@ impl fmt::Display for AuthenticationErrorSideKick {
 impl Error for AuthenticationErrorSideKick {}
 
 
-
-pub struct Strategy{
-    pub user_model:Repository
-}
+pub struct Strategy {}
 
 impl Strategy {
-
-    pub fn new(user_model:Repository)->Strategy{
-        Self{
-            user_model
-        }
+    pub fn new() -> Strategy {
+        Self {}
     }
 
-    pub async fn auth(&mut self, token:&Token)->Result<User,AuthenticationError>{
+    pub async fn auth(token: &Token) -> Result<User, AuthenticationError> {
         let login = token.credentials.login.clone();
         let password = token.credentials.password.clone();
         let user = model::user::repository::repository::Repository::getUserByLogin(login).await;
         let hash = user.password.clone();
-        if verify(password,hash.as_str()).is_ok(){
-            return Ok(user)
+        if verify(password, hash.as_str()).is_ok() {
+            return Ok(user);
         }
-        Err(AuthenticationError{
-           source: AuthenticationErrorSideKick {}
+        Err(AuthenticationError {
+            source: AuthenticationErrorSideKick {}
         })
     }
 }

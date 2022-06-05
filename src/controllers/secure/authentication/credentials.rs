@@ -1,5 +1,10 @@
+pub enum CheckCredentials {
+    Password(String),
+    AccessToken(String),
+    OAuth(String),
+}
+
 pub struct Credentials {
-    pub login:String,
-    pub password:String,
-    pub accessToken:Option<String>
+    pub login: String,
+    pub checkCredentials: CheckCredentials,
 }
