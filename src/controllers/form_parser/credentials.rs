@@ -1,6 +1,6 @@
 use std::fmt::{Debug, Display, Formatter};
 use rocket::data::{FromData, Outcome, ToByteUnit, Transform};
-use rocket::{Data, Request};
+use rocket::{Data, Request, request};
 use std::error::Error;
 use std::net::IpAddr;
 use std::net::IpAddr::{V4, V6};
@@ -13,7 +13,7 @@ use serde_json::{from_str, json, Value};
 use crate::controllers::secure::authentication::credentials::CheckCredentials::{AccessToken, Password};
 use crate::controllers::secure::authentication::credentials::Credentials;
 use crate::controllers::secure::authentication::token::IP::{v4, v6};
-use crate::controllers::secure::authentication::token::Token;
+use crate::controllers::secure::authentication::token::{IP, Token};
 use crate::model::link::entity::link::Link;
 use crate::model::object::entity::object::Object;
 use crate::model::object::repository::repository::Repository as Object_repository;
@@ -119,33 +119,27 @@ impl Credentials {
     }
 }
 
-impl Token {
-    pub async fn from_str(string: &str) -> Result<Self, ParseError> {
-        macro_rules! err_resolve {
-            ( $x:expr, $key:expr ) => {
-                match match $x.get($key) {
-                    None => { return Err(ParseError { message: format!("Error {} not found",$key) }); }
-                    Some(v) => { v }
-                }.as_str() {
-                    None => { return Err(ParseError { message: format!("Error {} is not string",$key) }); }
-                    Some(v) => { v }
+
+#[rocket::async_trait]
+impl<'r> FromRequest<'r> for IP {
+    type Error = ();
+
+    async fn from_request(req: &Request<'r>) -> request::Outcome<IP, ()> {
+        Success(match req.client_ip() {
+            Some(i) => {
+                match i {
+                    V4(ipv4) => {
+                        v4(ipv4.to_string())
+                    }
+                    V6(ipv6) => {
+                        v6(ipv6.to_string())
+                    }
                 }
-            };
-        }
-
-        let json_object: Value = match from_str::<Value>(string) {
-            Ok(v) => { v }
-            Err(e) => { return Err(ParseError { message: "Error cannot parse JSON".to_string() }); }
-        };
-        let credentials = match Credentials::from_json(&json_object).await {
-            Ok(c) => { c }
-            Err(e) => { return Err(ParseError { message: "Error cannot parse Credentials".to_string() }); }
-        };
-
-        Ok(Token::new(credentials, ip))
+            }
+            None => { return Failure((Status::InternalServerError, Self::Error { message: "Error no ip".to_string() })); }
+        })
     }
 }
-
 
 #[rocket::async_trait]
 impl<'r> FromData<'r> for Credentials {
