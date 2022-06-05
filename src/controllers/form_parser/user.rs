@@ -2,6 +2,7 @@ use std::fmt::{Debug, Display, Formatter};
 use rocket::data::{FromData, Outcome, ToByteUnit};
 use rocket::{Data, Request};
 use std::error::Error;
+use async_std::task::block_on;
 use chrono::{DateTime, Utc};
 use rocket::http::Status;
 use rocket::outcome::Outcome::{Failure, Success};
@@ -61,7 +62,7 @@ impl User {
             Some(v) => { v }
         };
 
-        let mut groups_s:Vec<Group> = vec![];
+        let mut groups_s: Vec<Group> = vec![];
 
         for g in groups.iter()
         {
@@ -77,7 +78,7 @@ impl User {
             id: "".to_string(),
             login: login.to_string(),
             password: password.to_string(),
-            groups:groups_s,
+            groups: groups_s,
         })
     }
 }
@@ -86,11 +87,11 @@ impl User {
 impl<'r> FromRequest<'r> for User {
     type Error = ();
 
-    async fn from_request(request: & Request<'r>) -> request::Outcome<User, ()> {
+    async fn from_request(request: &Request<'r>) -> request::Outcome<User, ()> {
         request.cookies()
             .get_private("user_id")
             .and_then(|cookie| cookie.value().parse().ok())
-            .map(|id| User_repository::getUserById(id).await)
+            .map(|id| block_on(User_repository::getUserById(id)))
             .or_forward(())
     }
 }

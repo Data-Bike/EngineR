@@ -1,5 +1,5 @@
 use std::fmt::{Debug, Display, Formatter};
-use rocket::data::{FromData, Outcome, ToByteUnit, Transform};
+use rocket::data::{FromData, Outcome, ToByteUnit};
 use rocket::{Data, Request, request};
 use std::error::Error;
 use std::net::IpAddr;
@@ -88,6 +88,18 @@ impl Credentials {
 
 
     pub async fn from_json(json_object: &Value) -> Result<Self, ParseError> {
+
+        macro_rules! err_resolve {
+            ( $x:expr, $key:expr ) => {
+                match match $x.get($key) {
+                    None => { return Err(ParseError { message: format!("Error {} not found",$key) }); }
+                    Some(v) => { v }
+                }.as_str() {
+                    None => { return Err(ParseError { message: format!("Error {} is not string",$key) }); }
+                    Some(v) => { v }
+                }
+            };
+        }
         let login = err_resolve!(json_object,"login").to_string();
 
         let checkCredentials = match json_object.get("password") {
@@ -144,15 +156,15 @@ impl<'r> FromRequest<'r> for IP {
 #[rocket::async_trait]
 impl<'r> FromData<'r> for Credentials {
     type Error = ParseError;
-    type Owned = Data;
-    type Borrowed = Data;
+    // type Owned = Data;
+    // type Borrowed = Data;
 
-    fn transform(request: &Request, data: Data) -> Transform<Outcome<Self::Owned, Self::Error>> {
-        Transform::Owned(Success(data))
-    }
+    // fn transform(request: &Request, data: Data) -> Transform<Outcome<Self::Owned, Self::Error>> {
+    //     Transform::Owned(Success(data))
+    // }
 
     async fn from_data(req: &'r Request<'_>, data: &mut Data) -> Outcome<Self, Self::Error> {
-        let string = match data.open().into_string().await {
+        let string = match data.open(LIMIT.bytes()).into_string().await {
             Ok(string) if string.is_complete() => string.into_inner(),
             Ok(_) => return Failure((Status::PayloadTooLarge, Self::Error { message: "Error".to_string() })),
             Err(e) => return Failure((Status::InternalServerError, Self::Error { message: "Error".to_string() })),
@@ -162,7 +174,7 @@ impl<'r> FromData<'r> for Credentials {
             Ok(o) => {
                 Success(o)
             }
-            Err(e) => { Failure((Status { code: 500, reason: "Error" }, Self::Error { message: "Error".to_string() })) }
+            Err(e) => { Failure((Status { code: 500}, Self::Error { message: "Error".to_string() })) }
         }
     }
 }
@@ -170,12 +182,12 @@ impl<'r> FromData<'r> for Credentials {
 #[rocket::async_trait]
 impl<'r> FromData<'r> for Token {
     type Error = ParseError;
-    type Owned = Data;
-    type Borrowed = Data;
-
-    fn transform(request: &Request, data: Data) -> Transform<Outcome<Self::Owned, Self::Error>> {
-        Transform::Owned(Success(data))
-    }
+    // type Owned = Data;
+    // type Borrowed = Data;
+    //
+    // fn transform(request: &Request, data: Data) -> Transform<Outcome<Self::Owned, Self::Error>> {
+    //     Transform::Owned(Success(data))
+    // }
 
     async fn from_data(req: &'r Request<'_>, data: &mut Data) -> Outcome<Self, Self::Error> {
         let ip = match req.client_ip() {
@@ -191,7 +203,7 @@ impl<'r> FromData<'r> for Token {
             }
             None => { return Failure((Status::InternalServerError, Self::Error { message: "Error no ip".to_string() })); }
         };
-        let string = match data.open().into_string().await {
+        let string = match data.open(LIMIT.bytes()).into_string().await {
             Ok(string) if string.is_complete() => string.into_inner(),
             Ok(_) => return Failure((Status::PayloadTooLarge, Self::Error { message: "Error".to_string() })),
             Err(e) => return Failure((Status::InternalServerError, Self::Error { message: "Error".to_string() })),
@@ -201,7 +213,7 @@ impl<'r> FromData<'r> for Token {
             Ok(o) => {
                 o
             }
-            Err(e) => { return Failure((Status { code: 500, reason: "Error" }, Self::Error { message: "Error".to_string() })); }
+            Err(e) => { return Failure((Status { code: 500 }, Self::Error { message: "Error".to_string() })); }
         };
 
         let mut dirty_token = Token::new(credentials, ip);

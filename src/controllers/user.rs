@@ -1,50 +1,42 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use rocket::{routes, State};
-// use rocket::response::content::Html;
+
+use rocket::response::content::{RawHtml, RawJson};
+use rocket::get;
+use rocket::post;
+use rocket::launch;
 use rocket::fairing::AdHoc;
-// use serde_hjson::value::ToJson;
+use serde_json::value::to_value;
 // use crate::init::model::{Database, ModelApp, Secure, User};
+use crate::model::user::entity::user::User;
+// use rocket_sync_db_pools::database;
+// use rocket_sync_db_pools::postgres;
+use crate::model;
+use crate::model::object::entity::object::Object;
+use crate::model::object::repository::repository::Repository;
+use crate::controllers::form_parser::object;
 
 //
-// #[get("/token")]
-// fn index(model: &State<&ModelApp>) -> Html<String> {
-//     let token = Secure::token();
-//     Html(format!("Token: {} <br> Hashed: {}", token, Secure::hashed(token.as_str())))
+// #[get("/get/<id>")]
+// async fn get_object(id: usize) -> RawHtml<String> {
+//     let object = Repository::hydrateFilledObjectType(id.to_string()).await;
+//     RawHtml(to_value(object).unwrap().to_string())
 // }
 //
-// #[get("/reg/<login>")]
-// fn reg(model: &State<&ModelApp>, login: &str) -> Html<String> {
-//     let token = Secure::token();
-//     let hashed = Secure::hashed(token.as_str());
-//     let hashed_to_view = hashed.clone();
-//     model.user.reg(login.to_string(), hashed);
-//     Html(format!("Token: {} <br> Hashed: {} <br> Login: {}", token, hashed_to_view, login))
+// #[post("/add",data="<object>")]
+// async fn add_object(object:Object) -> RawJson<String> {
+//     let id = Repository::createObject(&object).await;
+//
+//     RawJson(id)
 // }
 //
 //
-// #[get("/all")]
-// fn all(model: &State<&ModelApp>) -> Html<String> {
-//     let users_iter = model.database.tokens.iter();
-//     let mut all_users = "".to_string();
-//     users_iter.for_each(|item| {
-//         // hashed=std::str::from_utf8(item.unwrap().0.as_ref()).unwrap();
-//         let unwrap_item = item.unwrap();
-//         let h = unwrap_item.0.as_ref();
-//         let u = unwrap_item.1;
-//         all_users = format!("{}<br>{:?}",
-//                             all_users,
-//                             User::from_bin(u).to_json().to_string()
-//         );
-//     });
-//     Html(all_users)
-// }
-
-// pub fn stage(model: &'static ModelApp) -> AdHoc {
-//     AdHoc::on_ignite("Managed user model", move |rocket| async move {
-//         rocket.mount("/user", routes![index,reg,all])
-//             .manage(model)
+// pub fn stage() -> AdHoc {
+//     AdHoc::on_ignite("Managing objects", move |rocket| async move {
+//         rocket.mount("/object", routes![get_object,add_object])
 //     })
 // }
-
-#[cfg(test)] mod tests;
+//
+// #[cfg(test)]
+// mod tests;

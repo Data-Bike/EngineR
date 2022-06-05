@@ -1,5 +1,5 @@
 use std::fmt::{Debug, Display, Formatter};
-use rocket::data::{FromData, Outcome, ToByteUnit, Transform};
+use rocket::data::{FromData, Outcome, ToByteUnit};
 use rocket::{Data, Request};
 use std::error::Error;
 use chrono::{DateTime, Utc};
@@ -97,15 +97,15 @@ impl Link {
 #[rocket::async_trait]
 impl<'r> FromData<'r> for Link {
     type Error = ParseError;
-    type Owned = Data;
-    type Borrowed = Data;
-
-    fn transform(request: &Request, data: Data) -> Transform<Outcome<Self::Owned, Self::Error>> {
-        Transform::Owned(Success(data))
-    }
+    // type Owned = Data;
+    // type Borrowed = Data;
+    //
+    // fn transform(request: &Request, data: Data) -> Transform<Outcome<Self::Owned, Self::Error>> {
+    //     Transform::Owned(Success(data))
+    // }
 
     async fn from_data(req: &'r Request<'_>, data: &mut Data) -> Outcome<Self, Self::Error> {
-        let string = match data.open().into_string().await {
+        let string = match data.open(LIMIT.bytes()).into_string().await {
             Ok(string) if string.is_complete() => string.into_inner(),
             Ok(_) => return Failure((Status::PayloadTooLarge, Self::Error { message: "Error".to_string() })),
             Err(e) => return Failure((Status::InternalServerError, Self::Error { message: "Error".to_string() })),
@@ -115,17 +115,17 @@ impl<'r> FromData<'r> for Link {
                 u
             }
             r => {
-                r.and_then(|x| Failure((Status { code: 401, reason: "Error" }, ())))
+                r.and_then(|x| Failure((Status { code: 401 }, ())))
             }
         };
         match Link::from_str(string.as_str()).await {
             Ok(o) => {
                 if !getToken(req, &o).authorize(&user) {
-                    Failure((Status { code: 403, reason: "Error" }, Self::Error { message: "Error".to_string() }))
+                    Failure((Status { code: 403}, Self::Error { message: "Error".to_string() }))
                 }
                 Success(o)
             }
-            Err(e) => { Failure((Status { code: 500, reason: "Error" }, Self::Error { message: "Error".to_string() })) }
+            Err(e) => { Failure((Status { code: 500 }, Self::Error { message: "Error".to_string() })) }
         }
     }
 }

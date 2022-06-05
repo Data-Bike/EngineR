@@ -4,3 +4,4 @@ pub mod link;
 pub mod secure;
 pub mod pool;
 mod form_parser;
+mod login_logout;
