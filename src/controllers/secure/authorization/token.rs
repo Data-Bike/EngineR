@@ -44,6 +44,21 @@ impl Token {
             authorized: None,
         }
     }
+    pub fn fromToken(token: &Token) -> Token {
+        Token {
+            requestLevel: token.requestLevel.clone(),
+            requestKind: token.requestKind.clone(),
+            system: token.system.clone(),
+            object_type: token.object_type.clone(),
+            object_type_field: token.object_type_field.clone(),
+            object: token.object.clone(),
+            link_type: token.link_type.clone(),
+            link: token.link.clone(),
+            authorized: None,
+        }
+    }
+
+
     pub fn is_authorized(&self) -> Option<bool> {
         self.authorized
     }
@@ -56,7 +71,7 @@ impl Token {
         self.authorized = Some(false);
     }
 
-    pub fn authorize(&mut self, user: &User)->bool {
+    pub fn authorize(&mut self, user: &User) -> bool {
         let is_auth = Authorization::auth(user, self);
         self.authorized = Some(is_auth);
         return is_auth;

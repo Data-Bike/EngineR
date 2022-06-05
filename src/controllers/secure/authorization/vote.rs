@@ -1,4 +1,5 @@
 use crate::controllers::secure::authorization::token::Token;
+use crate::model::object::entity::object::Field;
 use crate::model::secure::entity::permission::Access::{allow, deny};
 use crate::model::secure::entity::permission::PermissionLevel;
 use crate::model::user::entity::user::User;
@@ -97,7 +98,10 @@ pub struct ObjectTypeFieldVote {}
 
 impl ObjectTypeFieldVote {
     pub fn allow(user: &User, token: &Token) -> bool {
-        let object = token.object_type_field.clone().unwrap();
+        let object = match token.object_type_field.and_then(|f| Some(f.alias)) {
+            None => { return false; }
+            Some(o) => { o }
+        };
         for group in &user.groups {
             for permission in &group.permissions.object_type_field {
                 if permission.object == object &&
