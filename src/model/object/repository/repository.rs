@@ -15,9 +15,10 @@ use async_std::task_local;
 use rocket::futures;
 // use core::future::Future;
 use rocket::futures::poll;
+use rocket::http::ext::IntoCollection;
 use sqlx::postgres::PgRow;
 use sqlx::Row;
-use crate::controllers::pool::pool::{create_table, get_insert, insert, sql, sql_one, update};
+use crate::controllers::pool::pool::{create_table, get_case, get_insert, insert, select, sql, sql_one, update};
 use crate::model;
 use crate::model::link::entity::link::Link;
 use crate::model::object::entity::object::{Field, Object, ObjectType};
@@ -157,6 +158,25 @@ impl Repository {
             ("date_deleted", Utc::now().to_rfc3339().as_str()),
             ("user_deleted", user.id.as_str()),
         ], vec![("id", "=", id)]).await;
+    }
+
+    pub async fn searchObject(the_object: &Object) -> Vec<Object> {
+        let case = the_object
+            .filled
+            .fields
+            .iter()
+            .filter(|f| f.value.is_some())
+            .map(|f| (f.alias.clone(), "=".to_string(), f.value.unwrap_or("".to_string())))
+            .collect::<Vec<(String, String, String)>>();
+
+        let table = the_object.filled.alias.clone();
+
+        select(table, vec!["id".to_string()], vec![case])
+            .await
+            .iter()
+            .filter_map(|o| o.try_get::<String, &str>("id").ok())
+            .map(|id| Self::hydrateFilledObjectType(id))
+            .collect::<Vec<Object>>()
     }
 
     pub async fn createObjectType(object_type: ObjectType) {

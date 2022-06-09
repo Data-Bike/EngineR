@@ -24,11 +24,18 @@ async fn get_object(id: usize) -> RawHtml<String> {
     RawHtml(to_value(object).unwrap().to_string())
 }
 
-#[post("/add",data="<object>")]
-async fn add_object(object:Object) -> RawJson<String> {
+#[post("/add", data = "<object>")]
+async fn add_object(object: Object) -> RawJson<String> {
     let id = Repository::createObject(&object).await;
 
     RawJson(id)
+}
+
+#[post("/search", data = "<object>")]
+async fn search_object(object: Object) -> RawJson<Vec<Object>> {
+    let res = Repository::searchObject(&object).await;
+
+    RawJson(res)
 }
 
 
