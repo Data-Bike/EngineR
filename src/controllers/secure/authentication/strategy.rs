@@ -7,6 +7,7 @@ use bcrypt::verify;
 
 use std::fmt;
 use std::io::Stderr;
+use crate::controllers::secure::authentication::credentials::CheckCredentials;
 use crate::model;
 
 #[derive(Debug)]
@@ -48,14 +49,21 @@ impl Strategy {
 
     pub async fn auth(token: &Token) -> Result<User, AuthenticationError> {
         let login = token.credentials.login.clone();
-        let password = token.credentials.password.clone();
-        let user = model::user::repository::repository::Repository::getUserByLogin(login).await;
-        let hash = user.password.clone();
-        if verify(password, hash.as_str()).is_ok() {
-            return Ok(user);
+        // let password = token.credentials.password.clone();
+        match token.credentials.checkCredentials.clone() {
+            CheckCredentials::Password(password) => {
+                let user = model::user::repository::repository::Repository::getUserByLogin(login).await;
+                let hash = user.password.clone();
+                if verify(password, hash.as_str()).is_ok() {
+                    return Ok(user);
+                }
+                Err(AuthenticationError {
+                    source: AuthenticationErrorSideKick {}
+                })
+            }
+            CheckCredentials::AccessToken(access_token) => {}
+            CheckCredentials::OAuth(oauth) => {}
         }
-        Err(AuthenticationError {
-            source: AuthenticationErrorSideKick {}
-        })
+
     }
 }

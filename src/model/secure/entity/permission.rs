@@ -37,14 +37,14 @@ pub struct Group {
     pub alias: String,
     pub name: String,
     pub level: String,
-    pub id: String,
+    pub id: Option<String>,
     pub permissions: PermissionsGroup,
 }
 #[derive(Serialize, Deserialize, Debug,  Clone)]
 pub struct Permission {
     pub access: Access,
     pub alias: String,
-    pub id: String,
+    pub id: Option<String>,
     pub level: PermissionLevel,
     pub kind: PermissionKind,
     pub name: String,

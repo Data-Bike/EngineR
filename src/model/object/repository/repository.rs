@@ -175,7 +175,7 @@ impl Repository {
             .await
             .iter()
             .filter_map(|o| o.try_get::<String, &str>("id").ok())
-            .map(|id| Self::hydrateFilledObjectType(id))
+            .map(|id| block_on(Self::hydrateFilledObjectType(id)))
             .collect::<Vec<Object>>()
     }
 

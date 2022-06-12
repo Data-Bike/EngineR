@@ -5,6 +5,7 @@ use serde::{Serialize, Deserialize};
 
 #[derive(Serialize, Deserialize, Debug,  Clone)]
 pub struct Field {
+    pub id: Option<String>,
     pub alias: String,
     pub kind: String,
     pub name: String,
@@ -17,6 +18,7 @@ pub struct Field {
 
 #[derive(Serialize, Deserialize, Debug,  Clone)]
 pub struct ObjectType {
+    pub id: Option<String>,
     pub fields: Vec<Field>,
     pub kind: String,
     pub alias: String,
@@ -30,4 +32,5 @@ pub struct Object {
     pub user_created: User,
     pub user_deleted: Option<User>,
     pub(crate) hash: String,
+    pub(crate) id: Option<String>,
 }

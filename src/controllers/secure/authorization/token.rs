@@ -76,7 +76,7 @@ impl Token {
         self.authorized
     }
 
-    pub fn approve(&mut self) -> Option<bool> {
+    pub fn approve(&mut self)  {
         self.authorized = Some(true);
     }
 

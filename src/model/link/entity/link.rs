@@ -5,6 +5,7 @@ use serde::{Serialize, Deserialize};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct LinkType {
+    pub id: String,
     pub alias: String,
     pub name: String,
     pub object_type_from: ObjectType,
@@ -13,6 +14,7 @@ pub struct LinkType {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Link {
+    pub id: Option<String>,
     pub object_from: Object,
     pub object_to: Object,
     pub link_type: LinkType,

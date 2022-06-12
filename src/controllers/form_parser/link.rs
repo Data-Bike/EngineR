@@ -39,7 +39,7 @@ pub fn getToken(req: &Request<'_>, link: &Link) -> Token {
         _ => { panic!("Error") }
     };
 
-    let system = req.get_param(0).unwrap().unwrap().to_string();
+    let system = req.uri().path().segments().get(0).unwrap().to_string();
     Token::fromLink(requestKind, system, link)
 }
 
@@ -81,8 +81,19 @@ impl Link {
         let date_created = DateTime::<Utc>::from(DateTime::parse_from_rfc3339(date_created_str).unwrap());
         let date_deleted = if date_deleted_str == "" { None } else { Some(DateTime::<Utc>::from(DateTime::parse_from_rfc3339(date_deleted_str).unwrap())) };
         let link_type = Link_repository::getLinkTypeById(link_type_id).await;
+        let id = match json_object.get("id") {
+            None => { None }
+            Some(v) => {
+                match v.as_str()
+                {
+                    None => { return Err(ParseError { message: "Error id is not string".to_string() }); }
+                    Some(v) => { Some(v.to_string()) }
+                }
+            }
+        };
 
         Ok(Link {
+            id,
             object_from,
             object_to,
             link_type,
@@ -104,7 +115,7 @@ impl<'r> FromData<'r> for Link {
     //     Transform::Owned(Success(data))
     // }
 
-    async fn from_data(req: &'r Request<'_>, data: &mut Data) -> Outcome<Self, Self::Error> {
+    async fn from_data(req: &'r Request<'_>, data: &mut Data<'r>) -> Outcome<'r, Self, Self::Error> {
         let string = match data.open(LIMIT.bytes()).into_string().await {
             Ok(string) if string.is_complete() => string.into_inner(),
             Ok(_) => return Failure((Status::PayloadTooLarge, Self::Error { message: "Error".to_string() })),
@@ -115,13 +126,13 @@ impl<'r> FromData<'r> for Link {
                 u
             }
             r => {
-                r.and_then(|x| Failure((Status { code: 401 }, ())))
+                return Failure((Status { code: 401 }, Self::Error { message: "Error".to_string() }));
             }
         };
         match Link::from_str(string.as_str()).await {
             Ok(o) => {
                 if !getToken(req, &o).authorize(&user) {
-                    Failure((Status { code: 403}, Self::Error { message: "Error".to_string() }))
+                    return Failure((Status { code: 403 }, Self::Error { message: "Error".to_string() }));
                 }
                 Success(o)
             }

@@ -136,7 +136,7 @@ impl Credentials {
 impl<'r> FromRequest<'r> for IP {
     type Error = ();
 
-    async fn from_request(req: &Request<'r>) -> request::Outcome<IP, ()> {
+    async fn from_request(req: &'r Request<'_>) -> request::Outcome<IP, ()> {
         Success(match req.client_ip() {
             Some(i) => {
                 match i {
@@ -148,7 +148,7 @@ impl<'r> FromRequest<'r> for IP {
                     }
                 }
             }
-            None => { return Failure((Status::InternalServerError, Self::Error { message: "Error no ip".to_string() })); }
+            None => { return Failure((Status::InternalServerError, ())); }
         })
     }
 }
@@ -163,7 +163,7 @@ impl<'r> FromData<'r> for Credentials {
     //     Transform::Owned(Success(data))
     // }
 
-    async fn from_data(req: &'r Request<'_>, data: &mut Data) -> Outcome<Self, Self::Error> {
+    async fn from_data(req: &'r Request<'_>, data: &mut Data<'r>) -> Outcome<'r,Self, Self::Error> {
         let string = match data.open(LIMIT.bytes()).into_string().await {
             Ok(string) if string.is_complete() => string.into_inner(),
             Ok(_) => return Failure((Status::PayloadTooLarge, Self::Error { message: "Error".to_string() })),
@@ -189,7 +189,7 @@ impl<'r> FromData<'r> for Token {
     //     Transform::Owned(Success(data))
     // }
 
-    async fn from_data(req: &'r Request<'_>, data: &mut Data) -> Outcome<Self, Self::Error> {
+    async fn from_data(req: &'r Request<'_>, data: &mut Data<'r>) -> Outcome<'r,Self, Self::Error> {
         let ip = match req.client_ip() {
             Some(i) => {
                 match i {

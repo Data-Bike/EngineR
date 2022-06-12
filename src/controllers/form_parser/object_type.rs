@@ -42,13 +42,18 @@ pub fn getToken(req: &Request<'_>, object_type: &ObjectType) -> Token {
         _ => { panic!("Error") }
     };
 
-    let system = req.get_param(0).unwrap().unwrap().to_string();
+    let system = req.uri().path().segments().get(0).unwrap().to_string();
     Token::fromObjectType(requestKind, system, object_type)
 }
 
 impl Field {
     pub fn from_json(json: &Value) -> Result<Self, serde_json::Error> {
+
+
+
+
         Ok(Field {
+            id: "".to_string(),
             alias: json
                 .get("alias")
                 .unwrap_or(&Value::String("".to_string()))
@@ -111,6 +116,7 @@ impl Field {
 impl ObjectType {
     pub fn from_json(json: &Value) -> Result<Self, serde_json::Error> {
         Ok(ObjectType {
+            id: "".to_string(),
             fields: match json.get("fields") {
                 None => { vec![] }
                 Some(v) => {
@@ -157,7 +163,7 @@ impl<'r> FromData<'r> for ObjectType {
     // }
 
 
-    async fn from_data(req: &'r Request<'_>, data: &mut Data) -> rocket::data::Outcome<Self, Self::Error> {
+    async fn from_data(req: &'r Request<'_>, data: &mut Data) -> rocket::data::Outcome<'r,Self, Self::Error> {
         let string = match data.open(LIMIT.bytes()).into_string().await {
             Ok(string) if string.is_complete() => string.into_inner(),
             Ok(_) => return Failure((Status::PayloadTooLarge, Self::Error { message: "Error".to_string() })),
@@ -179,7 +185,7 @@ impl<'r> FromData<'r> for ObjectType {
         match ObjectType::from_str(string.as_str()).await {
             Ok(ot) => {
                 if !getToken(req, &ot).authorize(&user) {
-                    Failure((Status { code: 403 }, Self::Error { message: "Error".to_string() }))
+                    return Failure((Status { code: 403 }, Self::Error { message: "Error".to_string() }));
                 }
                 Success(ot)
             }

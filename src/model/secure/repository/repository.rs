@@ -17,7 +17,7 @@ impl Repository {
     }
 
     pub async fn getPermissionsByGroup(group: Group) -> Vec<Permission> {
-        Self::getPermissionsById(group.id.as_str())
+        Self::getPermissionsById(group.id.as_str()).await
     }
 
     pub async fn getPermissionsById(id: &str) -> Vec<Permission> {
@@ -150,7 +150,7 @@ impl Repository {
             level: group_row.get::<String, &str>("level"),
             id: group_row.get::<String, &str>("id"),
             permissions: Self::getPermissionsGroupByPermissions(
-                Self::getPermissionsById(id)
+                Self::getPermissionsById(id).await
             ),
         }
     }

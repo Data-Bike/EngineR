@@ -124,8 +124,8 @@ impl Repository {
         LinkType {
             alias: row.get::<String, &str>("alias"),
             name: row.get::<String, &str>("name"),
-            object_type_from: Object_repository::getObjectTypeFromId(row.get::<String, &str>("object_type_from_id")),
-            object_type_to: Object_repository::getObjectTypeFromId(row.get::<String, &str>("object_type_to_id")),
+            object_type_from: Object_repository::getObjectTypeFromId(row.get::<String, &str>("object_type_from_id")).await,
+            object_type_to: Object_repository::getObjectTypeFromId(row.get::<String, &str>("object_type_to_id")).await,
         }
     }
 

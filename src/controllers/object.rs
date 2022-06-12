@@ -8,6 +8,7 @@ use rocket::post;
 use rocket::launch;
 use rocket::fairing::AdHoc;
 use serde_json::value::to_value;
+// use serde_json::to_value;
 // use crate::init::model::{Database, ModelApp, Secure, User};
 use crate::model::user::entity::user::User;
 // use rocket_sync_db_pools::database;
@@ -32,10 +33,10 @@ async fn add_object(object: Object) -> RawJson<String> {
 }
 
 #[post("/search", data = "<object>")]
-async fn search_object(object: Object) -> RawJson<Vec<Object>> {
+async fn search_object(object: Object) -> RawJson<String> {
     let res = Repository::searchObject(&object).await;
 
-    RawJson(res)
+    RawJson(to_value(res).unwrap().to_string())
 }
 
 

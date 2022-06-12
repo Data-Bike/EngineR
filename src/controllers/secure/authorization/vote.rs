@@ -29,7 +29,7 @@ impl ObjectVote {
         let object = token.object.clone().unwrap();
         for group in &user.groups {
             for permission in &group.permissions.object {
-                if permission.object == object &&
+                if permission.object == object.id &&
                     permission.kind == token.requestKind &&
                     permission.access == allow {
                     return true;
@@ -47,7 +47,7 @@ impl ObjectTypeVote {
         let object = token.object_type.clone().unwrap();
         for group in &user.groups {
             for permission in &group.permissions.object_type {
-                if permission.object == object &&
+                if permission.object == object.id &&
                     permission.kind == token.requestKind &&
                     permission.access == allow {
                     return true;
@@ -65,7 +65,7 @@ impl LinkVote {
         let object = token.link.clone().unwrap();
         for group in &user.groups {
             for permission in &group.permissions.link {
-                if permission.object == object &&
+                if permission.object == object.id &&
                     permission.kind == token.requestKind &&
                     permission.access == allow {
                     return true;
@@ -83,7 +83,7 @@ impl LinkTypeVote {
         let object = token.link_type.clone().unwrap();
         for group in &user.groups {
             for permission in &group.permissions.link_type {
-                if permission.object == object &&
+                if permission.object == object.id &&
                     permission.kind == token.requestKind &&
                     permission.access == allow {
                     return true;
