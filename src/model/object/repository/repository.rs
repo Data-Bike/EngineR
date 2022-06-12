@@ -7,6 +7,7 @@ use futures::task::noop_waker_ref;
 use chrono::{DateTime, Utc};
 // use futures_util::async_await::poll;
 use core::convert;
+use std::borrow::Borrow;
 use std::pin::Pin;
 use std::ptr;
 use async_std::prelude::FutureExt;
@@ -35,6 +36,7 @@ impl Repository {
 
     fn getFieldFromRow(row: PgRow) -> Field {
         Field {
+            id: Some(row.get::<String, &str>("id")),
             alias: row.get::<String, &str>("alias"),
             kind: row.get::<String, &str>("kind"),
             name: row.get::<String, &str>("name"),
@@ -61,7 +63,9 @@ impl Repository {
 
         let kind_row = sql_one(format!("select kind from object_type where alias = '{}' limit 1", alias).as_str()).await;
         let kind = kind_row.get::<String, &str>("kind").to_string();
+        let id = Some(kind_row.get::<String, &str>("id").to_string());
         ObjectType {
+            id,
             fields,
             kind,
             alias,
@@ -74,9 +78,10 @@ impl Repository {
 
         let kind_alias_row = sql_one(format!("select * from object where id = '{}' limit 1", id).as_str()).await;
         let kind_alias = (kind_alias_row.get::<String, &str>("kind").to_string(), kind_alias_row.get::<String, &str>("alias").to_string());
-
+        let id = Some(kind_alias_row.get::<String, &str>("id").to_string());
 
         ObjectType {
+            id,
             fields,
             kind: kind_alias.0,
             alias: kind_alias.1,
@@ -105,6 +110,7 @@ impl Repository {
                 None => None
             },
             hash: row.get::<String, &str>("hash"),
+            id: Some(id)
         }
     }
 
@@ -127,7 +133,7 @@ impl Repository {
         insert("object", vec![
             ("kind", the_object.filled.kind.as_str()),
             ("alias", the_object.filled.alias.as_str()),
-            ("user_created", the_object.user_created.id.as_str()),
+            ("user_created", the_object.user_created.id.clone().unwrap().as_str()),
             ("date_created", the_object.date_created.to_rfc3339().as_str()),
         ]).await
     }
@@ -141,6 +147,7 @@ impl Repository {
         let alias = row.get::<String, &str>("alias").to_string();
 
         ObjectType {
+            id: Some(id),
             fields,
             kind,
             alias,
@@ -156,7 +163,7 @@ impl Repository {
     pub async fn deleteObject(id: &str, user: User) {
         update("object", vec![
             ("date_deleted", Utc::now().to_rfc3339().as_str()),
-            ("user_deleted", user.id.as_str()),
+            ("user_deleted", user.id.unwrap().as_str()),
         ], vec![("id", "=", id)]).await;
     }
 
@@ -166,7 +173,7 @@ impl Repository {
             .fields
             .iter()
             .filter(|f| f.value.is_some())
-            .map(|f| (f.alias.clone(), "=".to_string(), f.value.unwrap_or("".to_string())))
+            .map(|f| (f.alias.clone(), "=".to_string(), f.value.clone().unwrap_or("".to_string())))
             .collect::<Vec<(String, String, String)>>();
 
         let table = the_object.filled.alias.clone();
@@ -215,7 +222,7 @@ impl Repository {
     pub async fn deleteObjectType(id: &str, user: User) {
         update("object_type", vec![
             ("date_deleted", Utc::now().to_rfc3339().as_str()),
-            ("user_deleted", user.id.as_str()),
+            ("user_deleted", user.id.unwrap().as_str()),
         ], vec![("id", "=", id)]).await;
     }
 }

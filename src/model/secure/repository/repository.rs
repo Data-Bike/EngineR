@@ -17,7 +17,7 @@ impl Repository {
     }
 
     pub async fn getPermissionsByGroup(group: Group) -> Vec<Permission> {
-        Self::getPermissionsById(group.id.as_str()).await
+        Self::getPermissionsById(group.id.unwrap().as_str()).await
     }
 
     pub async fn getPermissionsById(id: &str) -> Vec<Permission> {
@@ -50,7 +50,7 @@ impl Repository {
             };
             let name = row.get::<String, &str>("name");
             let object = row.get::<String, &str>("object");
-            let id = row.get::<String, &str>("id");
+            let id = Some(row.get::<String, &str>("id"));
             res.push(Permission {
                 id,
                 access,
@@ -107,14 +107,14 @@ impl Repository {
     }
 
     pub async fn getUserGroupsbyUser(user: User) -> Vec<Group> {
-        let rows = sql(format!("select g.* from user_group join group on user_group.user_id={} and user_group.group_id=group.id ", &user.id).as_str()).await;
+        let rows = sql(format!("select g.* from user_group join group on user_group.user_id={} and user_group.group_id=group.id ", &user.id.unwrap()).as_str()).await;
 
         let mut res: Vec<Group> = Vec::new();
         for row in rows {
             let alias = row.get::<String, &str>("alias");
             let name = row.get::<String, &str>("name");
             let level = row.get::<String, &str>("level");
-            let id = row.get::<String, &str>("id");
+            let id = Some(row.get::<String, &str>("id"));
             let permissions_vec = Self::getPermissionsByGroup(Group {
                 id: id.clone(),
                 alias,
@@ -148,7 +148,7 @@ impl Repository {
             alias: group_row.get::<String, &str>("alias"),
             name: group_row.get::<String, &str>("name"),
             level: group_row.get::<String, &str>("level"),
-            id: group_row.get::<String, &str>("id"),
+            id: Some(group_row.get::<String, &str>("id")),
             permissions: Self::getPermissionsGroupByPermissions(
                 Self::getPermissionsById(id).await
             ),

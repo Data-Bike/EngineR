@@ -47,107 +47,132 @@ pub fn getToken(req: &Request<'_>, object_type: &ObjectType) -> Token {
 }
 
 impl Field {
-    pub fn from_json(json: &Value) -> Result<Self, serde_json::Error> {
+    pub fn from_json(json_object: &Value) -> Result<Self, ParseError> {
+        macro_rules! err_resolve {
+            ( $x:expr, $key:expr ) => {
+                match match $x.get($key) {
+                    None => { return Err(ParseError { message: format!("Error {} not found",$key) }); }
+                    Some(v) => { v }
+                }.as_str() {
+                    None => { return Err(ParseError { message: format!("Error {} is not string",$key) }); }
+                    Some(v) => { v }
+                }
+            };
+        }
+        macro_rules! err_resolve_bool {
+            ( $x:expr, $key:expr ) => {
+                match match $x.get($key) {
+                    None => { return Err(ParseError { message: format!("Error {} not found",$key) }); }
+                    Some(v) => { v }
+                }.as_bool() {
+                    None => { return Err(ParseError { message: format!("Error {} is not string",$key) }); }
+                    Some(v) => { v }
+                }
+            };
+        }
+        macro_rules! err_resolve_option {
+            ( $x:expr, $key:expr ) => {
+                match $x.get($key) {
+                    None => { None }
+                    Some(v) => {
+                        match v.as_str() {
+                            None => { return Err(ParseError { message: format!("Error {} is not string",$key) }); }
+                            Some(v) => { Some(v.to_string()) }
+                        }
+                    }
+                }
+            };
+        }
+        let id = match json_object.get("id") {
+            None => { None }
+            Some(v) => {
+                match v.as_str()
+                {
+                    None => { return Err(ParseError { message: "Error id is not string".to_string() }); }
+                    Some(v) => { Some(v.to_string()) }
+                }
+            }
+        };
 
-
+        let alias = err_resolve!(json_object,"alias").to_string();
+        let kind = err_resolve!(json_object,"kind").to_string();
+        let name = err_resolve!(json_object,"name").to_string();
+        let require = err_resolve_bool!(json_object,"require");
+        let index = err_resolve_bool!(json_object,"index");
+        let preview = err_resolve_bool!(json_object,"preview");
+        let default = err_resolve_option!(json_object,"default");
+        let value = err_resolve_option!(json_object,"value");
 
 
         Ok(Field {
-            id: "".to_string(),
-            alias: json
-                .get("alias")
-                .unwrap_or(&Value::String("".to_string()))
-                .as_str()
-                .unwrap_or("")
-                .to_string(),
-            kind: json
-                .get("kind")
-                .unwrap_or(&Value::String("".to_string()))
-                .as_str()
-                .unwrap_or("")
-                .to_string(),
-            name: json
-                .get("name")
-                .unwrap_or(&Value::String("".to_string()))
-                .as_str()
-                .unwrap_or("")
-                .to_string(),
-            default: match json
-                .get("default")
-            {
-                None => { None }
-                Some(v) => {
-                    match v.as_str() {
-                        None => { None }
-                        Some(v) => { Some(v.to_string()) }
-                    }
-                }
-            },
-            value: match json
-                .get("value")
-            {
-                None => { None }
-                Some(v) => {
-                    match v.as_str() {
-                        None => { None }
-                        Some(v) => { Some(v.to_string()) }
-                    }
-                }
-            },
-            require: json
-                .get("require")
-                .unwrap_or(&Value::Bool(false))
-                .as_bool()
-                .unwrap_or(false),
-            index: json
-                .get("index")
-                .unwrap_or(&Value::Bool(false))
-                .as_bool()
-                .unwrap_or(false),
-            preview: json
-                .get("preview")
-                .unwrap_or(&Value::Bool(false))
-                .as_bool()
-                .unwrap_or(false),
+            id,
+            alias,
+            kind,
+            name,
+            default,
+            value,
+            require,
+            index,
+            preview,
         })
     }
 }
 
 impl ObjectType {
-    pub fn from_json(json: &Value) -> Result<Self, serde_json::Error> {
-        Ok(ObjectType {
-            id: "".to_string(),
-            fields: match json.get("fields") {
-                None => { vec![] }
-                Some(v) => {
-                    match v.as_array() {
-                        None => { vec![] }
-                        Some(v) => {
-                            v
-                                .iter()
-                                .map(|f| Field::from_json(f).unwrap())
-                                .collect()
-                        }
+    pub fn from_json(json_object: &Value) -> Result<Self, ParseError> {
+        macro_rules! err_resolve {
+            ( $x:expr, $key:expr ) => {
+                match match $x.get($key) {
+                    None => { return Err(ParseError { message: format!("Error {} not found",$key) }); }
+                    Some(v) => { v }
+                }.as_str() {
+                    None => { return Err(ParseError { message: format!("Error {} is not string",$key) }); }
+                    Some(v) => { v }
+                }
+            };
+        }
+
+        let id = match json_object.get("id") {
+            None => { None }
+            Some(v) => {
+                match v.as_str()
+                {
+                    None => { return Err(ParseError { message: "Error id is not string".to_string() }); }
+                    Some(v) => { Some(v.to_string()) }
+                }
+            }
+        };
+
+        let fields = match json_object.get("fields") {
+            None => { return Err(ParseError { message: format!("Error {} not found", "fields") }); }
+            Some(v) => {
+                match v.as_array() {
+                    None => { return Err(ParseError { message: "Error fields is not array".to_string() }); }
+                    Some(v) => {
+                        v
+                            .iter()
+                            .map(|f| Field::from_json(f).unwrap())
+                            .collect()
                     }
                 }
-            },
-            kind: json
-                .get("kind")
-                .unwrap_or(&Value::String("".to_string()))
-                .as_str()
-                .unwrap_or("")
-                .to_string(),
-            alias: json
-                .get("alias")
-                .unwrap_or(&Value::String("".to_string()))
-                .as_str()
-                .unwrap_or("")
-                .to_string(),
+            }
+        };
+        let kind = err_resolve!(json_object,"kind").to_string();
+        let alias = err_resolve!(json_object,"alias").to_string();
+
+        Ok(ObjectType {
+            id,
+            fields,
+            kind,
+            alias,
         })
     }
-    pub async fn from_str(string: &str) -> Result<Self, serde_json::Error> {
-        let json_object: Value = from_str(string)?;
-        Self::from_json(&json_object).await
+    pub async fn from_str(string: &str) -> Result<Self, ParseError> {
+        let json_object: Value = match from_str::<Value>(string) {
+            Ok(v) => { v }
+            Err(e) => { return Err(ParseError { message: format!("Error parse json '{}'", e.to_string()) }); }
+        };
+        Self::from_json(&json_object)
     }
 }
 
@@ -163,7 +188,7 @@ impl<'r> FromData<'r> for ObjectType {
     // }
 
 
-    async fn from_data(req: &'r Request<'_>, data: &mut Data) -> rocket::data::Outcome<'r,Self, Self::Error> {
+    async fn from_data(req: &'r Request<'_>, data: &mut Data) -> rocket::data::Outcome<'r, Self, Self::Error> {
         let string = match data.open(LIMIT.bytes()).into_string().await {
             Ok(string) if string.is_complete() => string.into_inner(),
             Ok(_) => return Failure((Status::PayloadTooLarge, Self::Error { message: "Error".to_string() })),
@@ -178,7 +203,7 @@ impl<'r> FromData<'r> for ObjectType {
                 u
             }
             r => {
-                r.and_then(|x| Failure((Status { code: 401 }, ())))
+                return Failure((Status { code: 401 }, Self::Error { message: "Error".to_string() }));
             }
         };
 

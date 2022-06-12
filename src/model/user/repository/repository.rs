@@ -16,9 +16,11 @@ impl Repository {
     pub async fn getUserById(id: String) -> User {
         let row = sql_one(format!("select * from user where id={}", &id).as_str()).await;
         User {
-            id,
+            id:Some(id),
             login: row.get::<String, &str>("login").to_string(),
-            password: row.get::<String, &str>("token_hashed").to_string(),
+            password: row.get::<String, &str>("password").to_string(),
+            access_token: row.get::<String, &str>("access_token").to_string(),
+            oauth: row.get::<String, &str>("oauth").to_string(),
             groups: vec![],
         }
     }
@@ -26,9 +28,11 @@ impl Repository {
     pub async fn getUserByLogin(login: String) -> User {
         let row = sql_one(format!("select * from user where login={}", &login).as_str()).await;
         User {
-            id: "".to_string(),
+            id: Some(row.get::<String, &str>("login").to_string()),
             login: row.get::<String, &str>("login").to_string(),
-            password: row.get::<String, &str>("token_hashed").to_string(),
+            password: row.get::<String, &str>("password").to_string(),
+            access_token: row.get::<String, &str>("access_token").to_string(),
+            oauth: row.get::<String, &str>("oauth").to_string(),
             groups: vec![],
         }
     }

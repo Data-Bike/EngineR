@@ -1,3 +1,4 @@
+use std::borrow::Borrow;
 use std::error::Error;
 use crate::controllers::secure::authentication::token::Token;
 use crate::model::user::entity::user::User;
@@ -50,7 +51,7 @@ impl Strategy {
     pub async fn auth(token: &Token) -> Result<User, AuthenticationError> {
         let login = token.credentials.login.clone();
         // let password = token.credentials.password.clone();
-        match token.credentials.checkCredentials.clone() {
+        match token.credentials.checkCredentials.borrow() {
             CheckCredentials::Password(password) => {
                 let user = model::user::repository::repository::Repository::getUserByLogin(login).await;
                 let hash = user.password.clone();
@@ -61,9 +62,26 @@ impl Strategy {
                     source: AuthenticationErrorSideKick {}
                 })
             }
-            CheckCredentials::AccessToken(access_token) => {}
-            CheckCredentials::OAuth(oauth) => {}
+            CheckCredentials::AccessToken(access_token) => {
+                let user = model::user::repository::repository::Repository::getUserByLogin(login).await;
+                let hash = user.password.clone();
+                if verify(access_token, hash.as_str()).is_ok() {
+                    return Ok(user);
+                }
+                Err(AuthenticationError {
+                    source: AuthenticationErrorSideKick {}
+                })
+            }
+            CheckCredentials::OAuth(oauth) => {
+                let user = model::user::repository::repository::Repository::getUserByLogin(login).await;
+                let hash = user.password.clone();
+                if verify(oauth, hash.as_str()).is_ok() {
+                    return Ok(user);
+                }
+                Err(AuthenticationError {
+                    source: AuthenticationErrorSideKick {}
+                })
+            }
         }
-
     }
 }

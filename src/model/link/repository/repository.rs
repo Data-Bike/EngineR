@@ -122,6 +122,7 @@ impl Repository {
     pub async fn getLinkTypeById(id: &str) -> LinkType {
         let row = sql_one(format!("select * from link_type where id='{}'", id).as_str()).await;
         LinkType {
+            id: Some(id.to_string()),
             alias: row.get::<String, &str>("alias"),
             name: row.get::<String, &str>("name"),
             object_type_from: Object_repository::getObjectTypeFromId(row.get::<String, &str>("object_type_from_id")).await,
@@ -144,8 +145,9 @@ impl Repository {
         let date_deleted = if row.get::<String, &str>("date_deleted").as_str() != "" { Some(DateTime::<Utc>::from(DateTime::parse_from_rfc3339(row.get::<String, &str>("date_deleted").as_str()).unwrap())) } else { None };
         let link_type_id = row.get::<&str, &str>("link_type_id");
         let link_type = Self::getLinkTypeById(link_type_id).await;
-        
+        let id = Some(row.get::<String, &str>("id"));
         Link {
+            id,
             object_from,
             object_to,
             link_type,

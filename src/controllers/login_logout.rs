@@ -25,7 +25,7 @@ use time::{Duration, OffsetDateTime};
 
 async fn build_cookie(token: &Token) -> Cookie<'static> {
     let user = User_repository::getUserByLogin(token.credentials.login.clone()).await;
-    Cookie::build("user_id", user.id.as_str())
+    Cookie::<'static>::build("user_id", user.id.unwrap())
         .domain("")
         .path("/")
         .secure(true)

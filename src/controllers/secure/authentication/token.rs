@@ -1,3 +1,4 @@
+use async_std::task::block_on;
 use chrono::{DateTime, Utc};
 use crate::controllers::secure::authentication::authentication::Authentication;
 use crate::controllers::secure::authentication::credentials::Credentials;
@@ -25,7 +26,7 @@ impl Token {
     }
 
     pub fn authenticate(&mut self) {
-        self.authenticated = Some(Authentication::auth(self))
+        self.authenticated = Some(block_on(Authentication::auth(self)))
     }
     pub fn is_authenticated(&self) -> Option<bool> {
         self.authenticated

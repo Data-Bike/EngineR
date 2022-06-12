@@ -54,6 +54,8 @@ impl User {
 
         let login = err_resolve!(json_object,"login");
         let password = err_resolve!(json_object,"password");
+        let access_token = err_resolve!(json_object,"access_token");
+        let oauth = err_resolve!(json_object,"oauth");
         let groups = match match json_object.get("groups") {
             None => { return Err(ParseError { message: format!("Error {} not found", "groups") }); }
             Some(v) => { v }
@@ -74,10 +76,24 @@ impl User {
             }
         };
 
+        let id = match json_object.get("id") {
+            None => { None }
+            Some(v) => {
+                match v.as_str()
+                {
+                    None => { return Err(ParseError { message: "Error id is not string".to_string() }); }
+                    Some(v) => { Some(v.to_string()) }
+                }
+            }
+        };
+
+
         Ok(User {
-            id: "".to_string(),
+            id,
             login: login.to_string(),
             password: password.to_string(),
+            access_token: access_token.to_string(),
+            oauth: oauth.to_string(),
             groups: groups_s,
         })
     }
@@ -87,7 +103,7 @@ impl User {
 impl<'r> FromRequest<'r> for User {
     type Error = ();
 
-    async fn from_request(request: &Request<'r>) -> request::Outcome<User, ()> {
+    async fn from_request(request: &'r Request<'_>) -> request::Outcome<User, ()> {
         request.cookies()
             .get_private("user_id")
             .and_then(|cookie| cookie.value().parse().ok())
