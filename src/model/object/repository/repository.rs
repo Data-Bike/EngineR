@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex};
 use std::task::{Context, RawWaker, Waker};
 use futures::task::noop_waker_ref;
 use chrono::{DateTime, Utc};
+use sqlx::Error as Sqlx_Error;
 // use futures_util::async_await::poll;
 use core::convert;
 use std::borrow::Borrow;
@@ -56,65 +57,65 @@ impl Repository {
         res
     }
 
-    pub async fn getObjectTypeFromAlias(alias: String) -> ObjectType {
-        let fields_rows = sql(format!("select * from field where alias = '{}'", alias).as_str()).await;
+    pub async fn getObjectTypeFromAlias(alias: String) -> Result<ObjectType, Sqlx_Error> {
+        let fields_rows = sql(format!("select * from field where alias = '{}'", alias).as_str()).await?;
 
         let fields = Repository::getFieldsFromRows(fields_rows);
 
-        let kind_row = sql_one(format!("select kind from object_type where alias = '{}' limit 1", alias).as_str()).await;
+        let kind_row = sql_one(format!("select kind from object_type where alias = '{}' limit 1", alias).as_str()).await?;
         let kind = kind_row.get::<String, &str>("kind").to_string();
         let id = Some(kind_row.get::<String, &str>("id").to_string());
-        ObjectType {
+        Ok(ObjectType {
             id,
             fields,
             kind,
             alias,
-        }
+        })
     }
 
-    pub async fn getObjectTypeFromObjectId(id: String) -> ObjectType {
-        let fields_rows = sql(format!("select f.* from object o join field f on f.alias=o.alias where o.id = '{}'", id).as_str()).await;
+    pub async fn getObjectTypeFromObjectId(id: String) -> Result<ObjectType, Sqlx_Error> {
+        let fields_rows = sql(format!("select f.* from object o join field f on f.alias=o.alias where o.id = '{}'", id).as_str()).await?;
         let fields = Repository::getFieldsFromRows(fields_rows);
 
-        let kind_alias_row = sql_one(format!("select * from object where id = '{}' limit 1", id).as_str()).await;
+        let kind_alias_row = sql_one(format!("select * from object where id = '{}' limit 1", id).as_str()).await?;
         let kind_alias = (kind_alias_row.get::<String, &str>("kind").to_string(), kind_alias_row.get::<String, &str>("alias").to_string());
         let id = Some(kind_alias_row.get::<String, &str>("id").to_string());
 
-        ObjectType {
+        Ok(ObjectType {
             id,
             fields,
             kind: kind_alias.0,
             alias: kind_alias.1,
-        }
+        })
     }
 
 
-    pub async fn hydrateFilledObjectType(id: String) -> Object {
-        let mut objectType = Self::getObjectTypeFromObjectId(id.clone()).await;
-        let row = sql_one(format!("select * from {} where id='{}'", objectType.alias.clone(), id.clone()).as_str()).await;
+    pub async fn hydrateFilledObjectType(id: String) -> Result<Object, Sqlx_Error> {
+        let mut objectType = Self::getObjectTypeFromObjectId(id.clone()).await?;
+        let row = sql_one(format!("select * from {} where id='{}'", objectType.alias.clone(), id.clone()).as_str()).await?;
         for field in &mut objectType.fields {
             field.value = Some(row.get::<String, &str>(field.alias.as_str()));
         }
-        let object_row = sql_one(format!("select * from object where id = '{}' limit 1", id).as_str()).await;
+        let object_row = sql_one(format!("select * from object where id = '{}' limit 1", id).as_str()).await?;
 
-        Object {
+        Ok(Object {
             filled: objectType,
             date_created: DateTime::<Utc>::from_str(object_row.get::<&str, &str>("date_created")).unwrap(),
             date_deleted: match object_row.get::<Option<&str>, &str>("date_created") {
                 Some(v) => Some(DateTime::<Utc>::from_str(v).unwrap()),
                 None => None
             },
-            user_created: model::user::repository::repository::Repository::getUserById(object_row.get::<String, &str>("date_created")).await,
+            user_created: model::user::repository::repository::Repository::getUserById(object_row.get::<String, &str>("date_created")).await?,
             user_deleted: match object_row.get::<Option<String>, &str>("user_deleted") {
-                Some(v) => Some(model::user::repository::repository::Repository::getUserById(v).await),
+                Some(v) => Some(model::user::repository::repository::Repository::getUserById(v).await?),
                 None => None
             },
             hash: row.get::<String, &str>("hash"),
-            id: Some(id)
-        }
+            id: Some(id),
+        })
     }
 
-    async fn insertObjectToTable(the_object: &Object, id: String) -> String {
+    async fn insertObjectToTable(the_object: &Object, id: String) -> Result<String, Sqlx_Error> {
         let table = the_object.filled.alias.clone();
         let mut name_values = the_object.filled.fields
             .iter()
@@ -126,48 +127,49 @@ impl Repository {
             )
             .collect::<Vec<_>>();
         name_values.push(("id".to_string(), id));
-        insert(table, name_values).await
+        Ok(insert(table, name_values).await?)
     }
 
-    async fn insertObjectToGeneralTable(the_object: &Object) -> String {
-        insert("object", vec![
+    async fn insertObjectToGeneralTable(the_object: &Object) -> Result<String, Sqlx_Error> {
+        Ok(insert("object", vec![
             ("kind", the_object.filled.kind.as_str()),
             ("alias", the_object.filled.alias.as_str()),
             ("user_created", the_object.user_created.id.clone().unwrap().as_str()),
             ("date_created", the_object.date_created.to_rfc3339().as_str()),
-        ]).await
+        ]).await?)
     }
 
-    pub async fn getObjectTypeFromId(id: String) -> ObjectType {
-        let fields_rows = sql(format!("select * from field where id = '{}'", id).as_str()).await;
+    pub async fn getObjectTypeFromId(id: String) -> Result<ObjectType, Sqlx_Error> {
+        let fields_rows = sql(format!("select * from field where id = '{}'", id).as_str()).await?;
         let fields = Repository::getFieldsFromRows(fields_rows);
-        let row = sql_one(format!("select kind from object_type where id = '{}' limit 1", id).as_str()).await;
+        let row = sql_one(format!("select kind from object_type where id = '{}' limit 1", id).as_str()).await?;
 
         let kind = row.get::<String, &str>("kind").to_string();
         let alias = row.get::<String, &str>("alias").to_string();
 
-        ObjectType {
+        Ok(ObjectType {
             id: Some(id),
             fields,
             kind,
             alias,
-        }
+        })
     }
 
-    pub async fn createObject(the_object: &Object) -> String {
-        let id = Self::insertObjectToGeneralTable(the_object).await;
-        Self::insertObjectToTable(the_object, id.clone()).await;
-        id
+    pub async fn createObject(the_object: &Object) -> Result<String, Sqlx_Error> {
+        let id = Self::insertObjectToGeneralTable(the_object).await?;
+        Self::insertObjectToTable(the_object, id.clone()).await?;
+        Ok(id)
     }
 
-    pub async fn deleteObject(id: &str, user: User) {
+    pub async fn deleteObject(id: &str, user: User) -> Result<(), Sqlx_Error> {
         update("object", vec![
             ("date_deleted", Utc::now().to_rfc3339().as_str()),
             ("user_deleted", user.id.unwrap().as_str()),
-        ], vec![("id", "=", id)]).await;
+        ], vec![("id", "=", id)]).await?;
+        Ok(())
     }
 
-    pub async fn searchObject(the_object: &Object) -> Vec<Object> {
+    pub async fn searchObject(the_object: &Object) -> Result<Vec<Object>, Sqlx_Error> {
         let case = the_object
             .filled
             .fields
@@ -179,14 +181,14 @@ impl Repository {
         let table = the_object.filled.alias.clone();
 
         select(table, vec!["id".to_string()], vec![case])
-            .await
+            .await?
             .iter()
             .filter_map(|o| o.try_get::<String, &str>("id").ok())
             .map(|id| block_on(Self::hydrateFilledObjectType(id)))
-            .collect::<Vec<Object>>()
+            .collect::<Result<Vec<Object>, Sqlx_Error>>()
     }
 
-    pub async fn createObjectType(object_type: ObjectType) {
+    pub async fn createObjectType(object_type: ObjectType) -> Result<(), Sqlx_Error> {
         let fields = object_type
             .fields
             .iter()
@@ -196,9 +198,9 @@ impl Repository {
         let id = insert("object_type", vec![
             ("alias", object_type.alias.as_str()),
             ("kind", object_type.kind.as_str()),
-        ]).await;
+        ]).await?;
 
-        let mut futures: Vec<JoinHandle<String>> = vec![];
+        let mut futures: Vec<JoinHandle<_>> = vec![];
 
         futures.push(spawn(create_table(object_type.alias.clone(), fields)));
         for field in object_type.fields.iter() {
@@ -217,6 +219,7 @@ impl Repository {
         for future in futures {
             block_on(future);
         }
+        Ok(())
     }
 
     pub async fn deleteObjectType(id: &str, user: User) {

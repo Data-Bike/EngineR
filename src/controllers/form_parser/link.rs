@@ -1,7 +1,10 @@
+use std::convert::Infallible;
 use std::fmt::{Debug, Display, Formatter};
 use rocket::data::{FromData, Outcome, ToByteUnit};
 use rocket::{Data, Request};
 use std::error::Error;
+use std::ops::Deref;
+use sqlx::Error as Sqlx_Error;
 use chrono::{DateTime, Utc};
 use rocket::http::Method::Post;
 use rocket::http::{Method, Status};
@@ -32,11 +35,38 @@ impl Display for ParseError {
 
 impl Error for ParseError {}
 
+impl From<Sqlx_Error> for ParseError {
+    fn from(e: Sqlx_Error) -> Self {
+        let message = match e {
+            Sqlx_Error::Configuration(e) => {
+                e.to_string()
+            }
+            Sqlx_Error::Database(e) => {format!("Error returned from the database: '{}'",e.message())}
+            Sqlx_Error::Io(e) => {format!("Error communicating with the database backend: '{}'",e)}
+            Sqlx_Error::Tls(e) => {format!("Error occurred while attempting to establish a TLS connection: '{}'",e)}
+            Sqlx_Error::Protocol(e) => {format!("Unexpected or invalid data encountered while communicating with the database(Driver may be corrupted): '{}'",e)}
+            Sqlx_Error::RowNotFound => {format!("No rows returned by a query that expected to return at least one row")}
+            Sqlx_Error::TypeNotFound { type_name } => {format!("Type '{}' Not Found",type_name)}
+            Sqlx_Error::ColumnIndexOutOfBounds {  index, len } => {format!("Column index out of bounds: the len is {}, but the index is {}", len, index)}
+            Sqlx_Error::ColumnNotFound(e) => {format!("No column found for the given name: '{}'",e)}
+            Sqlx_Error::ColumnDecode { index,source } => {format!("Error occurred while decoding column {}: {}",index,source)}
+            Sqlx_Error::Decode(e) => {format!("Error occurred while decoding a value: '{}'",e)}
+            Sqlx_Error::PoolTimedOut => {format!("Pool Timed Out Error")}
+            Sqlx_Error::PoolClosed => {format!("Pool Closed Error")}
+            Sqlx_Error::WorkerCrashed => {format!("Worker Crashed Error")}
+            Sqlx_Error::Migrate(e) => {format!("Migrate Error")}
+            _ => {format!("Unknown SQLX DB ERROR")}
+        };
+
+        Self{ message }
+    }
+}
+
 pub fn getToken(req: &Request<'_>, link: &Link) -> Token {
     let requestKind = match req.method() {
         Method::Get => { PermissionKind::read }
         Method::Post => { PermissionKind::edit }
-        _ => { panic!("Error") }
+        _ => { PermissionKind::read }
     };
 
     let system = req.uri().path().segments().get(0).unwrap().to_string();
@@ -74,13 +104,13 @@ impl Link {
         let link_type_id = err_resolve!(json_object,"link_type_id");
         let date_created_str = err_resolve!(json_object,"date_created");
         let date_deleted_str = err_resolve!(json_object,"date_deleted");
-        let object_from = Object_repository::hydrateFilledObjectType(object_from_id.to_string()).await;
-        let object_to = Object_repository::hydrateFilledObjectType(object_to_id.to_string()).await;
-        let user_created = User_repository::getUserById(user_created_id.to_string()).await;
-        let user_deleted = if user_deleted_id == "" { None } else { Some(User_repository::getUserById(user_deleted_id.to_string()).await) };
+        let object_from = Object_repository::hydrateFilledObjectType(object_from_id.to_string()).await?;
+        let object_to = Object_repository::hydrateFilledObjectType(object_to_id.to_string()).await?;
+        let user_created = User_repository::getUserById(user_created_id.to_string()).await?;
+        let user_deleted = if user_deleted_id == "" { None } else { Some(User_repository::getUserById(user_deleted_id.to_string()).await?) };
         let date_created = DateTime::<Utc>::from(DateTime::parse_from_rfc3339(date_created_str).unwrap());
         let date_deleted = if date_deleted_str == "" { None } else { Some(DateTime::<Utc>::from(DateTime::parse_from_rfc3339(date_deleted_str).unwrap())) };
-        let link_type = Link_repository::getLinkTypeById(link_type_id).await;
+        let link_type = Link_repository::getLinkTypeById(link_type_id).await?;
         let id = match json_object.get("id") {
             None => { None }
             Some(v) => {

@@ -1,9 +1,13 @@
+use std::error::Error as Std_Error;
+use std::fmt::Display;
+use std::fmt::Formatter;
 use std::future::{Future};
 use std::ops::Deref;
 use async_std::task::block_on;
 use lazy_static::lazy_static;
 use postgres::types::ToSql;
-use sqlx::{Acquire, Connection, Error, Executor, Pool, Postgres, Row, Transaction};
+use sqlx::{Acquire, Connection, Error as Sqlx_Error, Executor, Pool, Postgres, Row, Transaction};
+use sqlx::error::DatabaseError;
 use sqlx::postgres::{PgPoolOptions, PgQueryResult, PgRow};
 
 lazy_static! {
@@ -13,45 +17,60 @@ lazy_static! {
 ).expect("Failed to connect to database");
 }
 
-pub async fn sql(sql: &str) -> Vec<PgRow> {
+#[derive(Debug)]
+pub struct DBError {
+    pub message: String,
+}
+
+impl Display for DBError {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", self.message)
+    }
+}
+
+impl Std_Error for DBError {}
+
+
+
+pub async fn sql(sql: &str) -> Result<Vec<PgRow>,Sqlx_Error> {
     match sqlx::query(sql).fetch_all(pool.deref()).await {
-        Ok(rows) => rows,
-        Err(e) => panic!("{}", e.to_string().as_str())
+        Ok(rows) => Ok(rows),
+        Err(e) => Err(e)
     }
 }
 
-pub async fn sql_one(sql: &str) -> PgRow {
+pub async fn sql_one(sql: &str) -> Result<PgRow,Sqlx_Error> {
     match sqlx::query(sql).fetch_one(pool.deref()).await {
-        Ok(row) => row,
-        Err(e) => panic!("{}", e.to_string().as_str())
+        Ok(row) => Ok(row),
+        Err(e) => Err(e)
     }
 }
 
-pub async fn exec(sql: &str) -> PgQueryResult {
+pub async fn exec(sql: &str) -> Result<PgQueryResult,Sqlx_Error> {
     match sqlx::query(sql).execute(pool.deref()).await {
-        Ok(row) => row,
-        Err(e) => panic!("{}", e.to_string().as_str())
+        Ok(row) => Ok(row),
+        Err(e) => Err(e)
     }
 }
 
-pub async fn sql_tr(sql: &str, tr: &mut Transaction<'_, Postgres>) -> Vec<PgRow> {
+pub async fn sql_tr(sql: &str, tr: &mut Transaction<'_, Postgres>) -> Result<Vec<PgRow>,Sqlx_Error> {
     match sqlx::query(sql).fetch_all(&mut *tr).await {
-        Ok(rows) => rows,
-        Err(e) => panic!("{}", e.to_string().as_str())
+        Ok(rows) => Ok(rows),
+        Err(e) => Err(e)
     }
 }
 
-pub async fn sql_one_tr(sql: &str, tr: &mut Transaction<'_, Postgres>) -> PgRow {
+pub async fn sql_one_tr(sql: &str, tr: &mut Transaction<'_, Postgres>) -> Result<PgRow,Sqlx_Error> {
     match sqlx::query(sql).fetch_one(&mut *tr).await {
-        Ok(row) => row,
-        Err(e) => panic!("{}", e.to_string().as_str())
+        Ok(row) => Ok(row),
+        Err(e) => Err(e)
     }
 }
 
-pub async fn exec_tr(sql: &str, tr: &mut Transaction<'_, Postgres>) -> PgQueryResult {
+pub async fn exec_tr(sql: &str, tr: &mut Transaction<'_, Postgres>) -> Result<PgQueryResult,Sqlx_Error> {
     match sqlx::query(sql).execute(&mut *tr).await {
-        Ok(row) => row,
-        Err(e) => panic!("{}", e.to_string().as_str())
+        Ok(row) => Ok(row),
+        Err(e) => Err(e)
     }
 }
 
@@ -122,52 +141,54 @@ pub fn get_alter_table(table: String, fields_to_alter: Vec<(String, String, Stri
     format!("ALTER TABLE {} {}", table, alter_str)
 }
 
-pub async fn insert<T: ToString + std::fmt::Display>(table: T, name_values: Vec<(T, T)>) -> String {
+pub async fn insert<T: ToString + std::fmt::Display>(table: T, name_values: Vec<(T, T)>) -> Result<String,Sqlx_Error> {
     let row = sql_one(get_insert(table, name_values).as_str()).await;
-    row.get::<String, &str>("id")
+    let res = row?;
+
+    Ok(res.get::<String, &str>("id"))
 }
 
 
-pub async fn update<T: ToString + std::fmt::Display>(table: T, name_values: Vec<(T, T)>, cases: Vec<(T, T, T)>) -> u64 {
-    exec(get_update(table, name_values, cases).as_str()).await.rows_affected()
+pub async fn update<T: ToString + std::fmt::Display>(table: T, name_values: Vec<(T, T)>, cases: Vec<(T, T, T)>) -> Result<u64,Sqlx_Error> {
+    Ok(exec(get_update(table, name_values, cases).as_str()).await?.rows_affected())
 }
 
-pub async fn select(table: String, names: Vec<String>, where_cases: Vec<Vec<(String, String, String)>>) -> Vec<PgRow> {
-    sql(get_select(table, names, where_cases).as_str()).await
+pub async fn select(table: String, names: Vec<String>, where_cases: Vec<Vec<(String, String, String)>>) -> Result<Vec<PgRow>,Sqlx_Error> {
+    Ok(sql(get_select(table, names, where_cases).as_str()).await?)
 }
 
-pub async fn create_table(table: String, fields: Vec<(String, String)>) -> String {
-    exec(get_create_table(table, fields).as_str()).await.rows_affected().to_string()
+pub async fn create_table(table: String, fields: Vec<(String, String)>) -> Result<String,Sqlx_Error> {
+    Ok(exec(get_create_table(table, fields).as_str()).await?.rows_affected().to_string())
 }
 
-pub async fn alter_table(table: String, fields_to_alter: Vec<(String, String, String)>) -> String {
-    exec(get_alter_table(table, fields_to_alter).as_str()).await.rows_affected().to_string()
+pub async fn alter_table(table: String, fields_to_alter: Vec<(String, String, String)>) -> Result<String,Sqlx_Error> {
+    Ok(exec(get_alter_table(table, fields_to_alter).as_str()).await?.rows_affected().to_string())
 }
 
 
-pub async fn insert_tr<T: ToString + std::fmt::Display>(table: T, name_values: Vec<(T, T)>, tr: &mut Transaction<'_, Postgres>) -> String {
+pub async fn insert_tr<T: ToString + std::fmt::Display>(table: T, name_values: Vec<(T, T)>, tr: &mut Transaction<'_, Postgres>) -> Result<String,Sqlx_Error> {
     let row = sql_one_tr(get_insert(table, name_values).as_str(), tr).await;
-    row.get::<String, &str>("id")
+    Ok(row?.get::<String, &str>("id"))
 }
 
 
-pub async fn update_tr<T: ToString + std::fmt::Display>(table: T, name_values: Vec<(T, T)>, cases: Vec<(T, T, T)>, tr: &mut Transaction<'_, Postgres>) -> u64 {
-    exec_tr(get_update(table, name_values, cases).as_str(), tr).await.rows_affected()
+pub async fn update_tr<T: ToString + std::fmt::Display>(table: T, name_values: Vec<(T, T)>, cases: Vec<(T, T, T)>, tr: &mut Transaction<'_, Postgres>) -> Result<u64,Sqlx_Error> {
+    Ok(exec_tr(get_update(table, name_values, cases).as_str(), tr).await?.rows_affected())
 }
 
-pub async fn select_tr(table: String, names: Vec<String>, where_cases: Vec<Vec<(String, String, String)>>, tr: &mut Transaction<'_, Postgres>) -> Vec<PgRow> {
-    sql_tr(get_select(table, names, where_cases).as_str(), tr).await
+pub async fn select_tr(table: String, names: Vec<String>, where_cases: Vec<Vec<(String, String, String)>>, tr: &mut Transaction<'_, Postgres>) -> Result<Vec<PgRow>,Sqlx_Error> {
+    Ok(sql_tr(get_select(table, names, where_cases).as_str(), tr).await?)
 }
 
-pub async fn create_table_tr(table: String, fields: Vec<(String, String)>, tr: &mut Transaction<'_, Postgres>) -> String {
-    exec_tr(get_create_table(table, fields).as_str(), tr).await.rows_affected().to_string()
+pub async fn create_table_tr(table: String, fields: Vec<(String, String)>, tr: &mut Transaction<'_, Postgres>) -> Result<String,Sqlx_Error> {
+    Ok(exec_tr(get_create_table(table, fields).as_str(), tr).await?.rows_affected().to_string())
 }
 
-pub async fn alter_table_tr(table: String, fields_to_alter: Vec<(String, String, String)>, tr: &mut Transaction<'_, Postgres>) -> String {
-    exec_tr(get_alter_table(table, fields_to_alter).as_str(), tr).await.rows_affected().to_string()
+pub async fn alter_table_tr(table: String, fields_to_alter: Vec<(String, String, String)>, tr: &mut Transaction<'_, Postgres>) -> Result<String,Sqlx_Error> {
+    Ok(exec_tr(get_alter_table(table, fields_to_alter).as_str(), tr).await?.rows_affected().to_string())
 }
 
 // TODO: transactions
-pub async fn tr() -> Result<Transaction<'static, Postgres>, Error> {
+pub async fn tr() -> Result<Transaction<'static, Postgres>, Sqlx_Error> {
     pool.deref().begin().await
 }

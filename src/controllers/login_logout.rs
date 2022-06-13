@@ -20,28 +20,36 @@ use crate::model::user::repository::repository::Repository as User_repository;
 use crate::controllers::form_parser::object;
 use crate::controllers::secure::authentication::token::Token;
 use rocket::http::{Cookie, CookieJar};
+use sqlx::Error;
 use time::{Duration, OffsetDateTime};
 
 
-async fn build_cookie(token: &Token) -> Cookie<'static> {
-    let user = User_repository::getUserByLogin(token.credentials.login.clone()).await;
-    Cookie::<'static>::build("user_id", user.id.unwrap())
+async fn build_cookie(token: &Token) -> Result<Cookie<'static>,Error> {
+    let user = User_repository::getUserByLogin(token.credentials.login.clone()).await?;
+    Ok(Cookie::<'static>::build("user_id", user.id.unwrap())
         .domain("")
         .path("/")
         .secure(true)
         .max_age(time::Duration::days(1))
         .http_only(true)
-        .finish()
+        .finish())
 }
 
 #[post("/login", data = "<token>", )]
 async fn login(token: Token, jar: &CookieJar<'_>) -> RawJson<String> {
     if token.is_allow() {
-        let cookie = build_cookie(&token).await;
-        jar.add_private(cookie);
+        let cookie = build_cookie(&token).await.ok();
+        match cookie {
+            None => { return RawJson("Failed".to_string()); }
+            Some(c) => {
+                jar.add_private(c);
+                return RawJson("OK".to_string());
+            }
+        }
+        
     }
 
-    RawJson("OK".to_string())
+    RawJson("Failed".to_string())
 }
 
 #[post("/logout")]

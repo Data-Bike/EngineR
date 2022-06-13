@@ -21,22 +21,29 @@ use crate::controllers::form_parser::object;
 
 #[get("/get/<id>")]
 async fn get_object(id: usize) -> RawHtml<String> {
-    let object = Repository::hydrateFilledObjectType(id.to_string()).await;
-    RawHtml(to_value(object).unwrap().to_string())
+    let object = Repository::hydrateFilledObjectType(id.to_string()).await.ok();
+    match object {
+        None => { RawHtml(format!("ERROR")) }
+        Some(o) => { RawHtml(to_value(o).unwrap().to_string()) }
+    }
 }
 
 #[post("/add", data = "<object>")]
 async fn add_object(object: Object) -> RawJson<String> {
-    let id = Repository::createObject(&object).await;
-
-    RawJson(id)
+    let id = Repository::createObject(&object).await.ok();
+    match id {
+        None => { RawJson(format!("ERROR")) }
+        Some(i) => { RawJson(i) }
+    }
 }
 
 #[post("/search", data = "<object>")]
 async fn search_object(object: Object) -> RawJson<String> {
-    let res = Repository::searchObject(&object).await;
-
-    RawJson(to_value(res).unwrap().to_string())
+    let res = Repository::searchObject(&object).await.ok();
+    match res {
+        None => { RawJson(format!("ERROR")) }
+        Some(r) => { RawJson(to_value(r).unwrap().to_string()) }
+    }
 }
 
 

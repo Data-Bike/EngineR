@@ -3,6 +3,7 @@ use std::vec;
 use rocket::futures::future::err;
 use rocket::shield::Feature::Accelerometer;
 use sqlx::Row;
+use sqlx::Error as Sqlx_Error;
 use crate::controllers::pool::pool::{sql, sql_one};
 use crate::model::link::entity::link::Link;
 use crate::model::object::entity::object::{Field, Object, ObjectType};
@@ -16,12 +17,12 @@ impl Repository {
         Repository {}
     }
 
-    pub async fn getPermissionsByGroup(group: Group) -> Vec<Permission> {
-        Self::getPermissionsById(group.id.unwrap().as_str()).await
+    pub async fn getPermissionsByGroup(group: Group) -> Result<Vec<Permission>, Sqlx_Error> {
+        Ok(Self::getPermissionsById(group.id.unwrap().as_str()).await?)
     }
 
-    pub async fn getPermissionsById(id: &str) -> Vec<Permission> {
-        let rows = sql(format!("select * from permissions where group={}", id).as_str()).await;
+    pub async fn getPermissionsById(id: &str) -> Result<Vec<Permission>, Sqlx_Error> {
+        let rows = sql(format!("select * from permissions where group={}", id).as_str()).await?;
 
         let mut res: Vec<Permission> = Vec::new();
         for row in rows {
@@ -61,7 +62,7 @@ impl Repository {
                 object,
             });
         }
-        res
+        Ok(res)
     }
 
 
@@ -106,8 +107,8 @@ impl Repository {
         }
     }
 
-    pub async fn getUserGroupsbyUser(user: User) -> Vec<Group> {
-        let rows = sql(format!("select g.* from user_group join group on user_group.user_id={} and user_group.group_id=group.id ", &user.id.unwrap()).as_str()).await;
+    pub async fn getUserGroupsbyUser(user: User) -> Result<Vec<Group>, Sqlx_Error> {
+        let rows = sql(format!("select g.* from user_group join group on user_group.user_id={} and user_group.group_id=group.id ", &user.id.unwrap()).as_str()).await?;
 
         let mut res: Vec<Group> = Vec::new();
         for row in rows {
@@ -128,7 +129,7 @@ impl Repository {
                     link: vec![],
                     link_type: vec![],
                 },
-            }).await;
+            }).await?;
             let alias = row.get::<String, &str>("alias");
             let name = row.get::<String, &str>("name");
             let permissions = Self::getPermissionsGroupByPermissions(permissions_vec);
@@ -140,18 +141,18 @@ impl Repository {
                 permissions,
             });
         }
-        res
+        Ok(res)
     }
-    pub async fn getGroupById(id: &str) -> Group {
-        let group_row = sql_one(format!("select * from group where id = {} limit 1", id).as_str()).await;
-        Group {
+    pub async fn getGroupById(id: &str) -> Result<Group, Sqlx_Error> {
+        let group_row = sql_one(format!("select * from group where id = {} limit 1", id).as_str()).await?;
+        Ok(Group {
             alias: group_row.get::<String, &str>("alias"),
             name: group_row.get::<String, &str>("name"),
             level: group_row.get::<String, &str>("level"),
             id: Some(group_row.get::<String, &str>("id")),
             permissions: Self::getPermissionsGroupByPermissions(
-                Self::getPermissionsById(id).await
+                Self::getPermissionsById(id).await?
             ),
-        }
+        })
     }
 }
