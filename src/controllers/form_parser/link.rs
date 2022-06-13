@@ -20,8 +20,8 @@ use crate::model::user::entity::user::User;
 const LIMIT: u32 = 1024 * 10;
 
 #[derive(Debug)]
-struct ParseError {
-    message: String,
+pub struct ParseError {
+    pub message: String,
 }
 
 impl Display for ParseError {

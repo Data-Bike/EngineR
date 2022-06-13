@@ -1,3 +1,4 @@
+use std::borrow::Borrow;
 use crate::controllers::secure::authorization::token::Token;
 use crate::model::object::entity::object::Field;
 use crate::model::secure::entity::permission::Access::{allow, deny};
@@ -29,7 +30,7 @@ impl ObjectVote {
         let object = token.object.clone().unwrap();
         for group in &user.groups {
             for permission in &group.permissions.object {
-                if permission.object == object.id.unwrap() &&
+                if permission.object == *object.id.as_ref().unwrap() &&
                     permission.kind == token.requestKind &&
                     permission.access == allow {
                     return true;
@@ -47,7 +48,7 @@ impl ObjectTypeVote {
         let object = token.object_type.clone().unwrap();
         for group in &user.groups {
             for permission in &group.permissions.object_type {
-                if permission.object == object.id.unwrap() &&
+                if permission.object == *object.id.as_ref().unwrap() &&
                     permission.kind == token.requestKind &&
                     permission.access == allow {
                     return true;
@@ -65,7 +66,7 @@ impl LinkVote {
         let object = token.link.clone().unwrap();
         for group in &user.groups {
             for permission in &group.permissions.link {
-                if permission.object == object.id.unwrap() &&
+                if permission.object == *object.id.as_ref().unwrap() &&
                     permission.kind == token.requestKind &&
                     permission.access == allow {
                     return true;
@@ -98,13 +99,13 @@ pub struct ObjectTypeFieldVote {}
 
 impl ObjectTypeFieldVote {
     pub fn allow(user: &User, token: &Token) -> bool {
-        let object = match token.object_type_field.and_then(|f| Some(f.alias)) {
+        let object = match token.object_type_field.as_ref().and_then(|f| Some(f.alias.clone())) {
             None => { return false; }
             Some(o) => { o }
         };
         for group in &user.groups {
             for permission in &group.permissions.object_type_field {
-                if permission.object == object &&
+                if permission.object == *object &&
                     permission.kind == token.requestKind &&
                     permission.access == allow {
                     return true;

@@ -1,3 +1,4 @@
+use std::borrow::Borrow;
 use std::collections::BTreeMap;
 use std::ops::Deref;
 use rocket::form::validate::Contains;
@@ -31,12 +32,12 @@ impl Strategy {
             if !ObjectVote::allow(user, token) { return false; };
             if !ObjectTypeVote::allow(user, token) { return false; };
 
-            match token.object_type.and_then(|ot| Some(ot.fields)) {
+            match token.object_type.clone().and_then(|ot| Some(ot.fields)) {
                 None => { return false; }
                 Some(fs) => {
                     for f in fs {
                         let mut t = Token::fromToken(token);
-                        t.object_type_field = Some(f);
+                        t.object_type_field = Some(f.clone());
                         t.requestLevel = PermissionLevel::object_type_field;
                         if !ObjectTypeFieldVote::allow(user, &t) { return false; };
                     }
