@@ -115,7 +115,7 @@ impl<'r> FromData<'r> for Link {
     //     Transform::Owned(Success(data))
     // }
 
-    async fn from_data(req: &'r Request<'_>, data: &mut Data<'r>) -> Outcome<'r, Self, Self::Error> {
+    async fn from_data(req: &'r Request<'_>, data: Data<'r>) -> Outcome<'r, Self, Self::Error> {
         let string = match data.open(LIMIT.bytes()).into_string().await {
             Ok(string) if string.is_complete() => string.into_inner(),
             Ok(_) => return Failure((Status::PayloadTooLarge, Self::Error { message: "Error".to_string() })),

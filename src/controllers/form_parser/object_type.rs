@@ -188,7 +188,7 @@ impl<'r> FromData<'r> for ObjectType {
     // }
 
 
-    async fn from_data(req: &'r Request<'_>, data: &mut Data) -> rocket::data::Outcome<'r, Self, Self::Error> {
+    async fn from_data(req: &'r Request<'_>, data: Data<'r>) -> rocket::data::Outcome<'r, Self, Self::Error> {
         let string = match data.open(LIMIT.bytes()).into_string().await {
             Ok(string) if string.is_complete() => string.into_inner(),
             Ok(_) => return Failure((Status::PayloadTooLarge, Self::Error { message: "Error".to_string() })),
