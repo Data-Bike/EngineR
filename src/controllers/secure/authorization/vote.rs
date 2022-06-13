@@ -1,6 +1,6 @@
 use std::borrow::Borrow;
 use crate::controllers::secure::authorization::token::Token;
-use crate::model::object::entity::object::Field;
+use crate::model::object::entity::object::{Field, Object};
 use crate::model::secure::entity::permission::Access::{allow, deny};
 use crate::model::secure::entity::permission::PermissionLevel;
 use crate::model::user::entity::user::User;
@@ -27,10 +27,16 @@ pub struct ObjectVote {}
 
 impl ObjectVote {
     pub fn allow(user: &User, token: &Token) -> bool {
-        let object = token.object.clone().unwrap();
+        let object = match token.object.as_ref() {
+            None => {return false;}
+            Some(o) => {o}
+        };
         for group in &user.groups {
             for permission in &group.permissions.object {
-                if permission.object == *object.id.as_ref().unwrap() &&
+                if permission.object == *match object.id.as_ref() {
+                    None => {return false}
+                    Some(o) => {o}
+                } &&
                     permission.kind == token.requestKind &&
                     permission.access == allow {
                     return true;
@@ -45,10 +51,16 @@ pub struct ObjectTypeVote {}
 
 impl ObjectTypeVote {
     pub fn allow(user: &User, token: &Token) -> bool {
-        let object = token.object_type.clone().unwrap();
+        let object = match token.object_type.as_ref() {
+            None => {return false;}
+            Some(o) => {o}
+        };
         for group in &user.groups {
             for permission in &group.permissions.object_type {
-                if permission.object == *object.id.as_ref().unwrap() &&
+                if permission.object == *match object.id.as_ref() {
+                    None => {return false}
+                    Some(o) => {o}
+                } &&
                     permission.kind == token.requestKind &&
                     permission.access == allow {
                     return true;
@@ -63,10 +75,16 @@ pub struct LinkVote {}
 
 impl LinkVote {
     pub fn allow(user: &User, token: &Token) -> bool {
-        let object = token.link.clone().unwrap();
+        let object = match token.link.as_ref() {
+            None => {return false;}
+            Some(o) => {o}
+        };
         for group in &user.groups {
             for permission in &group.permissions.link {
-                if permission.object == *object.id.as_ref().unwrap() &&
+                if permission.object == *match object.id.as_ref() {
+                    None => {return false}
+                    Some(o) => {o}
+                } &&
                     permission.kind == token.requestKind &&
                     permission.access == allow {
                     return true;
@@ -81,7 +99,10 @@ pub struct LinkTypeVote {}
 
 impl LinkTypeVote {
     pub fn allow(user: &User, token: &Token) -> bool {
-        let object = token.link_type.clone().unwrap();
+        let object = match token.link_type.as_ref() {
+            None => {return false;}
+            Some(o) => {o}
+        };
         for group in &user.groups {
             for permission in &group.permissions.link_type {
                 if Some(permission.object.clone()) == object.id &&

@@ -4,7 +4,7 @@ use std::str::FromStr;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, RawWaker, Waker};
 use futures::task::noop_waker_ref;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, ParseResult, Utc};
 use sqlx::Error as Sqlx_Error;
 // use futures_util::async_await::poll;
 use core::convert;
@@ -22,6 +22,7 @@ use sqlx::postgres::PgRow;
 use sqlx::Row;
 use crate::controllers::pool::pool::{create_table, get_case, get_insert, insert, select, sql, sql_one, update};
 use crate::model;
+use crate::model::error::RepositoryError;
 use crate::model::link::entity::link::Link;
 use crate::model::object::entity::object::{Field, Object, ObjectType};
 use crate::model::secure::entity::permission::PermissionLevel::object;
@@ -57,7 +58,7 @@ impl Repository {
         res
     }
 
-    pub async fn getObjectTypeFromAlias(alias: String) -> Result<ObjectType, Sqlx_Error> {
+    pub async fn getObjectTypeFromAlias(alias: String) -> Result<ObjectType, RepositoryError> {
         let fields_rows = sql(format!("select * from field where alias = '{}'", alias).as_str()).await?;
 
         let fields = Repository::getFieldsFromRows(fields_rows);
@@ -73,7 +74,7 @@ impl Repository {
         })
     }
 
-    pub async fn getObjectTypeFromObjectId(id: String) -> Result<ObjectType, Sqlx_Error> {
+    pub async fn getObjectTypeFromObjectId(id: String) -> Result<ObjectType, RepositoryError> {
         let fields_rows = sql(format!("select f.* from object o join field f on f.alias=o.alias where o.id = '{}'", id).as_str()).await?;
         let fields = Repository::getFieldsFromRows(fields_rows);
 
@@ -90,7 +91,7 @@ impl Repository {
     }
 
 
-    pub async fn hydrateFilledObjectType(id: String) -> Result<Object, Sqlx_Error> {
+    pub async fn hydrateFilledObjectType(id: String) -> Result<Object, RepositoryError> {
         let mut objectType = Self::getObjectTypeFromObjectId(id.clone()).await?;
         let row = sql_one(format!("select * from {} where id='{}'", objectType.alias.clone(), id.clone()).as_str()).await?;
         for field in &mut objectType.fields {
@@ -100,9 +101,15 @@ impl Repository {
 
         Ok(Object {
             filled: objectType,
-            date_created: DateTime::<Utc>::from_str(object_row.get::<&str, &str>("date_created")).unwrap(),
+            date_created: match DateTime::<Utc>::from_str(object_row.get::<&str, &str>("date_created")) {
+                Ok(d) => { d }
+                Err(e) => { return Err(RepositoryError { message: format!("Cannot parse date:{}", e.to_string()) }); }
+            },
             date_deleted: match object_row.get::<Option<&str>, &str>("date_created") {
-                Some(v) => Some(DateTime::<Utc>::from_str(v).unwrap()),
+                Some(v) => Some(match DateTime::<Utc>::from_str(v) {
+                    Ok(d) => { d }
+                    Err(e) => { return Err(RepositoryError { message: format!("Cannot parse date:{}", e.to_string()) }); }
+                }),
                 None => None
             },
             user_created: model::user::repository::repository::Repository::getUserById(object_row.get::<String, &str>("date_created")).await?,
@@ -115,7 +122,7 @@ impl Repository {
         })
     }
 
-    async fn insertObjectToTable(the_object: &Object, id: String) -> Result<String, Sqlx_Error> {
+    async fn insertObjectToTable(the_object: &Object, id: String) -> Result<String, RepositoryError> {
         let table = the_object.filled.alias.clone();
         let mut name_values = the_object.filled.fields
             .iter()
@@ -130,11 +137,14 @@ impl Repository {
         Ok(insert(table, name_values).await?)
     }
 
-    async fn insertObjectToGeneralTable(the_object: &Object) -> Result<String, Sqlx_Error> {
+    async fn insertObjectToGeneralTable(the_object: &Object) -> Result<String, RepositoryError> {
         Ok(insert("object", vec![
             ("kind", the_object.filled.kind.as_str()),
             ("alias", the_object.filled.alias.as_str()),
-            ("user_created", the_object.user_created.id.clone().unwrap().as_str()),
+            ("user_created", match the_object.user_created.id.as_ref() {
+                None => { return Err(RepositoryError { message: format!("User must has id") }); }
+                Some(d) => { d }
+            }.as_str()),
             ("date_created", the_object.date_created.to_rfc3339().as_str()),
         ]).await?)
     }
@@ -155,21 +165,24 @@ impl Repository {
         })
     }
 
-    pub async fn createObject(the_object: &Object) -> Result<String, Sqlx_Error> {
+    pub async fn createObject(the_object: &Object) -> Result<String, RepositoryError> {
         let id = Self::insertObjectToGeneralTable(the_object).await?;
         Self::insertObjectToTable(the_object, id.clone()).await?;
         Ok(id)
     }
 
-    pub async fn deleteObject(id: &str, user: User) -> Result<(), Sqlx_Error> {
+    pub async fn deleteObject(id: &str, user: User) -> Result<(), RepositoryError> {
         update("object", vec![
             ("date_deleted", Utc::now().to_rfc3339().as_str()),
-            ("user_deleted", user.id.unwrap().as_str()),
+            ("user_deleted", match user.id {
+                None => { return Err(RepositoryError { message: format!("User must has id") }); }
+                Some(i) => { i }
+            }.as_str()),
         ], vec![("id", "=", id)]).await?;
         Ok(())
     }
 
-    pub async fn searchObject(the_object: &Object) -> Result<Vec<Object>, Sqlx_Error> {
+    pub async fn searchObject(the_object: &Object) -> Result<Vec<Object>, RepositoryError> {
         let case = the_object
             .filled
             .fields
@@ -185,10 +198,10 @@ impl Repository {
             .iter()
             .filter_map(|o| o.try_get::<String, &str>("id").ok())
             .map(|id| block_on(Self::hydrateFilledObjectType(id)))
-            .collect::<Result<Vec<Object>, Sqlx_Error>>()
+            .collect::<Result<Vec<Object>, RepositoryError>>()
     }
 
-    pub async fn createObjectType(object_type: ObjectType) -> Result<(), Sqlx_Error> {
+    pub async fn createObjectType(object_type: ObjectType) -> Result<(), RepositoryError> {
         let fields = object_type
             .fields
             .iter()
@@ -222,10 +235,14 @@ impl Repository {
         Ok(())
     }
 
-    pub async fn deleteObjectType(id: &str, user: User) {
+    pub async fn deleteObjectType(id: &str, user: User) -> Result<(), RepositoryError> {
         update("object_type", vec![
             ("date_deleted", Utc::now().to_rfc3339().as_str()),
-            ("user_deleted", user.id.unwrap().as_str()),
+            ("user_deleted", match user.id {
+                None => { return Err(RepositoryError { message: format!("User must has id") }); }
+                Some(i) => { i }
+            }.as_str()),
         ], vec![("id", "=", id)]).await;
+        Ok(())
     }
 }

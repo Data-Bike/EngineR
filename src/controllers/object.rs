@@ -7,6 +7,7 @@ use rocket::get;
 use rocket::post;
 use rocket::launch;
 use rocket::fairing::AdHoc;
+use serde_json::{Error, Value};
 use serde_json::value::to_value;
 // use serde_json::to_value;
 // use crate::init::model::{Database, ModelApp, Secure, User};
@@ -24,7 +25,14 @@ async fn get_object(id: usize) -> RawHtml<String> {
     let object = Repository::hydrateFilledObjectType(id.to_string()).await.ok();
     match object {
         None => { RawHtml(format!("ERROR")) }
-        Some(o) => { RawHtml(to_value(o).unwrap().to_string()) }
+        Some(o) => {
+            RawHtml(
+                match to_value(o) {
+                    Ok(x) => { x }
+                    Err(e) => { return RawHtml("ERROR".to_string()); }
+                }.to_string()
+            )
+        }
     }
 }
 
@@ -42,7 +50,11 @@ async fn search_object(object: Object) -> RawJson<String> {
     let res = Repository::searchObject(&object).await.ok();
     match res {
         None => { RawJson(format!("ERROR")) }
-        Some(r) => { RawJson(to_value(r).unwrap().to_string()) }
+        Some(r) => { RawJson(
+            match to_value(r) {
+                Ok(x) => { x }
+                Err(e) => { return RawJson("ERROR".to_string()); }
+            }.to_string()) }
     }
 }
 

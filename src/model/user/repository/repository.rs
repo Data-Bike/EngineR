@@ -3,6 +3,7 @@ use rocket::futures::future::err;
 use sqlx::Row;
 use sqlx::Error as Sqlx_Error;
 use crate::controllers::pool::pool::sql_one;
+use crate::model::error::RepositoryError;
 use crate::model::link::entity::link::Link;
 use crate::model::object::entity::object::{Field, Object, ObjectType};
 use crate::model::user::entity::user::User;
@@ -14,7 +15,7 @@ impl Repository {
         Repository {}
     }
 
-    pub async fn getUserById(id: String) -> Result<User, Sqlx_Error> {
+    pub async fn getUserById(id: String) -> Result<User, RepositoryError> {
         let row = sql_one(format!("select * from user where id={}", &id).as_str()).await?;
         Ok(User {
             id: Some(id),
@@ -26,7 +27,7 @@ impl Repository {
         })
     }
 
-    pub async fn getUserByLogin(login: String) -> Result<User, Sqlx_Error> {
+    pub async fn getUserByLogin(login: String) -> Result<User, RepositoryError> {
         let row = sql_one(format!("select * from user where login={}", &login).as_str()).await?;
         Ok(User {
             id: Some(row.get::<String, &str>("login").to_string()),
@@ -38,7 +39,7 @@ impl Repository {
         })
     }
 
-    pub async fn get_token_hashed_by_login(login: String) -> Result<String, Sqlx_Error> {
+    pub async fn get_token_hashed_by_login(login: String) -> Result<String, RepositoryError> {
         let user = Self::getUserByLogin(login).await?;
         Ok(user.password)
     }

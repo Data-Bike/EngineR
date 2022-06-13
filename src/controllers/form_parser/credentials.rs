@@ -10,6 +10,7 @@ use rocket::http::{Method, Status};
 use rocket::outcome::Outcome::{Failure, Success};
 use rocket::request::FromRequest;
 use serde_json::{from_str, json, Value};
+use crate::controllers::form_parser::error::ParseError;
 use crate::controllers::secure::authentication::credentials::CheckCredentials::{AccessToken, Password};
 use crate::controllers::secure::authentication::credentials::Credentials;
 use crate::controllers::secure::authentication::token::IP::{v4, v6};
@@ -23,19 +24,6 @@ use crate::model::link::repository::repository::Repository as Link_repository;
 use crate::model::user::entity::user::User;
 
 const LIMIT: u32 = 1024 * 10;
-
-#[derive(Debug)]
-pub struct ParseError {
-    pub message: String,
-}
-
-impl Display for ParseError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.message)
-    }
-}
-
-impl Error for ParseError {}
 
 
 impl Credentials {

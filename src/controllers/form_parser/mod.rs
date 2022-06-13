@@ -1,5 +1,6 @@
 pub mod object;
-mod link;
-mod user;
-mod credentials;
-mod object_type;
+pub mod link;
+pub mod user;
+pub mod credentials;
+pub mod object_type;
+pub mod error;

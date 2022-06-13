@@ -13,6 +13,7 @@ use rocket::outcome::Outcome::{Failure, Success};
 use rocket::request::{FromRequest, Outcome};
 use serde::de::{Expected, Unexpected};
 use serde_json::{from_str, Value};
+use crate::controllers::form_parser::error::ParseError;
 use crate::controllers::secure::authorization::token::Token;
 use crate::model::link::repository::repository::Repository;
 use crate::model::object::entity::object::{Field, Object, ObjectType};
@@ -22,46 +23,7 @@ use crate::model::user::entity::user::User;
 
 const LIMIT: u32 = 1024 * 10;
 
-#[derive(Debug)]
-pub struct ParseError {
-    pub message: String,
-}
 
-impl Display for ParseError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.message)
-    }
-}
-
-impl Error for ParseError {}
-
-
-impl From<Sqlx_Error> for ParseError {
-    fn from(e: Sqlx_Error) -> Self {
-        let message = match e {
-            Sqlx_Error::Configuration(e) => {
-                e.to_string()
-            }
-            Sqlx_Error::Database(e) => { format!("Error returned from the database: '{}'", e.message()) }
-            Sqlx_Error::Io(e) => { format!("Error communicating with the database backend: '{}'", e) }
-            Sqlx_Error::Tls(e) => { format!("Error occurred while attempting to establish a TLS connection: '{}'", e) }
-            Sqlx_Error::Protocol(e) => { format!("Unexpected or invalid data encountered while communicating with the database(Driver may be corrupted): '{}'", e) }
-            Sqlx_Error::RowNotFound => { format!("No rows returned by a query that expected to return at least one row") }
-            Sqlx_Error::TypeNotFound { type_name } => { format!("Type '{}' Not Found", type_name) }
-            Sqlx_Error::ColumnIndexOutOfBounds { index, len } => { format!("Column index out of bounds: the len is {}, but the index is {}", len, index) }
-            Sqlx_Error::ColumnNotFound(e) => { format!("No column found for the given name: '{}'", e) }
-            Sqlx_Error::ColumnDecode { index, source } => { format!("Error occurred while decoding column {}: {}", index, source) }
-            Sqlx_Error::Decode(e) => { format!("Error occurred while decoding a value: '{}'", e) }
-            Sqlx_Error::PoolTimedOut => { format!("Pool Timed Out Error") }
-            Sqlx_Error::PoolClosed => { format!("Pool Closed Error") }
-            Sqlx_Error::WorkerCrashed => { format!("Worker Crashed Error") }
-            Sqlx_Error::Migrate(e) => { format!("Migrate Error") }
-            _ => { format!("Unknown SQLX DB ERROR") }
-        };
-
-        Self { message }
-    }
-}
 
 pub fn getToken(req: &Request<'_>, object: &Object) -> Token {
     let requestKind = match req.method() {
@@ -70,72 +32,9 @@ pub fn getToken(req: &Request<'_>, object: &Object) -> Token {
         _ => { PermissionKind::read }
     };
 
-    let system = req.uri().path().segments().get(0).unwrap().to_string();
+    let system = req.uri().path().segments().get(0).unwrap_or("").to_string();
     Token::fromObject(requestKind, system, object)
 }
-
-// impl Field {
-//     pub fn from_json(json: &Value) -> Result<Self, serde_json::Error> {
-//         Ok(Field {
-//             alias: json
-//                 .get("alias")
-//                 .unwrap_or(&Value::String("".to_string()))
-//                 .as_str()
-//                 .unwrap_or("")
-//                 .to_string(),
-//             kind: json
-//                 .get("kind")
-//                 .unwrap_or(&Value::String("".to_string()))
-//                 .as_str()
-//                 .unwrap_or("")
-//                 .to_string(),
-//             name: json
-//                 .get("name")
-//                 .unwrap_or(&Value::String("".to_string()))
-//                 .as_str()
-//                 .unwrap_or("")
-//                 .to_string(),
-//             default: match json
-//                 .get("default")
-//             {
-//                 None => { None }
-//                 Some(v) => {
-//                     match v.as_str() {
-//                         None => { None }
-//                         Some(v) => { Some(v.to_string()) }
-//                     }
-//                 }
-//             },
-//             value: match json
-//                 .get("value")
-//             {
-//                 None => { None }
-//                 Some(v) => {
-//                     match v.as_str() {
-//                         None => { None }
-//                         Some(v) => { Some(v.to_string()) }
-//                     }
-//                 }
-//             },
-//             require: json
-//                 .get("require")
-//                 .unwrap_or(&Value::Bool(false))
-//                 .as_bool()
-//                 .unwrap_or(false),
-//             index: json
-//                 .get("index")
-//                 .unwrap_or(&Value::Bool(false))
-//                 .as_bool()
-//                 .unwrap_or(false),
-//             preview: json
-//                 .get("preview")
-//                 .unwrap_or(&Value::Bool(false))
-//                 .as_bool()
-//                 .unwrap_or(false),
-//         })
-//     }
-// }
-//
 
 impl Object {
     pub async fn from_json(json_object: &Value) -> Result<Self, ParseError> {
@@ -166,9 +65,12 @@ impl Object {
 
 
 
-        let json_object_type: &Value = json_object
+        let json_object_type: &Value = match json_object
             .get("filled")
-            .unwrap();
+        {
+            None => {return Err(ParseError { message: format!("Error {} is not found","filled") });}
+            Some(f) => {f}
+        };
 
         let user_created_id = err_resolve!(json_object,"user_created").to_string();
         let user_deleted_id = err_resolve_option!(json_object,"user_deleted");
@@ -205,7 +107,11 @@ impl Object {
             .and_then(|d| Some(DateTime::<Utc>::from(d)));
 
         Ok(Object {
-            filled: ObjectType::from_json(json_object_type).unwrap(),
+            filled: match
+            ObjectType::from_json(json_object_type) {
+                Ok(x) => {x}
+                Err(e) => {return Err(e);}
+            },
             date_created,
             date_deleted,
             user_created,

@@ -5,3 +5,4 @@ pub mod secure;
 pub mod base;
 pub mod adapter;
 pub mod app;
+pub mod error;

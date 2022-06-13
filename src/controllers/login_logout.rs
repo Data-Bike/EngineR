@@ -22,11 +22,15 @@ use crate::controllers::secure::authentication::token::Token;
 use rocket::http::{Cookie, CookieJar};
 use sqlx::Error;
 use time::{Duration, OffsetDateTime};
+use crate::controllers::form_parser::error::ParseError;
 
 
-async fn build_cookie(token: &Token) -> Result<Cookie<'static>,Error> {
+async fn build_cookie(token: &Token) -> Result<Cookie<'static>, ParseError> {
     let user = User_repository::getUserByLogin(token.credentials.login.clone()).await?;
-    Ok(Cookie::<'static>::build("user_id", user.id.unwrap())
+    Ok(Cookie::<'static>::build("user_id", match user.id {
+        None => { return Err(ParseError { message: "User request must has id".to_string() }); }
+        Some(c) => { c }
+    })
         .domain("")
         .path("/")
         .secure(true)
@@ -46,7 +50,6 @@ async fn login(token: Token, jar: &CookieJar<'_>) -> RawJson<String> {
                 return RawJson("OK".to_string());
             }
         }
-        
     }
 
     RawJson("Failed".to_string())

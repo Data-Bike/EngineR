@@ -5,6 +5,7 @@ use rocket::shield::Feature::Accelerometer;
 use sqlx::Row;
 use sqlx::Error as Sqlx_Error;
 use crate::controllers::pool::pool::{sql, sql_one};
+use crate::model::error::RepositoryError;
 use crate::model::link::entity::link::Link;
 use crate::model::object::entity::object::{Field, Object, ObjectType};
 use crate::model::secure::entity::permission::{Access, Group, Permission, PermissionKind, PermissionLevel, PermissionsGroup};
@@ -17,11 +18,14 @@ impl Repository {
         Repository {}
     }
 
-    pub async fn getPermissionsByGroup(group: Group) -> Result<Vec<Permission>, Sqlx_Error> {
-        Ok(Self::getPermissionsById(group.id.unwrap().as_str()).await?)
+    pub async fn getPermissionsByGroup(group: Group) -> Result<Vec<Permission>, RepositoryError> {
+        Ok(Self::getPermissionsById(match group.id {
+            None => { return Err(RepositoryError { message: format!("Group must has id") }); }
+            Some(g) => { g }
+        }.as_str()).await?)
     }
 
-    pub async fn getPermissionsById(id: &str) -> Result<Vec<Permission>, Sqlx_Error> {
+    pub async fn getPermissionsById(id: &str) -> Result<Vec<Permission>, RepositoryError> {
         let rows = sql(format!("select * from permissions where group={}", id).as_str()).await?;
 
         let mut res: Vec<Permission> = Vec::new();
@@ -107,8 +111,11 @@ impl Repository {
         }
     }
 
-    pub async fn getUserGroupsbyUser(user: User) -> Result<Vec<Group>, Sqlx_Error> {
-        let rows = sql(format!("select g.* from user_group join group on user_group.user_id={} and user_group.group_id=group.id ", &user.id.unwrap()).as_str()).await?;
+    pub async fn getUserGroupsbyUser(user: User) -> Result<Vec<Group>, RepositoryError> {
+        let rows = sql(format!("select g.* from user_group join group on user_group.user_id={} and user_group.group_id=group.id ", match user.id.as_ref() {
+            None => { return Err(RepositoryError { message: format!("User must has id") }); }
+            Some(i) => { i }
+        }).as_str()).await?;
 
         let mut res: Vec<Group> = Vec::new();
         for row in rows {
@@ -143,7 +150,7 @@ impl Repository {
         }
         Ok(res)
     }
-    pub async fn getGroupById(id: &str) -> Result<Group, Sqlx_Error> {
+    pub async fn getGroupById(id: &str) -> Result<Group, RepositoryError> {
         let group_row = sql_one(format!("select * from group where id = {} limit 1", id).as_str()).await?;
         Ok(Group {
             alias: group_row.get::<String, &str>("alias"),

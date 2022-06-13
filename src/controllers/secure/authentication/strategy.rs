@@ -11,6 +11,7 @@ use std::fmt;
 use std::io::Stderr;
 use crate::controllers::secure::authentication::credentials::CheckCredentials;
 use crate::model;
+use crate::model::error::RepositoryError;
 
 #[derive(Debug)]
 pub struct AuthenticationError {
@@ -57,6 +58,14 @@ impl From<Sqlx_Error> for AuthenticationError {
     }
 }
 
+impl From<RepositoryError> for AuthenticationError {
+    fn from(e: RepositoryError) -> Self {
+        Self {
+            source: AuthenticationErrorSideKick
+        }
+    }
+}
+
 
 #[derive(Debug)]
 struct AuthenticationErrorSideKick;
@@ -79,7 +88,6 @@ impl Strategy {
 
     pub async fn auth(token: &Token) -> Result<User, AuthenticationError> {
         let login = token.credentials.login.clone();
-        // let password = token.credentials.password.clone();
         match token.credentials.checkCredentials.borrow() {
             CheckCredentials::Password(password) => {
                 let user = model::user::repository::repository::Repository::getUserByLogin(login).await?;

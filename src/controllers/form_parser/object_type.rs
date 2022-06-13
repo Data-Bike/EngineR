@@ -11,8 +11,10 @@ use rocket::error::ErrorKind::Io;
 use rocket::http::{Method, Status};
 use rocket::outcome::Outcome::{Failure, Success};
 use rocket::request::{FromRequest, Outcome};
+use rocket::time::error::Parse;
 use serde::de::{Expected, Unexpected};
 use serde_json::{from_str, Value};
+use crate::controllers::form_parser::error::ParseError;
 use crate::controllers::secure::authorization::token::{EmptyToken, Token};
 use crate::model::link::repository::repository::Repository;
 use crate::model::object::entity::object::{Field, Object, ObjectType};
@@ -22,46 +24,6 @@ use crate::model::user::entity::user::User;
 
 const LIMIT: u32 = 1024 * 10;
 
-#[derive(Debug)]
-pub struct ParseError {
-    pub message: String,
-}
-
-impl Display for ParseError {
-    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}", self.message)
-    }
-}
-
-impl Error for ParseError {}
-
-
-impl From<Sqlx_Error> for ParseError {
-    fn from(e: Sqlx_Error) -> Self {
-        let message = match e {
-            Sqlx_Error::Configuration(e) => {
-                e.to_string()
-            }
-            Sqlx_Error::Database(e) => { format!("Error returned from the database: '{}'", e.message()) }
-            Sqlx_Error::Io(e) => { format!("Error communicating with the database backend: '{}'", e) }
-            Sqlx_Error::Tls(e) => { format!("Error occurred while attempting to establish a TLS connection: '{}'", e) }
-            Sqlx_Error::Protocol(e) => { format!("Unexpected or invalid data encountered while communicating with the database(Driver may be corrupted): '{}'", e) }
-            Sqlx_Error::RowNotFound => { format!("No rows returned by a query that expected to return at least one row") }
-            Sqlx_Error::TypeNotFound { type_name } => { format!("Type '{}' Not Found", type_name) }
-            Sqlx_Error::ColumnIndexOutOfBounds { index, len } => { format!("Column index out of bounds: the len is {}, but the index is {}", len, index) }
-            Sqlx_Error::ColumnNotFound(e) => { format!("No column found for the given name: '{}'", e) }
-            Sqlx_Error::ColumnDecode { index, source } => { format!("Error occurred while decoding column {}: {}", index, source) }
-            Sqlx_Error::Decode(e) => { format!("Error occurred while decoding a value: '{}'", e) }
-            Sqlx_Error::PoolTimedOut => { format!("Pool Timed Out Error") }
-            Sqlx_Error::PoolClosed => { format!("Pool Closed Error") }
-            Sqlx_Error::WorkerCrashed => { format!("Worker Crashed Error") }
-            Sqlx_Error::Migrate(e) => { format!("Migrate Error") }
-            _ => { format!("Unknown SQLX DB ERROR") }
-        };
-
-        Self { message }
-    }
-}
 
 pub fn getToken(req: &Request<'_>, object_type: &ObjectType) -> Token {
     let requestKind = match req.method() {
@@ -70,7 +32,7 @@ pub fn getToken(req: &Request<'_>, object_type: &ObjectType) -> Token {
         _ => { PermissionKind::read }
     };
 
-    let system = req.uri().path().segments().get(0).unwrap().to_string();
+    let system = req.uri().path().segments().get(0).unwrap_or("").to_string();
     Token::fromObjectType(requestKind, system, object_type)
 }
 
@@ -179,8 +141,8 @@ impl ObjectType {
                     Some(v) => {
                         v
                             .iter()
-                            .map(|f| Field::from_json(f).unwrap())
-                            .collect()
+                            .map(|f| Field::from_json(f))
+                            .collect::<Result<Vec<Field>, ParseError>>()?
                     }
                 }
             }
