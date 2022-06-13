@@ -48,10 +48,15 @@ async fn search_object(object: Object) -> RawJson<String> {
     }
 }
 
+#[get("/hello")]
+async fn hello() -> RawJson<String> {
+    return RawJson(format!("Hello!"));
+}
+
 
 pub fn stage() -> AdHoc {
     AdHoc::on_ignite("Managing objects", move |rocket| async move {
-        rocket.mount("/object", routes![get_object,add_object])
+        rocket.mount("/object", routes![get_object,add_object,hello])
     })
 }
 
