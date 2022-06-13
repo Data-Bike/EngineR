@@ -1,7 +1,6 @@
-use crate::controllers::secure::authentication::strategy::{AuthenticationError, Strategy};
+use crate::controllers::secure::authentication::strategy::{Strategy};
 use crate::controllers::secure::authentication::token::Token;
-use crate::model::user::entity::user::User;
-use crate::model::user::repository::repository::Repository as User_repository;
+
 
 pub struct Authentication {}
 

@@ -1,33 +1,14 @@
-use std::collections::LinkedList;
-use std::future::{Future};
 use std::str::FromStr;
-use std::sync::{Arc, Mutex};
-use std::task::{Context, RawWaker, Waker};
-use futures::task::noop_waker_ref;
-use chrono::{DateTime, ParseResult, Utc};
+use chrono::{DateTime, Utc};
 use sqlx::Error as Sqlx_Error;
-// use futures_util::async_await::poll;
-use core::convert;
-use std::borrow::Borrow;
-use std::pin::Pin;
-use std::ptr;
-use async_std::prelude::FutureExt;
-use async_std::task::{block_on, JoinHandle, spawn, spawn_blocking};
-use async_std::task_local;
-use rocket::futures;
-// use core::future::Future;
-use rocket::futures::poll;
-use rocket::http::ext::IntoCollection;
+use async_std::task::{block_on, JoinHandle, spawn};
 use sqlx::postgres::PgRow;
 use sqlx::Row;
-use crate::controllers::pool::pool::{create_table, get_case, get_insert, insert, select, sql, sql_one, update};
+use crate::controllers::pool::pool::{create_table, get_insert, insert, select, sql, sql_one, update};
 use crate::model;
 use crate::model::error::RepositoryError;
-use crate::model::link::entity::link::Link;
 use crate::model::object::entity::object::{Field, Object, ObjectType};
-use crate::model::secure::entity::permission::PermissionLevel::object;
 use crate::model::user::entity::user::User;
-use crate::model::user::repository::repository;
 
 pub struct Repository {}
 
@@ -242,7 +223,7 @@ impl Repository {
                 None => { return Err(RepositoryError { message: format!("User must has id") }); }
                 Some(i) => { i }
             }.as_str()),
-        ], vec![("id", "=", id)]).await;
+        ], vec![("id", "=", id)]).await?;
         Ok(())
     }
 }

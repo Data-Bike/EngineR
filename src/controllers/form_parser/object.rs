@@ -1,28 +1,22 @@
-use std::error::Error;
-use std::fmt::{Debug, Display, Formatter};
-use std::future::Future;
-use sqlx::Error as Sqlx_Error;
-use std::ops::Deref;
 use async_std::task::block_on;
-use chrono::{DateTime, ParseResult, Utc};
+use chrono::{DateTime, Utc};
 use rocket::data::{FromData, ToByteUnit};
-use rocket::{Data, Request, request};
-use rocket::error::ErrorKind::Io;
+use rocket::{Data, Request};
+
 use rocket::http::{Method, Status};
 use rocket::outcome::Outcome::{Failure, Success};
-use rocket::request::{FromRequest, Outcome};
-use serde::de::{Expected, Unexpected};
+use rocket::request::{FromRequest};
+
 use serde_json::{from_str, Value};
 use crate::controllers::form_parser::error::ParseError;
 use crate::controllers::secure::authorization::token::Token;
-use crate::model::link::repository::repository::Repository;
-use crate::model::object::entity::object::{Field, Object, ObjectType};
-use crate::model::secure::entity::permission::{PermissionKind, PermissionLevel};
+
+use crate::model::object::entity::object::{Object, ObjectType};
+use crate::model::secure::entity::permission::{PermissionKind};
 use crate::model::user;
 use crate::model::user::entity::user::User;
 
 const LIMIT: u32 = 1024 * 10;
-
 
 
 pub fn getToken(req: &Request<'_>, object: &Object) -> Token {
@@ -68,8 +62,8 @@ impl Object {
         let json_object_type: &Value = match json_object
             .get("filled")
         {
-            None => {return Err(ParseError { message: format!("Error {} is not found","filled") });}
-            Some(f) => {f}
+            None => { return Err(ParseError { message: format!("Error {} is not found", "filled") }); }
+            Some(f) => { f }
         };
 
         let user_created_id = err_resolve!(json_object,"user_created").to_string();
@@ -109,8 +103,8 @@ impl Object {
         Ok(Object {
             filled: match
             ObjectType::from_json(json_object_type) {
-                Ok(x) => {x}
-                Err(e) => {return Err(e);}
+                Ok(x) => { x }
+                Err(e) => { return Err(e); }
             },
             date_created,
             date_deleted,

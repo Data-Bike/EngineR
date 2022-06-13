@@ -1,13 +1,8 @@
-use std::borrow::Borrow;
-use std::collections::BTreeMap;
-use std::ops::Deref;
-use rocket::form::validate::Contains;
-// use serde_hjson::Map;
 use crate::controllers::secure::authorization::token::Token;
 use crate::controllers::secure::authorization::vote::{LinkTypeVote, LinkVote, ObjectTypeFieldVote, ObjectTypeVote, ObjectVote, SystemVote};
-use crate::model::object::entity::object::ObjectType;
+
 use crate::model::secure::entity::permission::PermissionLevel;
-use crate::model::secure::entity::permission::PermissionLevel::link;
+
 use crate::model::user::entity::user::User;
 
 

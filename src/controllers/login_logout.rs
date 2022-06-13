@@ -1,27 +1,10 @@
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::{SystemTime, SystemTimeError};
-use chrono::{Utc};
-
-use rocket::{routes, State, time};
-
-use rocket::response::content::{RawHtml, RawJson};
-use rocket::get;
+use rocket::{routes, time};
+use rocket::response::content::{RawJson};
 use rocket::post;
-use rocket::launch;
 use rocket::fairing::AdHoc;
-use serde_json::value::to_value;
-// use crate::init::model::{Database, ModelApp, Secure, User};
-use crate::model::user::entity::user::User;
-// use rocket_sync_db_pools::database;
-// use rocket_sync_db_pools::postgres;
-use crate::model;
-use crate::model::object::entity::object::Object;
 use crate::model::user::repository::repository::Repository as User_repository;
-use crate::controllers::form_parser::object;
 use crate::controllers::secure::authentication::token::Token;
 use rocket::http::{Cookie, CookieJar};
-use sqlx::Error;
-use time::{Duration, OffsetDateTime};
 use crate::controllers::form_parser::error::ParseError;
 
 

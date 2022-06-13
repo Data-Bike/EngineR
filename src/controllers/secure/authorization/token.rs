@@ -1,4 +1,3 @@
-use serde::de::Unexpected::Str;
 use crate::controllers::secure::authorization::authorization::Authorization;
 use crate::model::link::entity::link::{Link, LinkType};
 use crate::model::object::entity::object::{Field, Object, ObjectType};
@@ -17,7 +16,7 @@ pub struct Token {
     authorized: Option<bool>,
 }
 
-pub const  EmptyToken: Token = Token{
+pub const EmptyToken: Token = Token {
     requestLevel: PermissionLevel::system,
     requestKind: PermissionKind::create,
     system: String::new(),
@@ -26,7 +25,7 @@ pub const  EmptyToken: Token = Token{
     object: None,
     link_type: None,
     link: None,
-    authorized: None
+    authorized: None,
 };
 
 
@@ -89,7 +88,7 @@ impl Token {
         self.authorized
     }
 
-    pub fn approve(&mut self)  {
+    pub fn approve(&mut self) {
         self.authorized = Some(true);
     }
 

@@ -2,7 +2,7 @@ use std::borrow::Borrow;
 use std::error::Error;
 use crate::controllers::secure::authentication::token::Token;
 use crate::model::user::entity::user::User;
-use crate::model::user::repository::repository::Repository;
+
 use sqlx::Error as Sqlx_Error;
 use bcrypt::verify;
 

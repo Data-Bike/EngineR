@@ -1,22 +1,19 @@
-use std::convert::Infallible;
-use std::fmt::{Debug, Display, Formatter};
 use rocket::data::{FromData, Outcome, ToByteUnit};
 use rocket::{Data, Request};
-use std::error::Error;
-use std::ops::Deref;
-use sqlx::Error as Sqlx_Error;
-use chrono::{DateTime, ParseResult, Utc};
-use rocket::http::Method::Post;
+
+
+use chrono::{DateTime, Utc};
+
 use rocket::http::{Method, Status};
 use rocket::outcome::Outcome::{Failure, Success};
 use rocket::request::FromRequest;
-use serde_json::{from_str, json, Value};
+use serde_json::{from_str, Value};
 use crate::controllers::form_parser::error::ParseError;
 use crate::controllers::secure::authorization::token::Token;
 use crate::model::link::entity::link::Link;
-use crate::model::object::entity::object::Object;
+
 use crate::model::object::repository::repository::Repository as Object_repository;
-use crate::model::secure::entity::permission::{PermissionKind, PermissionLevel};
+use crate::model::secure::entity::permission::{PermissionKind};
 use crate::model::user::repository::repository::Repository as User_repository;
 use crate::model::link::repository::repository::Repository as Link_repository;
 use crate::model::user::entity::user::User;
@@ -71,13 +68,15 @@ impl Link {
         let user_created = User_repository::getUserById(user_created_id.to_string()).await?;
         let user_deleted = if user_deleted_id == "" { None } else { Some(User_repository::getUserById(user_deleted_id.to_string()).await?) };
         let date_created = DateTime::<Utc>::from(match DateTime::parse_from_rfc3339(date_created_str) {
-            Ok(x) => {x}
-            Err(e) => {return Err(ParseError{ message: e.to_string() });}
-        } );
-        let date_deleted = if date_deleted_str == "" { None } else { Some(DateTime::<Utc>::from(match DateTime::parse_from_rfc3339(date_deleted_str) {
-            Ok(x) => {x}
-            Err(e) => {return Err(ParseError{ message: e.to_string() });}
-        })) };
+            Ok(x) => { x }
+            Err(e) => { return Err(ParseError { message: e.to_string() }); }
+        });
+        let date_deleted = if date_deleted_str == "" { None } else {
+            Some(DateTime::<Utc>::from(match DateTime::parse_from_rfc3339(date_deleted_str) {
+                Ok(x) => { x }
+                Err(e) => { return Err(ParseError { message: e.to_string() }); }
+            }))
+        };
         let link_type = Link_repository::getLinkTypeById(link_type_id).await?;
         let id = match json_object.get("id") {
             None => { None }

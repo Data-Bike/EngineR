@@ -1,27 +1,17 @@
-use std::fmt::{Debug, Display, Formatter};
 use rocket::data::{FromData, Outcome, ToByteUnit};
 use rocket::{Data, Request, request};
-use std::error::Error;
-use std::net::IpAddr;
 use std::net::IpAddr::{V4, V6};
-use chrono::{DateTime, Utc};
-use rocket::http::Method::Post;
-use rocket::http::{Method, Status};
+
+use rocket::http::{Status};
 use rocket::outcome::Outcome::{Failure, Success};
 use rocket::request::FromRequest;
-use serde_json::{from_str, json, Value};
+use serde_json::{from_str, Value};
 use crate::controllers::form_parser::error::ParseError;
 use crate::controllers::secure::authentication::credentials::CheckCredentials::{AccessToken, Password};
 use crate::controllers::secure::authentication::credentials::Credentials;
 use crate::controllers::secure::authentication::token::IP::{v4, v6};
 use crate::controllers::secure::authentication::token::{IP, Token};
-use crate::model::link::entity::link::Link;
-use crate::model::object::entity::object::Object;
-use crate::model::object::repository::repository::Repository as Object_repository;
-use crate::model::secure::entity::permission::{PermissionKind, PermissionLevel};
-use crate::model::user::repository::repository::Repository as User_repository;
-use crate::model::link::repository::repository::Repository as Link_repository;
-use crate::model::user::entity::user::User;
+
 
 const LIMIT: u32 = 1024 * 10;
 
@@ -42,7 +32,7 @@ impl Credentials {
 
         let json_object: Value = match from_str::<Value>(string) {
             Ok(v) => { v }
-            Err(e) => { return Err(ParseError { message: "Error cannot parse JSON".to_string() }); }
+            Err(_) => { return Err(ParseError { message: "Error cannot parse JSON".to_string() }); }
         };
         let login = err_resolve!(json_object,"login").to_string();
 
@@ -76,7 +66,6 @@ impl Credentials {
 
 
     pub async fn from_json(json_object: &Value) -> Result<Self, ParseError> {
-
         macro_rules! err_resolve {
             ( $x:expr, $key:expr ) => {
                 match match $x.get($key) {
@@ -151,18 +140,18 @@ impl<'r> FromData<'r> for Credentials {
     //     Transform::Owned(Success(data))
     // }
 
-    async fn from_data(req: &'r Request<'_>, data: Data<'r>) -> Outcome<'r,Self, Self::Error> {
+    async fn from_data(req: &'r Request<'_>, data: Data<'r>) -> Outcome<'r, Self, Self::Error> {
         let string = match data.open(LIMIT.bytes()).into_string().await {
             Ok(string) if string.is_complete() => string.into_inner(),
             Ok(_) => return Failure((Status::PayloadTooLarge, Self::Error { message: "Error".to_string() })),
-            Err(e) => return Failure((Status::InternalServerError, Self::Error { message: "Error".to_string() })),
+            Err(_) => return Failure((Status::InternalServerError, Self::Error { message: "Error".to_string() })),
         };
 
         match Credentials::from_str(string.as_str()).await {
             Ok(o) => {
                 Success(o)
             }
-            Err(e) => { Failure((Status { code: 500}, Self::Error { message: "Error".to_string() })) }
+            Err(_) => { Failure((Status { code: 500 }, Self::Error { message: "Error".to_string() })) }
         }
     }
 }
@@ -177,7 +166,7 @@ impl<'r> FromData<'r> for Token {
     //     Transform::Owned(Success(data))
     // }
 
-    async fn from_data(req: &'r Request<'_>, data: Data<'r>) -> Outcome<'r,Self, Self::Error> {
+    async fn from_data(req: &'r Request<'_>, data: Data<'r>) -> Outcome<'r, Self, Self::Error> {
         let ip = match req.client_ip() {
             Some(i) => {
                 match i {
@@ -194,14 +183,14 @@ impl<'r> FromData<'r> for Token {
         let string = match data.open(LIMIT.bytes()).into_string().await {
             Ok(string) if string.is_complete() => string.into_inner(),
             Ok(_) => return Failure((Status::PayloadTooLarge, Self::Error { message: "Error".to_string() })),
-            Err(e) => return Failure((Status::InternalServerError, Self::Error { message: "Error".to_string() })),
+            Err(_) => return Failure((Status::InternalServerError, Self::Error { message: "Error".to_string() })),
         };
 
         let credentials = match Credentials::from_str(string.as_str()).await {
             Ok(o) => {
                 o
             }
-            Err(e) => { return Failure((Status { code: 500 }, Self::Error { message: "Error".to_string() })); }
+            Err(_) => { return Failure((Status { code: 500 }, Self::Error { message: "Error".to_string() })); }
         };
 
         let mut dirty_token = Token::new(credentials, ip);

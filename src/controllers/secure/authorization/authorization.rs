@@ -1,4 +1,3 @@
-use rocket::futures::stream::SelectWithStrategy;
 use crate::controllers::secure::authorization::strategy::Strategy;
 use crate::controllers::secure::authorization::token::Token;
 use crate::model::user::entity::user::User;

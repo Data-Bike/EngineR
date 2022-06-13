@@ -1,25 +1,18 @@
-use std::error::Error;
-use std::fmt::{Debug, Display, Formatter};
-use std::future::Future;
-use std::ops::Deref;
-use async_std::task::block_on;
-use sqlx::Error as Sqlx_Error;
-use chrono::{DateTime, Utc};
 use rocket::data::{FromData, ToByteUnit};
-use rocket::{Data, Request, request};
-use rocket::error::ErrorKind::Io;
+use rocket::{Data, Request};
+
 use rocket::http::{Method, Status};
 use rocket::outcome::Outcome::{Failure, Success};
-use rocket::request::{FromRequest, Outcome};
-use rocket::time::error::Parse;
-use serde::de::{Expected, Unexpected};
+use rocket::request::{FromRequest};
+
+
 use serde_json::{from_str, Value};
 use crate::controllers::form_parser::error::ParseError;
-use crate::controllers::secure::authorization::token::{EmptyToken, Token};
-use crate::model::link::repository::repository::Repository;
-use crate::model::object::entity::object::{Field, Object, ObjectType};
-use crate::model::secure::entity::permission::{PermissionKind, PermissionLevel};
-use crate::model::user;
+use crate::controllers::secure::authorization::token::{Token};
+
+use crate::model::object::entity::object::{Field, ObjectType};
+use crate::model::secure::entity::permission::{PermissionKind};
+
 use crate::model::user::entity::user::User;
 
 const LIMIT: u32 = 1024 * 10;
