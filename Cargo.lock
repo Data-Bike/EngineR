@@ -10,6 +10,7 @@ dependencies = [
  "base64ct",
  "bcrypt",
  "blake2",
+ "caches",
  "chrono",
  "config",
  "lazy_static",
@@ -419,6 +420,16 @@ name = "cache-padded"
 version = "1.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c1db59621ec70f09c5e9b597b220c7a2b43611f4710dc03ceb8748637775692c"
+
+[[package]]
+name = "caches"
+version = "0.2.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "54da9fca852cc54905b822fd9cb50932ee8d471c8ff2472aa3a24d41671004f3"
+dependencies = [
+ "chrono",
+ "rand",
+]
 
 [[package]]
 name = "cc"

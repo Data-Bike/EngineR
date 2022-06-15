@@ -6,3 +6,4 @@ pub mod base;
 pub mod adapter;
 pub mod app;
 pub mod error;
+pub mod lfu_cache;
