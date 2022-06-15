@@ -13,6 +13,7 @@ dependencies = [
  "caches",
  "chrono",
  "config",
+ "futures",
  "lazy_static",
  "postgres",
  "rand",
