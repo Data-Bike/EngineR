@@ -226,7 +226,9 @@ impl Repository {
 
     pub async fn deleteObjectType(id: &str, user: User) -> Result<(), RepositoryError> {
         let ids = id.to_string();
+        let ot = Self::getObjectTypeFromId(ids.clone()).await?;
         remove_it_from_cache!(&ids,object_type_by_id);
+        remove_it_from_cache!(&ot.alias,object_type_by_alias);
         update("object_type", vec![
             ("date_deleted", Utc::now().to_rfc3339().as_str()),
             ("user_deleted", match user.id {
