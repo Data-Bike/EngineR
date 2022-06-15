@@ -4,6 +4,7 @@ use rocket::futures::future::err;
 use rocket::shield::Feature::Accelerometer;
 use sqlx::Row;
 use sqlx::Error as Sqlx_Error;
+use crate::cache_it;
 use crate::controllers::pool::pool::{sql, sql_one};
 use crate::model::error::RepositoryError;
 use crate::model::link::entity::link::Link;
@@ -151,15 +152,18 @@ impl Repository {
         Ok(res)
     }
     pub async fn getGroupById(id: &str) -> Result<Group, RepositoryError> {
-        let group_row = sql_one(format!("select * from group where id = {} limit 1", id).as_str()).await?;
-        Ok(Group {
-            alias: group_row.get::<String, &str>("alias"),
-            name: group_row.get::<String, &str>("name"),
-            level: group_row.get::<String, &str>("level"),
-            id: Some(group_row.get::<String, &str>("id")),
-            permissions: Self::getPermissionsGroupByPermissions(
-                Self::getPermissionsById(id).await?
-            ),
+        let ids = id.to_string();
+        cache_it!(&ids,group_by_id,{
+            let group_row = sql_one(format!("select * from group where id = {} limit 1", id).as_str()).await?;
+            Group {
+                alias: group_row.get::<String, &str>("alias"),
+                name: group_row.get::<String, &str>("name"),
+                level: group_row.get::<String, &str>("level"),
+                id: Some(group_row.get::<String, &str>("id")),
+                permissions: Self::getPermissionsGroupByPermissions(
+                    Self::getPermissionsById(id).await?
+                ),
+            }
         })
     }
 }

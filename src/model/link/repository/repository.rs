@@ -1,11 +1,15 @@
+use caches::Cache;
 use chrono::{DateTime, Utc};
 use sqlx::postgres::PgRow;
 use sqlx::Row;
+use crate::cache_it;
 use crate::model::link::entity::link::{Link, LinkType};
 use crate::model::user::repository::repository;
 use crate::model::object::repository::repository::Repository as Object_repository;
 use crate::controllers::pool::pool::{sql, sql_one};
 use crate::model::error::RepositoryError;
+use crate::model::lfu_cache::cache::CACHE;
+use crate::model::user::entity::user::User;
 
 pub struct Repository {}
 
@@ -28,13 +32,16 @@ impl Repository {
     }
 
     pub async fn getLinkTypeById(id: &str) -> Result<LinkType, RepositoryError> {
-        let row = sql_one(format!("select * from link_type where id='{}'", id).as_str()).await?;
-        Ok(LinkType {
-            id: Some(id.to_string()),
-            alias: row.get::<String, &str>("alias"),
-            name: row.get::<String, &str>("name"),
-            object_type_from: Object_repository::getObjectTypeFromId(row.get::<String, &str>("object_type_from_id")).await?,
-            object_type_to: Object_repository::getObjectTypeFromId(row.get::<String, &str>("object_type_to_id")).await?,
+        let ids = id.to_string();
+        cache_it!(&ids,link_type_by_id,{
+            let row = sql_one(format!("select * from link_type where id='{}'", id).as_str()).await?;
+                LinkType {
+                    id: Some(id.to_string()),
+                    alias: row.get::<String, &str>("alias"),
+                    name: row.get::<String, &str>("name"),
+                    object_type_from: Object_repository::getObjectTypeFromId(row.get::<String, &str>("object_type_from_id")).await?,
+                    object_type_to: Object_repository::getObjectTypeFromId(row.get::<String, &str>("object_type_to_id")).await?,
+                }
         })
     }
 

@@ -5,7 +5,7 @@ use async_std::task::{block_on, JoinHandle, spawn};
 use sqlx::postgres::PgRow;
 use sqlx::Row;
 use crate::controllers::pool::pool::{create_table, get_insert, insert, select, sql, sql_one, update};
-use crate::model;
+use crate::{cache_it, model, remove_it_from_cache};
 use crate::model::error::RepositoryError;
 use crate::model::object::entity::object::{Field, Object, ObjectType};
 use crate::model::user::entity::user::User;
@@ -40,18 +40,20 @@ impl Repository {
     }
 
     pub async fn getObjectTypeFromAlias(alias: String) -> Result<ObjectType, RepositoryError> {
-        let fields_rows = sql(format!("select * from field where alias = '{}'", alias).as_str()).await?;
+        cache_it!(&alias,object_type_by_alias,{
+                    let fields_rows = sql(format!("select * from field where alias = '{}'", alias).as_str()).await?;
 
-        let fields = Repository::getFieldsFromRows(fields_rows);
+                let fields = Repository::getFieldsFromRows(fields_rows);
 
-        let kind_row = sql_one(format!("select kind from object_type where alias = '{}' limit 1", alias).as_str()).await?;
-        let kind = kind_row.get::<String, &str>("kind").to_string();
-        let id = Some(kind_row.get::<String, &str>("id").to_string());
-        Ok(ObjectType {
-            id,
-            fields,
-            kind,
-            alias,
+                let kind_row = sql_one(format!("select kind from object_type where alias = '{}' limit 1", alias).as_str()).await?;
+                let kind = kind_row.get::<String, &str>("kind").to_string();
+                let id = Some(kind_row.get::<String, &str>("id").to_string());
+                ObjectType {
+                    id,
+                    fields,
+                    kind,
+                    alias,
+                }
         })
     }
 
@@ -73,33 +75,35 @@ impl Repository {
 
 
     pub async fn hydrateFilledObjectType(id: String) -> Result<Object, RepositoryError> {
-        let mut objectType = Self::getObjectTypeFromObjectId(id.clone()).await?;
-        let row = sql_one(format!("select * from {} where id='{}'", objectType.alias.clone(), id.clone()).as_str()).await?;
-        for field in &mut objectType.fields {
-            field.value = Some(row.get::<String, &str>(field.alias.as_str()));
-        }
-        let object_row = sql_one(format!("select * from object where id = '{}' limit 1", id).as_str()).await?;
+        cache_it!(&id,object_by_id,{
+                let mut objectType = Self::getObjectTypeFromObjectId(id.clone()).await?;
+            let row = sql_one(format!("select * from {} where id='{}'", objectType.alias.clone(), id.clone()).as_str()).await?;
+            for field in &mut objectType.fields {
+                field.value = Some(row.get::<String, &str>(field.alias.as_str()));
+            }
+            let object_row = sql_one(format!("select * from object where id = '{}' limit 1", id).as_str()).await?;
 
-        Ok(Object {
-            filled: objectType,
-            date_created: match DateTime::<Utc>::from_str(object_row.get::<&str, &str>("date_created")) {
-                Ok(d) => { d }
-                Err(e) => { return Err(RepositoryError { message: format!("Cannot parse date:{}", e.to_string()) }); }
-            },
-            date_deleted: match object_row.get::<Option<&str>, &str>("date_created") {
-                Some(v) => Some(match DateTime::<Utc>::from_str(v) {
+           Object {
+                filled: objectType,
+                date_created: match DateTime::<Utc>::from_str(object_row.get::<&str, &str>("date_created")) {
                     Ok(d) => { d }
                     Err(e) => { return Err(RepositoryError { message: format!("Cannot parse date:{}", e.to_string()) }); }
-                }),
-                None => None
-            },
-            user_created: model::user::repository::repository::Repository::getUserById(object_row.get::<String, &str>("date_created")).await?,
-            user_deleted: match object_row.get::<Option<String>, &str>("user_deleted") {
-                Some(v) => Some(model::user::repository::repository::Repository::getUserById(v).await?),
-                None => None
-            },
-            hash: row.get::<String, &str>("hash"),
-            id: Some(id),
+                },
+                date_deleted: match object_row.get::<Option<&str>, &str>("date_created") {
+                    Some(v) => Some(match DateTime::<Utc>::from_str(v) {
+                        Ok(d) => { d }
+                        Err(e) => { return Err(RepositoryError { message: format!("Cannot parse date:{}", e.to_string()) }); }
+                    }),
+                    None => None
+                },
+                user_created: model::user::repository::repository::Repository::getUserById(object_row.get::<String, &str>("date_created")).await?,
+                user_deleted: match object_row.get::<Option<String>, &str>("user_deleted") {
+                    Some(v) => Some(model::user::repository::repository::Repository::getUserById(v).await?),
+                    None => None
+                },
+                hash: row.get::<String, &str>("hash"),
+                id: Some(id),
+            }
         })
     }
 
@@ -131,18 +135,20 @@ impl Repository {
     }
 
     pub async fn getObjectTypeFromId(id: String) -> Result<ObjectType, Sqlx_Error> {
-        let fields_rows = sql(format!("select * from field where id = '{}'", id).as_str()).await?;
-        let fields = Repository::getFieldsFromRows(fields_rows);
-        let row = sql_one(format!("select kind from object_type where id = '{}' limit 1", id).as_str()).await?;
+        cache_it!(&id,object_type_by_id,{
+            let fields_rows = sql(format!("select * from field where id = '{}'", id).as_str()).await?;
+            let fields = Repository::getFieldsFromRows(fields_rows);
+            let row = sql_one(format!("select kind from object_type where id = '{}' limit 1", id).as_str()).await?;
 
-        let kind = row.get::<String, &str>("kind").to_string();
-        let alias = row.get::<String, &str>("alias").to_string();
+            let kind = row.get::<String, &str>("kind").to_string();
+            let alias = row.get::<String, &str>("alias").to_string();
 
-        Ok(ObjectType {
-            id: Some(id),
-            fields,
-            kind,
-            alias,
+            ObjectType {
+                id: Some(id),
+                fields,
+                kind,
+                alias,
+            }
         })
     }
 
@@ -153,6 +159,8 @@ impl Repository {
     }
 
     pub async fn deleteObject(id: &str, user: User) -> Result<(), RepositoryError> {
+        let ids = id.to_string();
+        remove_it_from_cache!(&ids,object_by_id);
         update("object", vec![
             ("date_deleted", Utc::now().to_rfc3339().as_str()),
             ("user_deleted", match user.id {
@@ -217,6 +225,8 @@ impl Repository {
     }
 
     pub async fn deleteObjectType(id: &str, user: User) -> Result<(), RepositoryError> {
+        let ids = id.to_string();
+        remove_it_from_cache!(&ids,object_type_by_id);
         update("object_type", vec![
             ("date_deleted", Utc::now().to_rfc3339().as_str()),
             ("user_deleted", match user.id {
