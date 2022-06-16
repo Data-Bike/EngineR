@@ -107,6 +107,20 @@ impl Repository {
         })
     }
 
+    pub fn objectToNameValues(the_object: &Object, id: String) -> Vec<(String, String)> {
+        let mut name_values = the_object.filled.fields
+            .iter()
+            .map(
+                |f| (f.alias.clone(), match f.value.clone() {
+                    Some(v) => format!("'{}'", v),
+                    None => "null".to_string()
+                })
+            )
+            .collect::<Vec<_>>();
+        name_values.push(("id".to_string(), id));
+        name_values
+    }
+
     async fn insertObjectToTable(the_object: &Object, id: String) -> Result<String, RepositoryError> {
         let table = the_object.filled.alias.clone();
         let mut name_values = the_object.filled.fields
@@ -156,6 +170,17 @@ impl Repository {
         let id = Self::insertObjectToGeneralTable(the_object).await?;
         Self::insertObjectToTable(the_object, id.clone()).await?;
         Ok(id)
+    }
+
+
+    pub async fn updateObject(the_object: &Object) -> Result<String, RepositoryError> {
+        let id = match the_object.id.as_ref() {
+            None => { return Err(RepositoryError { message: format!("Object must has id") }); }
+            Some(i) => { i }
+        };
+        let nv = Self::objectToNameValues(the_object, id.clone());
+        let table = the_object.filled.alias.clone();
+        Ok(update(table, nv, vec![("id".to_string(), "=".to_string(), id.clone())]).await?)
     }
 
     pub async fn deleteObject(id: &str, user: User) -> Result<(), RepositoryError> {
@@ -223,6 +248,7 @@ impl Repository {
         }
         Ok(())
     }
+
 
     pub async fn deleteObjectType(id: &str, user: User) -> Result<(), RepositoryError> {
         let ids = id.to_string();

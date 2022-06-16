@@ -123,6 +123,12 @@ pub fn get_where(where_cases: &Vec<Vec<(String, String, String)>>) -> String {
         .join(" or ")
 }
 
+pub fn get_delete(table: String, names: Vec<String>, case: Vec<(String, String, String)>) -> String {
+    let names_string = names.join(", ");
+    let where_string = get_case(&case);
+    format!("delete {} from {} where {}", names_string, table, where_string)
+}
+
 pub fn get_create_table(table: String, fields: Vec<(String, String)>) -> String {
     let mut fields_str = fields.iter().map(|f| format!("{} {}", f.0, f.1)).collect::<Vec<_>>().join(",");
 
@@ -147,8 +153,12 @@ pub async fn insert<T: ToString + std::fmt::Display>(table: T, name_values: Vec<
 }
 
 
-pub async fn update<T: ToString + std::fmt::Display>(table: T, name_values: Vec<(T, T)>, cases: Vec<(T, T, T)>) -> Result<u64, Sqlx_Error> {
-    Ok(exec(get_update(table, name_values, cases).as_str()).await?.rows_affected())
+pub async fn update<T: ToString + std::fmt::Display>(table: T, name_values: Vec<(T, T)>, cases: Vec<(T, T, T)>) -> Result<String, Sqlx_Error> {
+    Ok(exec(get_update(table, name_values, cases).as_str()).await?.rows_affected().to_string())
+}
+
+pub async fn delete(table: String, names: Vec<String>, cases: Vec<(String, String, String)>) -> Result<String, Sqlx_Error> {
+    Ok(exec(get_delete(table, names, cases).as_str()).await?.rows_affected().to_string())
 }
 
 pub async fn select(table: String, names: Vec<String>, where_cases: Vec<Vec<(String, String, String)>>) -> Result<Vec<PgRow>, Sqlx_Error> {

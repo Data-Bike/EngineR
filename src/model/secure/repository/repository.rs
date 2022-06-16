@@ -1,11 +1,13 @@
 use std::collections::LinkedList;
 use std::vec;
+use async_std::task::{JoinHandle, spawn};
+use futures::executor::block_on;
 use rocket::futures::future::err;
 use rocket::shield::Feature::Accelerometer;
 use sqlx::Row;
 use sqlx::Error as Sqlx_Error;
 use crate::cache_it;
-use crate::controllers::pool::pool::{sql, sql_one};
+use crate::controllers::pool::pool::{delete, insert, sql, sql_one, update};
 use crate::model::error::RepositoryError;
 use crate::model::link::entity::link::Link;
 use crate::model::object::entity::object::{Field, Object, ObjectType};
@@ -165,5 +167,148 @@ impl Repository {
                 ),
             }
         })
+    }
+
+    pub fn groupToNameValues(group: &Group) -> Vec<(String, String)> {
+        vec![
+            ("name".to_string(), group.name.clone()),
+            ("alias".to_string(), group.alias.clone()),
+            ("level".to_string(), group.level.clone()),
+        ]
+    }
+
+    pub fn permissionsGroupToNameValues(permissions: &PermissionsGroup, id: &String) -> Vec<Vec<(String, String)>> {
+        let mut nv: Vec<Vec<(String, String)>> = vec![];
+        for permission in permissions.link.iter() {
+            nv.push(
+                vec![
+                    ("name".to_string(), permission.name.to_string()),
+                    ("level".to_string(), permission.level.to_string()),
+                    ("alias".to_string(), permission.alias.to_string()),
+                    ("object".to_string(), permission.object.to_string()),
+                    ("kind".to_string(), permission.kind.to_string()),
+                    ("access".to_string(), permission.access.to_string()),
+                    ("group_id".to_string(), id.to_string()),
+                ]
+            );
+        }
+
+        for permission in permissions.object.iter() {
+            nv.push(
+                vec![
+                    ("name".to_string(), permission.name.to_string()),
+                    ("level".to_string(), permission.level.to_string()),
+                    ("alias".to_string(), permission.alias.to_string()),
+                    ("object".to_string(), permission.object.to_string()),
+                    ("kind".to_string(), permission.kind.to_string()),
+                    ("access".to_string(), permission.access.to_string()),
+                    ("group_id".to_string(), id.to_string()),
+                ]
+            );
+        }
+
+        for permission in permissions.object_type_field.iter() {
+            nv.push(
+                vec![
+                    ("name".to_string(), permission.name.to_string()),
+                    ("level".to_string(), permission.level.to_string()),
+                    ("alias".to_string(), permission.alias.to_string()),
+                    ("object".to_string(), permission.object.to_string()),
+                    ("kind".to_string(), permission.kind.to_string()),
+                    ("access".to_string(), permission.access.to_string()),
+                    ("group_id".to_string(), id.to_string()),
+                ]
+            );
+        }
+
+        for permission in permissions.link_type.iter() {
+            nv.push(
+                vec![
+                    ("name".to_string(), permission.name.to_string()),
+                    ("level".to_string(), permission.level.to_string()),
+                    ("alias".to_string(), permission.alias.to_string()),
+                    ("object".to_string(), permission.object.to_string()),
+                    ("kind".to_string(), permission.kind.to_string()),
+                    ("access".to_string(), permission.access.to_string()),
+                    ("group_id".to_string(), id.to_string()),
+                ]
+            );
+        }
+
+        for permission in permissions.system.iter() {
+            nv.push(
+                vec![
+                    ("name".to_string(), permission.name.to_string()),
+                    ("level".to_string(), permission.level.to_string()),
+                    ("alias".to_string(), permission.alias.to_string()),
+                    ("object".to_string(), permission.object.to_string()),
+                    ("kind".to_string(), permission.kind.to_string()),
+                    ("access".to_string(), permission.access.to_string()),
+                    ("group_id".to_string(), id.to_string()),
+                ]
+            );
+        }
+        vec![]
+    }
+
+    pub async fn createGroup(group: &Group) -> Result<String, RepositoryError> {
+        let nv_group = Self::groupToNameValues(group);
+        let id = insert("group".to_string(), nv_group).await?;
+        let nv_permissions = Self::permissionsGroupToNameValues(&group.permissions, &id);
+        let mut futures: Vec<JoinHandle<_>> = vec![];
+
+        for nv_permission in nv_permissions {
+            futures.push(spawn(insert("permission".to_string(), nv_permission)));
+        }
+
+        for future in futures {
+            block_on(future)?;
+        }
+        Ok(id)
+    }
+
+    pub async fn updateGroup(group: &Group) -> Result<(), RepositoryError> {
+        let id = match group.id.as_ref() {
+            None => { return Err(RepositoryError { message: format!("Group must has id") }); }
+            Some(id) => { id }
+        };
+        let mut futures: Vec<JoinHandle<_>> = vec![];
+        let exist_group = Self::getGroupById(id.as_str()).await?;
+        futures.push(
+            spawn(
+                delete(
+                    "permissions".to_string(),
+                    vec![],
+                    vec![("group_id".to_string(), "=".to_string(), id.to_string())],
+                )
+            )
+        );
+        if exist_group.alias != group.alias
+            || exist_group.level != group.level
+            || exist_group.name != group.name
+        {
+            let nv_group = Self::groupToNameValues(group);
+            futures.push(
+                spawn(
+                    update("group".to_string(),
+                           nv_group,
+                           vec![("id".to_string(), "=".to_string(), id.to_string())])
+                )
+            );
+        };
+        let nv_permissions = Self::permissionsGroupToNameValues(&group.permissions, id);
+        for nv_permission in nv_permissions {
+            futures.push(
+                spawn(
+                    insert("permission".to_string(), nv_permission)
+                )
+            );
+        }
+
+        for future in futures {
+            block_on(future)?;
+        }
+
+        Ok(())
     }
 }

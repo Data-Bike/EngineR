@@ -4,7 +4,6 @@ use crate::model::object::entity::object::{Object, ObjectType};
 use crate::model::secure::entity::permission::{Group};
 use crate::model::user::entity::user::User;
 use lazy_static::lazy_static;
-// use std::sync::Mutex;
 use crate::model::link::entity::link::LinkType;
 use futures::lock::Mutex;
 
@@ -74,5 +73,3 @@ macro_rules! remove_it_from_cache {
         }
     };
 }
-
-

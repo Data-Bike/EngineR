@@ -6,9 +6,10 @@ use crate::cache_it;
 use crate::model::link::entity::link::{Link, LinkType};
 use crate::model::user::repository::repository;
 use crate::model::object::repository::repository::Repository as Object_repository;
-use crate::controllers::pool::pool::{sql, sql_one};
+use crate::controllers::pool::pool::{insert, sql, sql_one};
 use crate::model::error::RepositoryError;
 use crate::model::lfu_cache::cache::CACHE;
+use crate::model::secure::entity::permission::PermissionLevel::link;
 use crate::model::user::entity::user::User;
 
 pub struct Repository {}
@@ -43,6 +44,34 @@ impl Repository {
                     object_type_to: Object_repository::getObjectTypeFromId(row.get::<String, &str>("object_type_to_id")).await?,
                 }
         })
+    }
+
+    pub fn linkTypeToNameValues(link_type: &LinkType) -> Vec<(String, String)> {
+        let mut res: Vec<(String, String)> = vec![];
+        match link_type.object_type_from.id.as_ref() {
+            Some(x) => { res.push(("object_type_from_id".to_string(), x.to_string())) }
+            None => {}
+        }
+        match link_type.object_type_to.id.as_ref() {
+            Some(x) => { res.push(("object_type_to_id".to_string(), x.to_string())) }
+            None => {}
+        }
+        match link_type.id.as_ref() {
+            Some(x) => { res.push(("id".to_string(), x.to_string())) }
+            None => {}
+        }
+        res.push(("name".to_string(), link_type.name.clone()));
+        res.push(("alias".to_string(), link_type.alias.clone()));
+
+        res
+    }
+
+    pub async fn createLinkType(link_type: &LinkType) -> Result<LinkType, RepositoryError> {
+        let nv = Self::linkTypeToNameValues(link_type);
+        let id = insert("link_type".to_string(),nv).await?;
+        let mut lt = link_type.clone();
+        lt.id = Some(id);
+        Ok(lt)
     }
 
     pub async fn getEnityFromRow(&'static mut self, row: PgRow) -> Result<Link, RepositoryError> {

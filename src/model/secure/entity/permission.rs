@@ -1,9 +1,20 @@
+use std::fmt::{Display, Formatter};
+use std::str::FromStr;
 use serde::{Serialize, Deserialize};
 
 #[derive(PartialEq, Debug, Serialize, Deserialize, Clone)]
 pub enum Access {
     allow,
     deny,
+}
+
+impl ToString for Access {
+    fn to_string(&self) -> String {
+        match self {
+            Access::allow => { "allow".to_string() }
+            Access::deny => { "deny".to_string() }
+        }
+    }
 }
 
 #[derive(PartialEq, Debug, Serialize, Deserialize, Clone)]
@@ -16,11 +27,35 @@ pub enum PermissionLevel {
     link_type,
 }
 
+
+impl ToString for PermissionLevel {
+    fn to_string(&self) -> String {
+        match self {
+            PermissionLevel::system => { "system".to_string() }
+            PermissionLevel::object => { "object".to_string() }
+            PermissionLevel::object_type => { "object_type".to_string() }
+            PermissionLevel::object_type_field => { "object_type_field".to_string() }
+            PermissionLevel::link => { "link".to_string() }
+            PermissionLevel::link_type => { "link_type".to_string() }
+        }
+    }
+}
+
 #[derive(PartialEq, Debug, Serialize, Deserialize, Clone)]
 pub enum PermissionKind {
     create,
     read,
     edit,
+}
+
+impl ToString for PermissionKind {
+    fn to_string(&self) -> String {
+        match self {
+            PermissionKind::create => { "create".to_string() }
+            PermissionKind::read => { "read".to_string() }
+            PermissionKind::edit => { "edit".to_string() }
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
