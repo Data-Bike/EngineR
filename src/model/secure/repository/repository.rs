@@ -6,7 +6,7 @@ use rocket::futures::future::err;
 use rocket::shield::Feature::Accelerometer;
 use sqlx::Row;
 use sqlx::Error as Sqlx_Error;
-use crate::cache_it;
+use crate::{cache_it, remove_it_from_cache};
 use crate::controllers::pool::pool::{delete, insert, sql, sql_one, update};
 use crate::model::error::RepositoryError;
 use crate::model::link::entity::link::Link;
@@ -272,6 +272,7 @@ impl Repository {
             None => { return Err(RepositoryError { message: format!("Group must has id") }); }
             Some(id) => { id }
         };
+        remove_it_from_cache!(id,group_by_id);
         let mut futures: Vec<JoinHandle<_>> = vec![];
         let exist_group = Self::getGroupById(id.as_str()).await?;
         futures.push(

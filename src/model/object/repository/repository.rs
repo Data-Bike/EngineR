@@ -178,6 +178,7 @@ impl Repository {
             None => { return Err(RepositoryError { message: format!("Object must has id") }); }
             Some(i) => { i }
         };
+        remove_it_from_cache!(id,object_by_id);
         let nv = Self::objectToNameValues(the_object, id.clone());
         let table = the_object.filled.alias.clone();
         Ok(update(table, nv, vec![("id".to_string(), "=".to_string(), id.clone())]).await?)
