@@ -12,7 +12,7 @@ use sqlx::postgres::{PgPoolOptions, PgQueryResult, PgRow};
 lazy_static! {
  static ref  pool: Pool<Postgres> = block_on(PgPoolOptions::new()
     .max_connections(5)
-    .connect("postgres://postgres:password@localhost/test")
+    .connect("postgres://enginer:testpassword@localhost/enginer")
 ).expect("Failed to connect to database");
 }
 
@@ -31,6 +31,7 @@ impl Std_Error for DBError {}
 
 
 pub async fn sql(sql: &str) -> Result<Vec<PgRow>, Sqlx_Error> {
+
     match sqlx::query(sql).fetch_all(pool.deref()).await {
         Ok(rows) => Ok(rows),
         Err(e) => Err(e)

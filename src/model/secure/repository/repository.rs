@@ -29,7 +29,7 @@ impl Repository {
     }
 
     pub async fn getPermissionsById(id: &str) -> Result<Vec<Permission>, RepositoryError> {
-        let rows = sql(format!("select * from permissions where group={}", id).as_str()).await?;
+        let rows = sql(format!("select * from permissions where group_id={}", id).as_str()).await?;
 
         let mut res: Vec<Permission> = Vec::new();
         for row in rows {
@@ -115,7 +115,7 @@ impl Repository {
     }
 
     pub async fn getUserGroupsbyUser(user: User) -> Result<Vec<Group>, RepositoryError> {
-        let rows = sql(format!("select g.* from user_group join group on user_group.user_id={} and user_group.group_id=group.id ", match user.id.as_ref() {
+        let rows = sql(format!("select g.* from user_group ug join group g on ug.user_id={} and ug.group_id=g.id ", match user.id.as_ref() {
             None => { return Err(RepositoryError { message: format!("User must has id") }); }
             Some(i) => { i }
         }).as_str()).await?;

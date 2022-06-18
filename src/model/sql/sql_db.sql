@@ -110,7 +110,7 @@ begin
       );
       execute 'alter table "public"."user" add constraint "pk_enginer_' || nextval('"public"."pk_enginer_constraint_seq"'::regclass) || '" primary key ("id");';
     end if;
-    alter table "public"."user" alter column "is_active" set default 0;
+    alter table "public"."user" alter column "is_active" set default false;
   end if;
 
   -- #4 New entity group with alias, name, level
@@ -202,9 +202,9 @@ begin
     if not exists (select * from pg_catalog.pg_type t join pg_catalog.pg_namespace n on (n.oid = t.typnamespace) join pg_catalog.pg_constraint c on (c.conrelid=t.typrelid) where n.nspname='public' and c.conname='ix_enginer_field_alias' and c.contype='u') then
       alter table "public"."field" add constraint "ix_enginer_field_alias" unique ("alias");
     end if;
-    alter table "public"."field" alter column "require" set default 0;
-    alter table "public"."field" alter column "index" set default 0;
-    alter table "public"."field" alter column "preview" set default 0;
+    alter table "public"."field" alter column "require" set default false;
+    alter table "public"."field" alter column "index" set default false;
+    alter table "public"."field" alter column "preview" set default false;
   end if;
 
   -- #9 New entity object with aggr_object_type_alias, date_created, date_deleted

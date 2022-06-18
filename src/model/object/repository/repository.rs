@@ -41,13 +41,12 @@ impl Repository {
 
     pub async fn getObjectTypeFromAlias(alias: String) -> Result<ObjectType, RepositoryError> {
         cache_it!(&alias,object_type_by_alias,{
-                    let fields_rows = sql(format!("select * from field where alias = '{}'", alias).as_str()).await?;
-
-                let fields = Repository::getFieldsFromRows(fields_rows);
-
-                let kind_row = sql_one(format!("select kind from object_type where alias = '{}' limit 1", alias).as_str()).await?;
+                let kind_row = sql_one(format!("select kind,id from object_type where alias = '{}' limit 1", alias).as_str()).await?;
                 let kind = kind_row.get::<String, &str>("kind").to_string();
-                let id = Some(kind_row.get::<String, &str>("id").to_string());
+                let kind_id = kind_row.get::<String, &str>("id").to_string();
+                let fields_rows = sql(format!("select * from field where object_type_id = '{}'", &kind_id).as_str()).await?;
+                let id = Some(kind_id);
+                let fields = Repository::getFieldsFromRows(fields_rows);
                 ObjectType {
                     id,
                     fields,
@@ -58,19 +57,11 @@ impl Repository {
     }
 
     pub async fn getObjectTypeFromObjectId(id: String) -> Result<ObjectType, RepositoryError> {
-        let fields_rows = sql(format!("select f.* from object o join field f on f.alias=o.alias where o.id = '{}'", id).as_str()).await?;
-        let fields = Repository::getFieldsFromRows(fields_rows);
+        let object_row = sql_one(format!("select object_type_id from object where id = '{}' limit 1", id).as_str()).await?;
+        let object_type_id = object_row.get::<String, &str>("object_type_id").to_string();
+        let object_type = Self::getObjectTypeFromId(object_type_id).await?;
 
-        let kind_alias_row = sql_one(format!("select * from object where id = '{}' limit 1", id).as_str()).await?;
-        let kind_alias = (kind_alias_row.get::<String, &str>("kind").to_string(), kind_alias_row.get::<String, &str>("alias").to_string());
-        let id = Some(kind_alias_row.get::<String, &str>("id").to_string());
-
-        Ok(ObjectType {
-            id,
-            fields,
-            kind: kind_alias.0,
-            alias: kind_alias.1,
-        })
+        Ok(object_type)
     }
 
 
@@ -96,8 +87,8 @@ impl Repository {
                     }),
                     None => None
                 },
-                user_created: model::user::repository::repository::Repository::getUserById(object_row.get::<String, &str>("date_created")).await?,
-                user_deleted: match object_row.get::<Option<String>, &str>("user_deleted") {
+                user_created: model::user::repository::repository::Repository::getUserById(object_row.get::<String, &str>("user_created_id")).await?,
+                user_deleted: match object_row.get::<Option<String>, &str>("user_deleted_id") {
                     Some(v) => Some(model::user::repository::repository::Repository::getUserById(v).await?),
                     None => None
                 },
@@ -140,7 +131,7 @@ impl Repository {
         Ok(insert("object", vec![
             ("kind", the_object.filled.kind.as_str()),
             ("alias", the_object.filled.alias.as_str()),
-            ("user_created", match the_object.user_created.id.as_ref() {
+            ("user_created_id", match the_object.user_created.id.as_ref() {
                 None => { return Err(RepositoryError { message: format!("User must has id") }); }
                 Some(d) => { d }
             }.as_str()),
@@ -189,7 +180,7 @@ impl Repository {
         remove_it_from_cache!(&ids,object_by_id);
         update("object", vec![
             ("date_deleted", Utc::now().to_rfc3339().as_str()),
-            ("user_deleted", match user.id {
+            ("user_deleted_id", match user.id {
                 None => { return Err(RepositoryError { message: format!("User must has id") }); }
                 Some(i) => { i }
             }.as_str()),
@@ -240,7 +231,7 @@ impl Repository {
                 ("require".to_string(), if field.require { "1".to_string() } else { "0".to_string() }),
                 ("index".to_string(), if field.index { "1".to_string() } else { "0".to_string() }),
                 ("preview".to_string(), if field.preview { "1".to_string() } else { "0".to_string() }),
-                ("object_type".to_string(), id.to_string()),
+                ("object_type_id".to_string(), id.to_string()),
             ])));
         }
 
@@ -258,7 +249,7 @@ impl Repository {
         remove_it_from_cache!(&ot.alias,object_type_by_alias);
         update("object_type", vec![
             ("date_deleted", Utc::now().to_rfc3339().as_str()),
-            ("user_deleted", match user.id {
+            ("user_deleted_id", match user.id {
                 None => { return Err(RepositoryError { message: format!("User must has id") }); }
                 Some(i) => { i }
             }.as_str()),

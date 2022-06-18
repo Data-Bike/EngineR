@@ -20,17 +20,17 @@ impl Repository {
     }
 
 
-    pub async fn getLinkRowsByToId(id: String, limit: u64, skip: u64) -> Result<Vec<PgRow>, RepositoryError> {
-        Ok(sql(format!("select o1.kind as 'from_kind', o1.alias as 'from_alias', o1.id as 'from_id', o2.kind as 'to_kind', o2.alias as 'to_alias', o2.id as 'to_id', l.* from links l join object o1 on l.id1=o1.id join object o2 on l.id2=02.id where id2 = '{}' limit {} offset {}", &id, limit, skip).as_str()).await?)
-    }
-
-    pub async fn getLinkRowsByFromId(id: String, limit: u64, skip: u64) -> Result<Vec<PgRow>, RepositoryError> {
-        Ok(sql(format!("select o1.kind as 'from_kind', o1.alias as 'from_alias', o1.id as 'from_id', o2.kind as 'to_kind', o2.alias as 'to_alias', o2.id as 'to_id', l.* from links l join object o1 on l.id1=o1.id join object o2 on l.id2=02.id where id1 = '{}' limit {} offset {}", &id, limit, skip).as_str()).await?)
-    }
-
-    async fn getLinkRowsByAssignId(id: String, limit: u64, skip: u64) -> Result<Vec<PgRow>, RepositoryError> {
-        Ok(sql(format!("select o1.kind as 'from_kind', o1.alias as 'from_alias', o1.id as 'from_id', o2.kind as 'to_kind', o2.alias as 'to_alias', o2.id as 'to_id', l.* from links l join object o1 on l.id1=o1.id join object o2 on l.id2=02.id where id1 = '{}' or id2 = '{}' limit {} offset {}", &id, &id, limit, skip).as_str()).await?)
-    }
+    // pub async fn getLinkRowsByToId(id: String, limit: u64, skip: u64) -> Result<Vec<PgRow>, RepositoryError> {
+    //     Ok(sql(format!("select o1.kind as 'from_kind', o1.alias as 'from_alias', o1.id as 'from_id', o2.kind as 'to_kind', o2.alias as 'to_alias', o2.id as 'to_id', l.* from links l join object o1 on l.id1=o1.id join object o2 on l.id2=02.id where id2 = '{}' limit {} offset {}", &id, limit, skip).as_str()).await?)
+    // }
+    //
+    // pub async fn getLinkRowsByFromId(id: String, limit: u64, skip: u64) -> Result<Vec<PgRow>, RepositoryError> {
+    //     Ok(sql(format!("select o1.kind as 'from_kind', o1.alias as 'from_alias', o1.id as 'from_id', o2.kind as 'to_kind', o2.alias as 'to_alias', o2.id as 'to_id', l.* from links l join object o1 on l.id1=o1.id join object o2 on l.id2=02.id where id1 = '{}' limit {} offset {}", &id, limit, skip).as_str()).await?)
+    // }
+    //
+    // async fn getLinkRowsByAssignId(id: String, limit: u64, skip: u64) -> Result<Vec<PgRow>, RepositoryError> {
+    //     Ok(sql(format!("select o1.kind as 'from_kind', o1.alias as 'from_alias', o1.id as 'from_id', o2.kind as 'to_kind', o2.alias as 'to_alias', o2.id as 'to_id', l.* from links l join object o1 on l.id1=o1.id join object o2 on l.id2=02.id where id1 = '{}' or id2 = '{}' limit {} offset {}", &id, &id, limit, skip).as_str()).await?)
+    // }
 
     pub async fn getLinkTypeById(id: &str) -> Result<LinkType, RepositoryError> {
         let ids = id.to_string();
@@ -76,15 +76,15 @@ impl Repository {
 
     pub async fn getEnityFromRow(&'static mut self, row: PgRow) -> Result<Link, RepositoryError> {
         let object_from = Object_repository::hydrateFilledObjectType(
-            row.get::<String, &str>("object_from").to_string(),
+            row.get::<String, &str>("object_from_id").to_string(),
         ).await?;
 
         let object_to = Object_repository::hydrateFilledObjectType(
-            row.get::<String, &str>("object_to").to_string(),
+            row.get::<String, &str>("object_to_id").to_string(),
         ).await?;
 
-        let user_created = repository::Repository::getUserById(row.get::<String, &str>("user_created").to_string()).await?;
-        let user_deleted = if row.get::<String, &str>("user_deleted").as_str() != "" { Some(repository::Repository::getUserById(row.get::<String, &str>("user_deleted")).await?) } else { None };
+        let user_created = repository::Repository::getUserById(row.get::<String, &str>("user_created_id").to_string()).await?;
+        let user_deleted = if row.get::<String, &str>("user_deleted_id").as_str() != "" { Some(repository::Repository::getUserById(row.get::<String, &str>("user_deleted_id")).await?) } else { None };
         let date_created = DateTime::<Utc>::from(match DateTime::parse_from_rfc3339(row.get::<String, &str>("date_created").as_str()) {
             Ok(d) => { d }
             Err(e) => { return Err(RepositoryError { message: format!("Cannot parse rfc3339 date:{}", e.to_string()) }); }
@@ -111,7 +111,7 @@ impl Repository {
     }
 
     pub async fn setLink(id1: String, id2: String, userName: String) -> Result<(), RepositoryError> {
-        let sql = format!("insert into link (object_from,object_to,user_created,date_created) values ({},{},{},{})",
+        let sql = format!("insert into link (object_from_id,object_to_id,user_created_id,date_created) values ({},{},{},{})",
                           id1, id2, userName, chrono::offset::Utc::now().to_rfc3339());
         sql_one(sql.as_str()).await?;
         Ok(())
