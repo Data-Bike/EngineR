@@ -19,9 +19,9 @@ use rocket::outcome::Outcome::{Failure, Success};
 use rocket::request::{self, FromRequest};
 use crate::controllers::form_parser::error::ParseError;
 
-struct Range {
-    from: Option<u64>,
-    to: Option<u64>,
+pub struct Range {
+    pub from: Option<u64>,
+    pub to: Option<u64>,
 }
 
 
