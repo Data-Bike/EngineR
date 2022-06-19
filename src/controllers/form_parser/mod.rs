@@ -4,3 +4,4 @@ pub mod user;
 pub mod credentials;
 pub mod object_type;
 pub mod error;
+pub mod range;

@@ -22,7 +22,12 @@ const LIMIT: u32 = 1024 * 10;
 pub fn getToken(req: &Request<'_>, object: &Object) -> Token {
     let requestKind = match req.method() {
         Method::Get => { PermissionKind::read }
-        Method::Post => { PermissionKind::edit }
+        Method::Post => {
+            match object.id {
+                None => { PermissionKind::create }
+                Some(_) => { PermissionKind::edit }
+            }
+        }
         _ => { PermissionKind::read }
     };
 
