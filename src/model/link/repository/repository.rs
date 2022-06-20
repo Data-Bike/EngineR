@@ -68,7 +68,7 @@ impl Repository {
 
     pub async fn createLinkType(link_type: &LinkType) -> Result<LinkType, RepositoryError> {
         let nv = Self::linkTypeToNameValues(link_type);
-        let id = insert("link_type".to_string(),nv).await?;
+        let id = insert("link_type".to_string(), nv).await?;
         let mut lt = link_type.clone();
         lt.id = Some(id);
         Ok(lt)
@@ -85,16 +85,8 @@ impl Repository {
 
         let user_created = repository::Repository::getUserById(row.get::<String, &str>("user_created_id").to_string()).await?;
         let user_deleted = if row.get::<String, &str>("user_deleted_id").as_str() != "" { Some(repository::Repository::getUserById(row.get::<String, &str>("user_deleted_id")).await?) } else { None };
-        let date_created = DateTime::<Utc>::from(match DateTime::parse_from_rfc3339(row.get::<String, &str>("date_created").as_str()) {
-            Ok(d) => { d }
-            Err(e) => { return Err(RepositoryError { message: format!("Cannot parse rfc3339 date:{}", e.to_string()) }); }
-        });
-        let date_deleted = if row.get::<String, &str>("date_deleted").as_str() != "" {
-            Some(DateTime::<Utc>::from(match DateTime::parse_from_rfc3339(row.get::<String, &str>("date_deleted").as_str()) {
-                Ok(d) => { d }
-                Err(e) => { return Err(RepositoryError { message: format!("Cannot parse rfc3339 date:{}", e.to_string()) }); }
-            }))
-        } else { None };
+        let date_created = row.get::<DateTime<Utc>, &str>("date_created");
+        let date_deleted = row.get::<Option<DateTime<Utc>>, &str>("date_deleted");
         let link_type_id = row.get::<&str, &str>("link_type_id");
         let link_type = Self::getLinkTypeById(link_type_id).await?;
         let id = Some(row.get::<String, &str>("id"));

@@ -1,6 +1,8 @@
 use rocket::{Request};
 
 use async_std::task::block_on;
+use bcrypt::{BcryptResult, DEFAULT_COST};
+use chrono::{DateTime, ParseResult, Utc};
 
 
 use serde_json::{from_str, Value};
@@ -31,6 +33,19 @@ impl User {
                 }
             };
         }
+        macro_rules! err_resolve_option {
+            ( $x:expr, $key:expr ) => {
+                match $x.get($key) {
+                    None => { None }
+                    Some(v) => {
+                        match v.as_str() {
+                            None => { return Err(ParseError { message: format!("Error {} is not string",$key) }); }
+                            Some(v) => { Some(v.to_string()) }
+                        }
+                    }
+                }
+            };
+        }
 
         let json_object: Value = match from_str::<Value>(string) {
             Ok(v) => { v }
@@ -41,6 +56,15 @@ impl User {
         let password = err_resolve!(json_object,"password");
         let access_token = err_resolve!(json_object,"access_token");
         let oauth = err_resolve!(json_object,"oauth");
+        let date_registred_str = err_resolve!(json_object,"date_registred");
+        let date_last_active_str = err_resolve_option!(json_object,"date_last_active");
+        let date_registred = match DateTime::parse_from_rfc3339(date_registred_str) {
+            Ok(d) => { DateTime::<Utc>::from(d) }
+            Err(_) => { return Err(ParseError { message: format!("Cannt parse date") }); }
+        }.naive_utc();
+        let date_last_active = date_last_active_str
+            .and_then(|d| DateTime::parse_from_rfc3339(d.as_str()).ok())
+            .map(|d| DateTime::<Utc>::from(d).naive_utc());
         let groups = match match json_object.get("groups") {
             None => { return Err(ParseError { message: format!("Error {} not found", "groups") }); }
             Some(v) => { v }
@@ -76,10 +100,15 @@ impl User {
         Ok(User {
             id,
             login: login.to_string(),
-            password: password.to_string(),
+            password: match bcrypt::hash(password.to_string(), DEFAULT_COST) {
+                Ok(h) => { h }
+                Err(e) => { return Err(ParseError { message: "Cannt hashed password".to_string() }); }
+            },
             access_token: access_token.to_string(),
             oauth: oauth.to_string(),
             groups: groups_s,
+            date_last_active,
+            date_registred,
         })
     }
 }

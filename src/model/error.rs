@@ -2,7 +2,7 @@ use std::error::Error;
 use std::fmt::{Display, Formatter};
 use sqlx::Error as Sqlx_Error;
 
-#[derive(Debug)]
+#[derive(Debug,PartialEq)]
 pub struct RepositoryError {
     pub message: String,
 }

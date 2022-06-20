@@ -1,4 +1,4 @@
-
+use chrono::{DateTime, NaiveDateTime, Utc};
 use crate::model::secure::entity::permission::Group;
 use serde::{Serialize, Deserialize};
 
@@ -10,5 +10,7 @@ pub struct User {
     pub password: String,
     pub access_token: String,
     pub oauth: String,
-    pub groups:Vec<Group>
+    pub groups:Vec<Group>,
+    pub date_last_active:Option<NaiveDateTime>,
+    pub date_registred:NaiveDateTime
 }

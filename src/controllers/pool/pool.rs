@@ -31,7 +31,6 @@ impl Std_Error for DBError {}
 
 
 pub async fn sql(sql: &str) -> Result<Vec<PgRow>, Sqlx_Error> {
-
     match sqlx::query(sql).fetch_all(pool.deref()).await {
         Ok(rows) => Ok(rows),
         Err(e) => Err(e)
@@ -73,6 +72,13 @@ pub async fn exec_tr(sql: &str, tr: &mut Transaction<'_, Postgres>) -> Result<Pg
     }
 }
 
+fn wrap_sql_string(val: String) -> String {
+    if val.len() == 0 {
+        return "null".to_string();
+    }
+    format!("'{}'", val)
+}
+
 pub fn get_insert<T: ToString + std::fmt::Display>(table: T, name_values: Vec<(T, T)>) -> String {
     let mut names = "".to_string();
     let mut values = "".to_string();
@@ -81,37 +87,37 @@ pub fn get_insert<T: ToString + std::fmt::Display>(table: T, name_values: Vec<(T
     for row in name_values {
         name = row.0.to_string();
         value = row.1.to_string();
-        names = format!("{},{}", name, names);
-        values = format!("{},{}", value, values);
+        names = format!("\"{}\",{}", name, names);
+        values = format!("{},{}", wrap_sql_string(value), values);
     }
     names.pop();
     values.pop();
-    format!("insert into {} ({}) values ({})", table, names, values)
+    format!("insert into \"{}\" ({}) values ({}) returning id", table, names, values)
 }
 
 pub fn get_update<T: ToString + std::fmt::Display>(table: T, name_values: Vec<(T, T)>, cases: Vec<(T, T, T)>) -> String {
     let mut key_values = "".to_string();
 
     for name_value in name_values {
-        key_values = format!("{} {}={}, ", key_values, name_value.0, name_value.1);
+        key_values = format!("{} \"{}\"={}, ", key_values, name_value.0, wrap_sql_string(name_value.1.to_string()));
     }
     key_values.pop();
     key_values.pop();
 
     let where_case = get_case(&cases);
-    format!("update {} set {} where {}", table, key_values, where_case)
+    format!("update \"{}\" set {} where {}", table, key_values, where_case)
 }
 
 pub fn get_select(table: String, names: Vec<String>, where_cases: Vec<Vec<(String, String, String)>>) -> String {
     let names_string = names.join(", ");
     let where_string = get_where(&where_cases);
-    format!("select {} from {} where {}", names_string, table, where_string)
+    format!("select {} from \"{}\" where {}", names_string, table, where_string)
 }
 
 pub fn get_case<T: ToString + std::fmt::Display>(cases: &Vec<(T, T, T)>) -> String {
     cases
         .iter()
-        .map(|c| format!("{} {} {}", c.0, c.1, c.2))
+        .map(|c| format!("\"{}\" {} {}", c.0, c.1, wrap_sql_string(c.2.to_string())))
         .collect::<Vec<_>>()
         .join(" and ")
 }
@@ -127,20 +133,20 @@ pub fn get_where(where_cases: &Vec<Vec<(String, String, String)>>) -> String {
 pub fn get_delete(table: String, names: Vec<String>, case: Vec<(String, String, String)>) -> String {
     let names_string = names.join(", ");
     let where_string = get_case(&case);
-    format!("delete {} from {} where {}", names_string, table, where_string)
+    format!("delete {} from \"{}\" where {}", names_string, table, where_string)
 }
 
 pub fn get_create_table(table: String, fields: Vec<(String, String)>) -> String {
     let mut fields_str = fields.iter().map(|f| format!("{} {}", f.0, f.1)).collect::<Vec<_>>().join(",");
 
-    format!("CREATE TABLE {} (id serial PRIMARY KEY,{},FOREIGN KEY (user_id)
+    format!("CREATE TABLE \"{}\" (id serial PRIMARY KEY,{},FOREIGN KEY (user_id)
       REFERENCES object (id))", table, fields_str)
 }
 
 pub fn get_alter_table(table: String, fields_to_alter: Vec<(String, String, String)>) -> String {
     let alter_str = fields_to_alter
         .iter()
-        .map(|f| format!("{} COLUMN {} TYPE {}", f.0, f.1, f.2))
+        .map(|f| format!("{} COLUMN \"{}\" TYPE {}", f.0, f.1, f.2))
         .collect::<Vec<_>>()
         .join(",");
     format!("ALTER TABLE {} {}", table, alter_str)
@@ -150,7 +156,7 @@ pub async fn insert<T: ToString + std::fmt::Display>(table: T, name_values: Vec<
     let row = sql_one(get_insert(table, name_values).as_str()).await;
     let res = row?;
 
-    Ok(res.get::<String, &str>("id"))
+    Ok(res.get::<i64, &str>("id").to_string())
 }
 
 

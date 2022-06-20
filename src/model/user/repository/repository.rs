@@ -1,6 +1,10 @@
 use std::collections::LinkedList;
+use std::time::SystemTime;
 use async_std::task::{block_on, JoinHandle, spawn};
+use chrono::{DateTime, NaiveDateTime, Offset, Utc};
+use postgres::types::Timestamp;
 use rocket::futures::future::err;
+use rocket::time::PrimitiveDateTime;
 use sqlx::Row;
 use sqlx::Error as Sqlx_Error;
 use crate::{cache_it, remove_it_from_cache};
@@ -21,11 +25,13 @@ impl Repository {
         cache_it!(&id,user_by_login,{
             let row = sql_one(format!("select * from user where id={}", &id).as_str()).await?;
             User {
-                id: Some(id),
+                id: Some(row.get::<String, &str>("login").to_string()),
                 login: row.get::<String, &str>("login").to_string(),
                 password: row.get::<String, &str>("password").to_string(),
-                access_token: row.get::<String, &str>("access_token").to_string(),
-                oauth: row.get::<String, &str>("oauth").to_string(),
+                access_token: row.get::<Option<String>, &str>("access_token").unwrap_or("".to_string()).to_string(),
+                oauth: row.get::<Option<String>, &str>("oauth").unwrap_or("".to_string()).to_string(),
+                date_last_active: row.try_get::<NaiveDateTime, &str>("date_last_active").ok(),
+                date_registred: row.get::<NaiveDateTime, &str>("date_registred"),
                 groups: vec![],
             }
         })
@@ -33,24 +39,32 @@ impl Repository {
 
     pub async fn getUserByLogin(login: String) -> Result<User, RepositoryError> {
         cache_it!(&login,user_by_login,{
-            let row = sql_one(format!("select * from user where login={}", &login).as_str()).await?;
+            let row = sql_one(format!("select * from \"user\" where \"login\"='{}'", &login).as_str()).await?;
             User {
                 id: Some(row.get::<String, &str>("login").to_string()),
                 login: row.get::<String, &str>("login").to_string(),
                 password: row.get::<String, &str>("password").to_string(),
-                access_token: row.get::<String, &str>("access_token").to_string(),
-                oauth: row.get::<String, &str>("oauth").to_string(),
+                access_token: row.get::<Option<String>, &str>("access_token").unwrap_or("".to_string()).to_string(),
+                oauth: row.get::<Option<String>, &str>("oauth").unwrap_or("".to_string()).to_string(),
+                date_last_active: row.try_get::<NaiveDateTime, &str>("date_last_active").ok(),
+                date_registred: row.get::<NaiveDateTime, &str>("date_registred"),
                 groups: vec![],
             }
         })
     }
+
 
     pub fn userToNameValues(user: &User) -> Vec<(String, String)> {
         vec![
             ("login".to_string(), user.login.to_string()),
             ("password".to_string(), user.password.to_string()),
             ("access_token".to_string(), user.access_token.to_string()),
-            ("oauth".to_string(), user.oauth.to_string()),
+            ("date_last_active".to_string(), user
+                .date_last_active
+                .and_then(|d| Some(d.to_string()))
+                .unwrap_or("".to_string())
+            ),
+            ("date_registred".to_string(), user.date_registred.to_string()),
         ]
     }
 

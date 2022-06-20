@@ -60,5 +60,82 @@ pub fn stage() -> AdHoc {
     })
 }
 
+// #[cfg(test)]
+// mod tests;
+
 #[cfg(test)]
-mod tests;
+mod test {
+    use rocket::local::blocking::Client;
+    use rocket::http::Status;
+    use rocket::uri;
+    use crate::{ rocket_build};
+
+
+    #[test]
+    fn hello() {
+        let client = Client::tracked(rocket_build()).expect("valid rocket instance");
+        let mut response = client.get(uri!("/object/hello")).dispatch();
+        assert_eq!(response.status(), Status::Ok);
+        assert_eq!(response.into_string().unwrap(), "Hello!");
+    }
+
+    #[test]
+    fn add_object() {
+        let client = Client::tracked(rocket_build()).expect("valid rocket instance");
+        let mut response = client.post(uri!("/object/add")).body("{\
+            \"filled\":{\
+                \"id\":\"1\",
+                \"fields\":[
+                    {
+                        \"id\":\"1\",
+                        \"alias\":\"lastname\",
+                        \"kind\":\"varchar(255)\",
+                        \"name\":\"lastname\",
+                        \"value\":\"Platonov\",
+                        \"require\":true,
+                        \"index\":true,
+                        \"preview\":true
+                    },
+                    {
+                        \"id\":\"2\",
+                        \"alias\":\"firstname\",
+                        \"kind\":\"varchar(255)\",
+                        \"name\":\"firstname\",
+                        \"value\":\"Alexander\",
+                        \"require\":true,
+                        \"index\":true,
+                        \"preview\":true
+                    },
+                    {
+                        \"id\":\"3\",
+                        \"alias\":\"patronymic\",
+                        \"kind\":\"varchar(255)\",
+                        \"name\":\"patronymic\",
+                        \"value\":\"Alexanderovich\",
+                        \"require\":true,
+                        \"index\":true,
+                        \"preview\":true
+                    },
+                    {
+                        \"id\":\"4\",
+                        \"alias\":\"birthday\",
+                        \"kind\":\"varchar(255)\",
+                        \"name\":\"birthday\",
+                        \"value\":\"02-03-1988T00:00\",
+                        \"require\":true,
+                        \"index\":true,
+                        \"preview\":true
+                    },
+                ],
+                \"kind\":\"object\",
+                \"alias\":\"fl\"
+            },\
+            \"date_created\":\"02-03-1988T02:30\",\
+            \"user_created\":\"1\"
+            \"hash\":\"\"\
+        }").dispatch();
+
+        assert_eq!(response.status(), Status::Ok);
+        // assert_eq!(response.into_string().unwrap(), "Hello!");
+    }
+}

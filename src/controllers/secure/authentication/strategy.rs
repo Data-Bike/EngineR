@@ -92,6 +92,7 @@ impl Strategy {
             CheckCredentials::Password(password) => {
                 let user = model::user::repository::repository::Repository::getUserByLogin(login).await?;
                 let hash = user.password.clone();
+                println!("Verify password '{}', hash '{}'", password, hash);
                 if verify(password, hash.as_str()).is_ok() {
                     return Ok(user);
                 }

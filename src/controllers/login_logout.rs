@@ -27,7 +27,7 @@ async fn login(token: Token, jar: &CookieJar<'_>) -> RawJson<String> {
     if token.is_allow() {
         let cookie = build_cookie(&token).await.ok();
         match cookie {
-            None => { return RawJson("Failed".to_string()); }
+            None => { return RawJson("Failed cookie".to_string()); }
             Some(c) => {
                 jar.add_private(c);
                 return RawJson("OK".to_string());
@@ -35,7 +35,7 @@ async fn login(token: Token, jar: &CookieJar<'_>) -> RawJson<String> {
         }
     }
 
-    RawJson("Failed".to_string())
+    RawJson("Failed access".to_string())
 }
 
 #[post("/logout")]
@@ -52,4 +52,50 @@ pub fn stage() -> AdHoc {
     AdHoc::on_ignite("Managing login\\logout", move |rocket| async move {
         rocket.mount("/", routes![login,logout])
     })
+}
+
+
+#[cfg(test)]
+mod test {
+    use std::net::{IpAddr, Ipv4Addr, SocketAddr};
+    use bcrypt::DEFAULT_COST;
+    use chrono::Utc;
+    use futures::executor::block_on;
+    use rocket::local::blocking::Client;
+    use rocket::http::Status;
+    use rocket::uri;
+    use crate::{rocket_build};
+    use crate::controllers::form_parser::error::ParseError;
+    use crate::model::user::entity::user::User;
+    use crate::model::user::repository::repository::Repository as User_Repository;
+
+
+    #[test]
+    fn login() {
+        let client = Client::tracked(rocket_build()).expect("valid rocket instance");
+        let user = User {
+            id: None,
+            login: "root".to_string(),
+            password: match bcrypt::hash("testestest".to_string(), DEFAULT_COST) {
+                Ok(h) => { h }
+                Err(e) => { panic!("Cannt hashed password"); }
+            },
+            access_token: "".to_string(),
+            oauth: "".to_string(),
+            groups: vec![],
+            date_last_active:None,
+            date_registred:Utc::now().naive_utc()
+        };
+        let res = block_on(User_Repository::createUser(&user));
+        assert_eq!(res, Ok("1".to_string()));
+        let mut response = client.post(uri!("/login")).body("{\
+            \"login\":\"root\",\
+            \"password\":\"testestest\"\
+        }").remote(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080))
+            .dispatch();
+        assert_eq!(response.status(), Status::Ok);
+        println!("{:?}", response.headers());
+        println!("{:?}", response.into_string());
+        // assert_eq!(response.into_string().unwrap(), "Hello!");
+    }
 }

@@ -76,17 +76,8 @@ impl Repository {
 
            Object {
                 filled: objectType,
-                date_created: match DateTime::<Utc>::from_str(object_row.get::<&str, &str>("date_created")) {
-                    Ok(d) => { d }
-                    Err(e) => { return Err(RepositoryError { message: format!("Cannot parse date:{}", e.to_string()) }); }
-                },
-                date_deleted: match object_row.get::<Option<&str>, &str>("date_created") {
-                    Some(v) => Some(match DateTime::<Utc>::from_str(v) {
-                        Ok(d) => { d }
-                        Err(e) => { return Err(RepositoryError { message: format!("Cannot parse date:{}", e.to_string()) }); }
-                    }),
-                    None => None
-                },
+                date_created: object_row.get::<DateTime<Utc>, &str>("date_created"),
+                date_deleted: object_row.get::<Option<DateTime<Utc>>, &str>("date_created"),
                 user_created: model::user::repository::repository::Repository::getUserById(object_row.get::<String, &str>("user_created_id")).await?,
                 user_deleted: match object_row.get::<Option<String>, &str>("user_deleted_id") {
                     Some(v) => Some(model::user::repository::repository::Repository::getUserById(v).await?),

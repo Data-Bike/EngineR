@@ -214,7 +214,7 @@
   <rise:modelInfo>
     <rise:name>New Model</rise:name>
     <rise:prefix>enginer</rise:prefix>
-    <rise:guid>bd74e3ae-bca3-41f8-a0be-9cf5d8f9e943</rise:guid>
+    <rise:guid>18d41853-4b64-481c-91ea-c6aa01c72055</rise:guid>
     <rise:engineVersion>4.4.5246.20187</rise:engineVersion>
     <rise:integerSize>64</rise:integerSize>
     <rise:vendor>
@@ -296,19 +296,9 @@
     </rise:srcNaming>
   </rise:naming>
   <rise:evolution>
-    <rise:release>
-      <rise:sequenceNumber>1</rise:sequenceNumber>
-      <rise:timeStamp>2022-05-15T04:04:22</rise:timeStamp>
-      <rise:comment>Created from empty model Blank (,49944b71-12fc-41f2-81a9-bcde1d55782e) </rise:comment>
-    </rise:release>
-    <rise:release>
-      <rise:sequenceNumber>2</rise:sequenceNumber>
-      <rise:timeStamp>2022-05-15T04:05:01</rise:timeStamp>
-      <rise:comment>Created from empty model Blank (,49944b71-12fc-41f2-81a9-bcde1d55782e) </rise:comment>
-    </rise:release>
     <rise:newEntity>
-      <rise:sequenceNumber>3</rise:sequenceNumber>
-      <rise:timeStamp>2022-05-13T21:39:41</rise:timeStamp>
+      <rise:sequenceNumber>1</rise:sequenceNumber>
+      <rise:timeStamp>2022-06-20T02:14:38</rise:timeStamp>
       <rise:entity>
         <rise:name>user</rise:name>
         <rise:attribute>
@@ -316,7 +306,7 @@
           <rise:dataTypeAlias />
           <rise:dataType>string</rise:dataType>
           <rise:dataSize>255</rise:dataSize>
-          <rise:mustBeUnique>False</rise:mustBeUnique>
+          <rise:mustBeUnique>True</rise:mustBeUnique>
           <rise:mustExist>True</rise:mustExist>
           <rise:description>Login</rise:description>
         </rise:attribute>
@@ -326,7 +316,7 @@
           <rise:dataType>string</rise:dataType>
           <rise:dataSize>256</rise:dataSize>
           <rise:mustBeUnique>False</rise:mustBeUnique>
-          <rise:mustExist>True</rise:mustExist>
+          <rise:mustExist>False</rise:mustExist>
           <rise:description>Password</rise:description>
         </rise:attribute>
         <rise:attribute>
@@ -342,7 +332,7 @@
           <rise:dataType>bool</rise:dataType>
           <rise:mustBeUnique>False</rise:mustBeUnique>
           <rise:mustExist>True</rise:mustExist>
-          <rise:default>0</rise:default>
+          <rise:default>false</rise:default>
         </rise:attribute>
         <rise:attribute>
           <rise:name>date_last_active</rise:name>
@@ -352,12 +342,28 @@
           <rise:mustExist>False</rise:mustExist>
           <rise:description />
         </rise:attribute>
+        <rise:attribute>
+          <rise:name>access_token</rise:name>
+          <rise:dataTypeAlias />
+          <rise:dataType>string</rise:dataType>
+          <rise:dataSize>256</rise:dataSize>
+          <rise:mustBeUnique>False</rise:mustBeUnique>
+          <rise:mustExist>False</rise:mustExist>
+        </rise:attribute>
+        <rise:attribute>
+          <rise:name>oauth</rise:name>
+          <rise:dataTypeAlias />
+          <rise:dataType>string</rise:dataType>
+          <rise:dataSize>256</rise:dataSize>
+          <rise:mustBeUnique>False</rise:mustBeUnique>
+          <rise:mustExist>False</rise:mustExist>
+        </rise:attribute>
         <rise:maxID>0</rise:maxID>
       </rise:entity>
     </rise:newEntity>
     <rise:newEntity>
-      <rise:sequenceNumber>4</rise:sequenceNumber>
-      <rise:timeStamp>2022-05-13T21:39:41</rise:timeStamp>
+      <rise:sequenceNumber>2</rise:sequenceNumber>
+      <rise:timeStamp>2022-06-20T02:14:38</rise:timeStamp>
       <rise:entity>
         <rise:name>group</rise:name>
         <rise:attribute>
@@ -391,8 +397,8 @@
       </rise:entity>
     </rise:newEntity>
     <rise:newEntity>
-      <rise:sequenceNumber>5</rise:sequenceNumber>
-      <rise:timeStamp>2022-05-13T21:39:41</rise:timeStamp>
+      <rise:sequenceNumber>3</rise:sequenceNumber>
+      <rise:timeStamp>2022-06-20T02:14:38</rise:timeStamp>
       <rise:entity>
         <rise:name>permission</rise:name>
         <rise:attribute>
@@ -440,12 +446,21 @@
           <rise:mustExist>True</rise:mustExist>
           <rise:description />
         </rise:attribute>
+        <rise:attribute>
+          <rise:name>name</rise:name>
+          <rise:dataTypeAlias />
+          <rise:dataType>string</rise:dataType>
+          <rise:dataSize>50</rise:dataSize>
+          <rise:mustBeUnique>False</rise:mustBeUnique>
+          <rise:mustExist>True</rise:mustExist>
+          <rise:description />
+        </rise:attribute>
         <rise:maxID>0</rise:maxID>
       </rise:entity>
     </rise:newEntity>
     <rise:newEntity>
-      <rise:sequenceNumber>6</rise:sequenceNumber>
-      <rise:timeStamp>2022-05-13T21:39:41</rise:timeStamp>
+      <rise:sequenceNumber>4</rise:sequenceNumber>
+      <rise:timeStamp>2022-06-20T02:14:38</rise:timeStamp>
       <rise:entity>
         <rise:name>object_type</rise:name>
         <rise:attribute>
@@ -470,8 +485,8 @@
       </rise:entity>
     </rise:newEntity>
     <rise:newEntity>
-      <rise:sequenceNumber>7</rise:sequenceNumber>
-      <rise:timeStamp>2022-05-13T21:39:41</rise:timeStamp>
+      <rise:sequenceNumber>5</rise:sequenceNumber>
+      <rise:timeStamp>2022-06-20T02:14:38</rise:timeStamp>
       <rise:entity>
         <rise:name>link_type</rise:name>
         <rise:attribute>
@@ -496,8 +511,8 @@
       </rise:entity>
     </rise:newEntity>
     <rise:newEntity>
-      <rise:sequenceNumber>8</rise:sequenceNumber>
-      <rise:timeStamp>2022-05-13T21:39:41</rise:timeStamp>
+      <rise:sequenceNumber>6</rise:sequenceNumber>
+      <rise:timeStamp>2022-06-20T02:14:38</rise:timeStamp>
       <rise:entity>
         <rise:name>field</rise:name>
         <rise:attribute>
@@ -542,8 +557,7 @@
           <rise:dataType>bool</rise:dataType>
           <rise:mustBeUnique>False</rise:mustBeUnique>
           <rise:mustExist>True</rise:mustExist>
-          <rise:default>0</rise:default>
-          <rise:description />
+          <rise:default>false</rise:default>
         </rise:attribute>
         <rise:attribute>
           <rise:name>index</rise:name>
@@ -551,8 +565,7 @@
           <rise:dataType>bool</rise:dataType>
           <rise:mustBeUnique>False</rise:mustBeUnique>
           <rise:mustExist>True</rise:mustExist>
-          <rise:default>0</rise:default>
-          <rise:description />
+          <rise:default>false</rise:default>
         </rise:attribute>
         <rise:attribute>
           <rise:name>preview</rise:name>
@@ -560,15 +573,14 @@
           <rise:dataType>bool</rise:dataType>
           <rise:mustBeUnique>False</rise:mustBeUnique>
           <rise:mustExist>True</rise:mustExist>
-          <rise:default>0</rise:default>
-          <rise:description />
+          <rise:default>false</rise:default>
         </rise:attribute>
         <rise:maxID>0</rise:maxID>
       </rise:entity>
     </rise:newEntity>
     <rise:newEntity>
-      <rise:sequenceNumber>9</rise:sequenceNumber>
-      <rise:timeStamp>2022-05-13T21:39:41</rise:timeStamp>
+      <rise:sequenceNumber>7</rise:sequenceNumber>
+      <rise:timeStamp>2022-06-20T02:14:38</rise:timeStamp>
       <rise:entity>
         <rise:name>object</rise:name>
         <rise:attribute>
@@ -601,8 +613,8 @@
       </rise:entity>
     </rise:newEntity>
     <rise:newEntity>
-      <rise:sequenceNumber>10</rise:sequenceNumber>
-      <rise:timeStamp>2022-05-13T21:39:41</rise:timeStamp>
+      <rise:sequenceNumber>8</rise:sequenceNumber>
+      <rise:timeStamp>2022-06-20T02:14:38</rise:timeStamp>
       <rise:entity>
         <rise:name>link</rise:name>
         <rise:attribute>
@@ -625,8 +637,8 @@
       </rise:entity>
     </rise:newEntity>
     <rise:newRelation>
-      <rise:sequenceNumber>11</rise:sequenceNumber>
-      <rise:timeStamp>2022-05-13T21:39:41</rise:timeStamp>
+      <rise:sequenceNumber>9</rise:sequenceNumber>
+      <rise:timeStamp>2022-06-20T02:14:38</rise:timeStamp>
       <rise:relation>
         <rise:name>user_group</rise:name>
         <rise:node>
@@ -643,8 +655,8 @@
       </rise:relation>
     </rise:newRelation>
     <rise:newRelation>
-      <rise:sequenceNumber>12</rise:sequenceNumber>
-      <rise:timeStamp>2022-05-13T21:39:41</rise:timeStamp>
+      <rise:sequenceNumber>10</rise:sequenceNumber>
+      <rise:timeStamp>2022-06-20T02:14:38</rise:timeStamp>
       <rise:relation>
         <rise:name>object_type_object</rise:name>
         <rise:node>
@@ -661,8 +673,8 @@
       </rise:relation>
     </rise:newRelation>
     <rise:newRelation>
-      <rise:sequenceNumber>13</rise:sequenceNumber>
-      <rise:timeStamp>2022-05-13T21:39:41</rise:timeStamp>
+      <rise:sequenceNumber>11</rise:sequenceNumber>
+      <rise:timeStamp>2022-06-20T02:14:38</rise:timeStamp>
       <rise:relation>
         <rise:name>object_type_to</rise:name>
         <rise:node>
@@ -679,8 +691,8 @@
       </rise:relation>
     </rise:newRelation>
     <rise:newRelation>
-      <rise:sequenceNumber>14</rise:sequenceNumber>
-      <rise:timeStamp>2022-05-13T21:39:41</rise:timeStamp>
+      <rise:sequenceNumber>12</rise:sequenceNumber>
+      <rise:timeStamp>2022-06-20T02:14:38</rise:timeStamp>
       <rise:relation>
         <rise:name>object_type_from</rise:name>
         <rise:node>
@@ -697,8 +709,8 @@
       </rise:relation>
     </rise:newRelation>
     <rise:newRelation>
-      <rise:sequenceNumber>15</rise:sequenceNumber>
-      <rise:timeStamp>2022-05-13T21:39:41</rise:timeStamp>
+      <rise:sequenceNumber>13</rise:sequenceNumber>
+      <rise:timeStamp>2022-06-20T02:14:38</rise:timeStamp>
       <rise:relation>
         <rise:name>group_permission</rise:name>
         <rise:node>
@@ -715,8 +727,8 @@
       </rise:relation>
     </rise:newRelation>
     <rise:newRelation>
-      <rise:sequenceNumber>16</rise:sequenceNumber>
-      <rise:timeStamp>2022-05-13T21:39:41</rise:timeStamp>
+      <rise:sequenceNumber>14</rise:sequenceNumber>
+      <rise:timeStamp>2022-06-20T02:14:38</rise:timeStamp>
       <rise:relation>
         <rise:name>user_created_object</rise:name>
         <rise:node>
@@ -733,8 +745,8 @@
       </rise:relation>
     </rise:newRelation>
     <rise:newRelation>
-      <rise:sequenceNumber>17</rise:sequenceNumber>
-      <rise:timeStamp>2022-05-13T21:39:41</rise:timeStamp>
+      <rise:sequenceNumber>15</rise:sequenceNumber>
+      <rise:timeStamp>2022-06-20T02:14:38</rise:timeStamp>
       <rise:relation>
         <rise:name>user_deleted_object</rise:name>
         <rise:node>
@@ -751,8 +763,8 @@
       </rise:relation>
     </rise:newRelation>
     <rise:newRelation>
-      <rise:sequenceNumber>18</rise:sequenceNumber>
-      <rise:timeStamp>2022-05-13T21:39:41</rise:timeStamp>
+      <rise:sequenceNumber>16</rise:sequenceNumber>
+      <rise:timeStamp>2022-06-20T02:14:38</rise:timeStamp>
       <rise:relation>
         <rise:name>object_type_field</rise:name>
         <rise:node>
@@ -769,8 +781,8 @@
       </rise:relation>
     </rise:newRelation>
     <rise:newRelation>
-      <rise:sequenceNumber>19</rise:sequenceNumber>
-      <rise:timeStamp>2022-05-13T21:39:41</rise:timeStamp>
+      <rise:sequenceNumber>17</rise:sequenceNumber>
+      <rise:timeStamp>2022-06-20T02:14:38</rise:timeStamp>
       <rise:relation>
         <rise:name>link_type_link</rise:name>
         <rise:node>
@@ -787,8 +799,8 @@
       </rise:relation>
     </rise:newRelation>
     <rise:newRelation>
-      <rise:sequenceNumber>20</rise:sequenceNumber>
-      <rise:timeStamp>2022-05-13T21:39:41</rise:timeStamp>
+      <rise:sequenceNumber>18</rise:sequenceNumber>
+      <rise:timeStamp>2022-06-20T02:14:38</rise:timeStamp>
       <rise:relation>
         <rise:name>object_to</rise:name>
         <rise:node>
@@ -805,8 +817,8 @@
       </rise:relation>
     </rise:newRelation>
     <rise:newRelation>
-      <rise:sequenceNumber>21</rise:sequenceNumber>
-      <rise:timeStamp>2022-05-13T21:39:41</rise:timeStamp>
+      <rise:sequenceNumber>19</rise:sequenceNumber>
+      <rise:timeStamp>2022-06-20T02:14:38</rise:timeStamp>
       <rise:relation>
         <rise:name>object_from</rise:name>
         <rise:node>
@@ -823,8 +835,8 @@
       </rise:relation>
     </rise:newRelation>
     <rise:newRelation>
-      <rise:sequenceNumber>22</rise:sequenceNumber>
-      <rise:timeStamp>2022-05-13T21:39:41</rise:timeStamp>
+      <rise:sequenceNumber>20</rise:sequenceNumber>
+      <rise:timeStamp>2022-06-20T02:14:38</rise:timeStamp>
       <rise:relation>
         <rise:name>user_deleted_link</rise:name>
         <rise:node>
@@ -841,8 +853,8 @@
       </rise:relation>
     </rise:newRelation>
     <rise:newRelation>
-      <rise:sequenceNumber>23</rise:sequenceNumber>
-      <rise:timeStamp>2022-05-13T21:39:41</rise:timeStamp>
+      <rise:sequenceNumber>21</rise:sequenceNumber>
+      <rise:timeStamp>2022-06-20T02:14:38</rise:timeStamp>
       <rise:relation>
         <rise:name>user_created_link</rise:name>
         <rise:node>
@@ -859,27 +871,10 @@
       </rise:relation>
     </rise:newRelation>
     <rise:release>
-      <rise:sequenceNumber>24</rise:sequenceNumber>
-      <rise:timeStamp>2022-05-15T04:05:01</rise:timeStamp>
-      <rise:comment>Created from snapshot of model enginer (enginer,a843c315-b92d-4516-9592-4fee4174b233) at evolution #22</rise:comment>
+      <rise:sequenceNumber>22</rise:sequenceNumber>
+      <rise:timeStamp>2022-06-20T02:14:38</rise:timeStamp>
+      <rise:comment>Created from snapshot of model New Model (enginer,bd74e3ae-bca3-41f8-a0be-9cf5d8f9e943) at evolution #35</rise:comment>
     </rise:release>
-    <rise:newAttribute>
-      <rise:sequenceNumber>25</rise:sequenceNumber>
-      <rise:timeStamp>2022-05-16T01:00:44</rise:timeStamp>
-      <rise:entity>
-        <rise:name>permission</rise:name>
-        <rise:attribute>
-          <rise:name>name</rise:name>
-          <rise:dataTypeAlias />
-          <rise:dataType>string</rise:dataType>
-          <rise:dataSize>50</rise:dataSize>
-          <rise:mustBeUnique>False</rise:mustBeUnique>
-          <rise:mustExist>True</rise:mustExist>
-          <rise:description />
-        </rise:attribute>
-        <rise:maxID>0</rise:maxID>
-      </rise:entity>
-    </rise:newAttribute>
   </rise:evolution>
   <rise:publish />
   <rise:presentation>
