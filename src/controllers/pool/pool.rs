@@ -139,8 +139,7 @@ pub fn get_delete(table: String, names: Vec<String>, case: Vec<(String, String, 
 pub fn get_create_table(table: String, fields: Vec<(String, String)>) -> String {
     let mut fields_str = fields.iter().map(|f| format!("{} {}", f.0, f.1)).collect::<Vec<_>>().join(",");
 
-    format!("CREATE TABLE \"{}\" (id serial PRIMARY KEY,{},FOREIGN KEY (user_id)
-      REFERENCES object (id))", table, fields_str)
+    format!("CREATE TABLE \"{}\" (id bigserial PRIMARY KEY,{})", table, fields_str)
 }
 
 pub fn get_alter_table(table: String, fields_to_alter: Vec<(String, String, String)>) -> String {

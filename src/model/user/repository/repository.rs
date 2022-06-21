@@ -27,7 +27,7 @@ impl Repository {
             let groups = Secure_Repository::getUserGroupsbyUserId(id.clone()).await?;
             let row = sql_one(format!("select * from \"user\" where \"id\"='{}'", &id).as_str()).await?;
             User {
-                id: Some(row.get::<String, &str>("login").to_string()),
+                id: Some(id.to_string()),
                 login: row.get::<String, &str>("login").to_string(),
                 password: row.get::<String, &str>("password").to_string(),
                 access_token: row.get::<Option<String>, &str>("access_token").unwrap_or("".to_string()).to_string(),
@@ -44,7 +44,7 @@ impl Repository {
             let row = sql_one(format!("select * from \"user\" where \"login\"='{}'", &login).as_str()).await?;
             User {
                 id: Some(row.get::<String, &str>("login").to_string()),
-                login: row.get::<String, &str>("login").to_string(),
+                login: login.to_string(),
                 password: row.get::<String, &str>("password").to_string(),
                 access_token: row.get::<Option<String>, &str>("access_token").unwrap_or("".to_string()).to_string(),
                 oauth: row.get::<Option<String>, &str>("oauth").unwrap_or("".to_string()).to_string(),

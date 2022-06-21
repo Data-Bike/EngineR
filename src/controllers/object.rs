@@ -96,7 +96,8 @@ mod test {
     fn add_object_type() {
         match block_on(Object_Repository::getObjectTypeFromAlias("fl".to_string())) {
             Ok(_) => { return; }
-            Err(_) => {}
+            Err(_) => {
+            }
         };
 
         match block_on(Object_Repository::createObjectType(ObjectType {
@@ -138,7 +139,7 @@ mod test {
                 Field {
                     id: None,
                     alias: "birthday".to_string(),
-                    kind: "datetime".to_string(),
+                    kind: "timestamp".to_string(),
                     name: "birthday".to_string(),
                     default: None,
                     value: None,
@@ -324,7 +325,7 @@ mod test {
                     {
                         \"id\":\"4\",
                         \"alias\":\"birthday\",
-                        \"kind\":\"varchar(255)\",
+                        \"kind\":\"timestamp\",
                         \"name\":\"datetime\",
                         \"value\":\"1988-03-02T02:00:00.00Z\",
                         \"require\":true,

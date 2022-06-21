@@ -34,7 +34,7 @@
 values
   ('1988-03-02 02:30:00', 'root', 'fl', 'object') returning id;
 
-select * from object_type;]]></console>
+select * from fl;]]></console>
     </connection>
   </component>
   <component name="DBNavigator.Project.DatabaseFileManager">
@@ -44,6 +44,7 @@ select * from object_type;]]></console>
     <connection id="c99551ad-1752-455e-8a38-1f9050c854aa" />
   </component>
   <component name="DBNavigator.Project.DatasetFilterManager">
+    <filter-actions connection-id="c99551ad-1752-455e-8a38-1f9050c854aa" dataset="public.field" active-filter-id="" />
     <filter-actions connection-id="c99551ad-1752-455e-8a38-1f9050c854aa" dataset="public.user" active-filter-id="08b4634f-0826-462d-b96e-4e22da49eaf2">
       <filter id="08b4634f-0826-462d-b96e-4e22da49eaf2" name="1" temporary="false" custom-name="false" type="basic" join-type="AND">
         <condition column="id" operator="=" value="1" active="true" />

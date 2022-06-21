@@ -109,8 +109,8 @@ impl Repository {
             .iter()
             .map(
                 |f| (f.alias.clone(), match f.value.clone() {
-                    Some(v) => format!("'{}'", v),
-                    None => "null".to_string()
+                    Some(v) => format!("{}", v),
+                    None => "".to_string()
                 })
             )
             .collect::<Vec<_>>();
@@ -120,8 +120,12 @@ impl Repository {
 
     async fn insertObjectToGeneralTable(the_object: &Object) -> Result<String, RepositoryError> {
         Ok(insert("object", vec![
-            ("kind", the_object.filled.kind.as_str()),
-            ("alias", the_object.filled.alias.as_str()),
+            // ("kind", the_object.filled.kind.as_str()),
+            ("aggr_object_type_alias", the_object.filled.alias.as_str()),
+            ("object_type_id", match the_object.filled.id.as_ref() {
+                None => { return Err(RepositoryError { message: format!("ObjectType must has id") }); }
+                Some(i) => { i.as_str() }
+            }),
             ("user_created_id", match the_object.user_created.id.as_ref() {
                 None => { return Err(RepositoryError { message: format!("User must has id") }); }
                 Some(d) => { d }
@@ -227,7 +231,7 @@ impl Repository {
         }
 
         for future in futures {
-            block_on(future);
+            block_on(future)?;
         }
         Ok(())
     }
