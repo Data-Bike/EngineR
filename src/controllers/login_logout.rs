@@ -14,8 +14,8 @@ async fn build_cookie(token: &Token) -> Result<Cookie<'static>, ParseError> {
         None => { return Err(ParseError { message: "User request must has id".to_string() }); }
         Some(c) => { c }
     })
-        .domain("")
-        .path("/")
+        // .domain("")
+        // .path("/")
         .secure(true)
         .max_age(time::Duration::days(1))
         .http_only(true)
@@ -70,9 +70,8 @@ mod test {
     use crate::model::user::repository::repository::Repository as User_Repository;
 
 
-    #[test]
-    fn login() {
-        let client = Client::tracked(rocket_build()).expect("valid rocket instance");
+    pub fn add_test_user() {
+
         let user = User {
             id: None,
             login: "root".to_string(),
@@ -83,19 +82,24 @@ mod test {
             access_token: "".to_string(),
             oauth: "".to_string(),
             groups: vec![],
-            date_last_active:None,
-            date_registred:Utc::now().naive_utc()
+            date_last_active: None,
+            date_registred: Utc::now().naive_utc(),
         };
         let res = block_on(User_Repository::createUser(&user));
         assert_eq!(res, Ok("1".to_string()));
+    }
+
+    #[test]
+    fn login() {
+        add_test_user();
+        let client = Client::tracked(rocket_build()).expect("valid rocket instance");
         let mut response = client.post(uri!("/login")).body("{\
             \"login\":\"root\",\
             \"password\":\"testestest\"\
         }").remote(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080))
             .dispatch();
         assert_eq!(response.status(), Status::Ok);
-        println!("{:?}", response.headers());
-        println!("{:?}", response.into_string());
-        // assert_eq!(response.into_string().unwrap(), "Hello!");
+        assert!(response.headers().get("Set-Cookie").count() >= 1);
+        assert_eq!(response.into_string(), Some("OK".to_string()));
     }
 }

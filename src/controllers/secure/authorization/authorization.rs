@@ -6,6 +6,7 @@ pub struct Authorization {}
 
 impl Authorization {
     pub fn auth(user: &User, token: &Token) -> bool {
+        println!("Start resolve strategy");
         Strategy::resolve(user, token)
     }
 }

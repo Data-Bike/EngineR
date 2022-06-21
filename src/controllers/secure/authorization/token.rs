@@ -4,6 +4,7 @@ use crate::model::object::entity::object::{Field, Object, ObjectType};
 use crate::model::secure::entity::permission::{PermissionKind, PermissionLevel};
 use crate::model::user::entity::user::User;
 
+#[derive(Debug,  Clone)]
 pub struct Token {
     pub requestLevel: PermissionLevel,
     pub requestKind: PermissionKind,
@@ -97,6 +98,7 @@ impl Token {
     }
 
     pub fn authorize(&mut self, user: &User) -> bool {
+        println!("Start authorize token");
         let is_auth = Authorization::auth(user, self);
         self.authorized = Some(is_auth);
         return is_auth;

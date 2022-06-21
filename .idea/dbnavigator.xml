@@ -29,18 +29,16 @@
   </component>
   <component name="DBNavigator.Project.DatabaseConsoleManager">
     <connection id="c99551ad-1752-455e-8a38-1f9050c854aa">
-      <console name="EngineR" type="STANDARD" schema="public" session="Main"><![CDATA[select
-  *
-from
-  "user"
-where
-  login = 'root']]></console>
+      <console name="EngineR" type="STANDARD" schema="public" session="Main"><![CDATA[insert into
+  "object" ("date_created", "user_created_id", "alias", "kind")
+values
+  ('1988-03-02 02:30:00', 'root', 'fl', 'object') returning id;
+
+select * from object_type;]]></console>
     </connection>
   </component>
   <component name="DBNavigator.Project.DatabaseFileManager">
-    <open-files>
-      <object connection-id="c99551ad-1752-455e-8a38-1f9050c854aa" object-ref="schemas/public/tables/user" />
-    </open-files>
+    <open-files />
   </component>
   <component name="DBNavigator.Project.DatabaseSessionManager">
     <connection id="c99551ad-1752-455e-8a38-1f9050c854aa" />

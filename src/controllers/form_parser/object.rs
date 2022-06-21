@@ -100,10 +100,10 @@ impl Object {
         let date_created = DateTime::<Utc>::from(match DateTime::parse_from_rfc3339(date_str_created.as_str()) {
             Ok(d) => { d }
             Err(e) => { return Err(ParseError { message: "Error date_created is not rfc3339 date".to_string() }); }
-        });
+        }).naive_utc();
         let date_deleted = date_str_deleted
             .and_then(|d| DateTime::parse_from_rfc3339(d.as_str()).ok())
-            .and_then(|d| Some(DateTime::<Utc>::from(d)));
+            .and_then(|d| Some(DateTime::<Utc>::from(d).naive_utc()));
 
         Ok(Object {
             filled: match
@@ -123,7 +123,7 @@ impl Object {
     pub async fn from_str(string: &str) -> Result<Self, ParseError> {
         let json_object: Value = match from_str::<Value>(string) {
             Ok(v) => { v }
-            Err(e) => { return Err(ParseError { message: "Error cannot parse json".to_string() }); }
+            Err(e) => { return Err(ParseError { message: format!("Error cannot parse json '{:?}'",e.to_string()).to_string() }); }
         };
         Self::from_json(&json_object).await
     }
@@ -155,18 +155,20 @@ impl<'r> FromData<'r> for Object {
                 u
             }
             r => {
-                return Failure((Status { code: 401 }, Self::Error { message: "Error".to_string() }));
+                return Failure((Status { code: 401 }, Self::Error {
+                    message: format!("Error {:?}", r)
+                }));
             }
         };
 
         match Object::from_str(string.as_str()).await {
             Ok(o) => {
                 if !getToken(req, &o).authorize(&user) {
-                    return Failure((Status { code: 403 }, Self::Error { message: "Error".to_string() }));
+                    return Failure((Status { code: 403 }, Self::Error { message: "Error authorize token".to_string() }));
                 }
                 Success(o)
             }
-            Err(e) => { Failure((Status { code: 500 }, Self::Error { message: "Error".to_string() })) }
+            Err(e) => { Failure((Status { code: 500 }, Self::Error { message: format!("Error other {:?}",e.message)  })) }
         }
     }
 }

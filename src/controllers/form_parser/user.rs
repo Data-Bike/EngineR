@@ -3,6 +3,7 @@ use rocket::{Request};
 use async_std::task::block_on;
 use bcrypt::{BcryptResult, DEFAULT_COST};
 use chrono::{DateTime, ParseResult, Utc};
+use rocket::http::Status;
 
 
 use serde_json::{from_str, Value};
@@ -14,8 +15,10 @@ use crate::model::secure::repository::repository::Repository as Secure_repositor
 use crate::model::user::entity::user::User;
 
 use rocket::outcome::IntoOutcome;
+use rocket::outcome::Outcome::Failure;
 use rocket::request::{self, FromRequest};
 use crate::controllers::form_parser::error::ParseError;
+use crate::model::error::RepositoryError;
 
 const LIMIT: u32 = 1024 * 10;
 
@@ -118,13 +121,24 @@ impl<'r> FromRequest<'r> for User {
     type Error = ParseError;
 
     async fn from_request(request: &'r Request<'_>) -> request::Outcome<User, ParseError> {
-        request.cookies()
+        for c in request.cookies().iter(){
+            println!("C:{:?} {:?} {:?}",c.name() ,c.value(), c.secure(), )
+        }
+        println!("Request start to parse user: {}", request.cookies().get_private("user_id").map(|c| c.value().to_string()).unwrap_or("User not found in the cookie".to_string()));
+        match request.cookies()
             .get_private("user_id")
-            .and_then(|cookie| cookie.value().parse().ok())
-            .map(|id| block_on(User_repository::getUserById(id)))
-            .transpose()
-            .ok()
-            .flatten()
+            .and_then(|cookie| {
+                println!("Cookie to parse user: {}", cookie.value());
+                cookie.value().parse().ok()
+            })
+            .map(|id| {
+                println!("User id from cookie: {}", id);
+                block_on(User_repository::getUserById(id))
+            })
+            .transpose() {
+            Ok(u) => { u }
+            Err(e) => { return Failure((Status { code: 403 }, ParseError { message: format!("Error get user from cookie: {:?}", e) })); }
+        }
             .or_forward(())
     }
 }

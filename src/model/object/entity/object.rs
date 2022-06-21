@@ -1,4 +1,4 @@
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDateTime, Utc};
 use crate::model::user::entity::user::User;
 
 use serde::{Serialize, Deserialize};
@@ -27,8 +27,8 @@ pub struct ObjectType {
 #[derive(Serialize, Deserialize, Debug,  Clone)]
 pub struct Object {
     pub(crate) filled: ObjectType,
-    pub date_created: DateTime<Utc>,
-    pub date_deleted: Option<DateTime<Utc>>,
+    pub date_created: NaiveDateTime,
+    pub date_deleted: Option<NaiveDateTime>,
     pub user_created: User,
     pub user_deleted: Option<User>,
     pub(crate) hash: String,

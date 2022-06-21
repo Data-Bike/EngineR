@@ -1,5 +1,5 @@
 use std::str::FromStr;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDateTime, Utc};
 use sqlx::Error as Sqlx_Error;
 use async_std::task::{block_on, JoinHandle, spawn};
 use sqlx::postgres::PgRow;
@@ -19,7 +19,7 @@ impl Repository {
 
     fn getFieldFromRow(row: PgRow) -> Field {
         Field {
-            id: Some(row.get::<String, &str>("id")),
+            id: Some(row.get::<i64, &str>("id").to_string()),
             alias: row.get::<String, &str>("alias"),
             kind: row.get::<String, &str>("kind"),
             name: row.get::<String, &str>("name"),
@@ -43,7 +43,7 @@ impl Repository {
         cache_it!(&alias,object_type_by_alias,{
                 let kind_row = sql_one(format!("select kind,id from object_type where alias = '{}' limit 1", alias).as_str()).await?;
                 let kind = kind_row.get::<String, &str>("kind").to_string();
-                let kind_id = kind_row.get::<String, &str>("id").to_string();
+                let kind_id = kind_row.get::<i64, &str>("id").to_string();
                 let fields_rows = sql(format!("select * from field where object_type_id = '{}'", &kind_id).as_str()).await?;
                 let id = Some(kind_id);
                 let fields = Repository::getFieldsFromRows(fields_rows);
@@ -58,7 +58,7 @@ impl Repository {
 
     pub async fn getObjectTypeFromObjectId(id: String) -> Result<ObjectType, RepositoryError> {
         let object_row = sql_one(format!("select object_type_id from object where id = '{}' limit 1", id).as_str()).await?;
-        let object_type_id = object_row.get::<String, &str>("object_type_id").to_string();
+        let object_type_id = object_row.get::<i64, &str>("object_type_id").to_string();
         let object_type = Self::getObjectTypeFromId(object_type_id).await?;
 
         Ok(object_type)
@@ -76,11 +76,11 @@ impl Repository {
 
            Object {
                 filled: objectType,
-                date_created: object_row.get::<DateTime<Utc>, &str>("date_created"),
-                date_deleted: object_row.get::<Option<DateTime<Utc>>, &str>("date_created"),
+                date_created: object_row.get::<NaiveDateTime, &str>("date_created"),
+                date_deleted: object_row.get::<Option<NaiveDateTime>, &str>("date_created"),
                 user_created: model::user::repository::repository::Repository::getUserById(object_row.get::<String, &str>("user_created_id")).await?,
-                user_deleted: match object_row.get::<Option<String>, &str>("user_deleted_id") {
-                    Some(v) => Some(model::user::repository::repository::Repository::getUserById(v).await?),
+                user_deleted: match object_row.get::<Option<i64>, &str>("user_deleted_id") {
+                    Some(v) => Some(model::user::repository::repository::Repository::getUserById(v.to_string()).await?),
                     None => None
                 },
                 hash: row.get::<String, &str>("hash"),
@@ -126,7 +126,7 @@ impl Repository {
                 None => { return Err(RepositoryError { message: format!("User must has id") }); }
                 Some(d) => { d }
             }.as_str()),
-            ("date_created", the_object.date_created.to_rfc3339().as_str()),
+            ("date_created", the_object.date_created.to_string().as_str()),
         ]).await?)
     }
 

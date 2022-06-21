@@ -21,10 +21,13 @@ impl Strategy {
 
 
     pub fn resolve(user: &User, token: &Token) -> bool {
+        println!("Start SystemVote::allow");
         if !SystemVote::allow(user, token) { return false; };
 
         if token.requestLevel == PermissionLevel::object {
+            println!("Start ObjectVote::allow");
             if !ObjectVote::allow(user, token) { return false; };
+            println!("Start ObjectTypeVote::allow");
             if !ObjectTypeVote::allow(user, token) { return false; };
 
             match token.object_type.clone().and_then(|ot| Some(ot.fields)) {
@@ -34,6 +37,7 @@ impl Strategy {
                         let mut t = Token::fromToken(token);
                         t.object_type_field = Some(f.clone());
                         t.requestLevel = PermissionLevel::object_type_field;
+                        println!("Start ObjectTypeFieldVote::allow");
                         if !ObjectTypeFieldVote::allow(user, &t) { return false; };
                     }
                 }
@@ -41,20 +45,26 @@ impl Strategy {
         }
 
         if token.requestLevel == PermissionLevel::object_type {
+            println!("Start ObjectTypeVote::allow");
             if !ObjectTypeVote::allow(user, token) { return false; };
         }
 
         if token.requestLevel == PermissionLevel::object_type_field {
+            println!("Start ObjectTypeVote::allow");
             if !ObjectTypeVote::allow(user, token) { return false; };
+            println!("Start ObjectTypeFieldVote::allow");
             if !ObjectTypeFieldVote::allow(user, token) { return false; };
         }
 
         if token.requestLevel == PermissionLevel::link {
+            println!("Start LinkVote::allow");
             if !LinkVote::allow(user, token) { return false; };
+            println!("Start LinkTypeVote::allow");
             if !LinkTypeVote::allow(user, token) { return false; };
         }
 
         if token.requestLevel == PermissionLevel::link_type {
+            println!("Start LinkTypeVote::allow");
             if !LinkTypeVote::allow(user, token) { return false; };
         }
         true

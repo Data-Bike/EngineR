@@ -29,7 +29,7 @@ impl Repository {
     }
 
     pub async fn getPermissionsById(id: &str) -> Result<Vec<Permission>, RepositoryError> {
-        let rows = sql(format!("select * from permissions where group_id={}", id).as_str()).await?;
+        let rows = sql(format!("select * from \"permission\" where \"group_id\"='{}'", id).as_str()).await?;
 
         let mut res: Vec<Permission> = Vec::new();
         for row in rows {
@@ -44,6 +44,7 @@ impl Repository {
                 "system" => PermissionLevel::system,
                 "object" => PermissionLevel::object,
                 "object_type" => PermissionLevel::object_type,
+                "object_type_field" => PermissionLevel::object_type_field,
                 "link" => PermissionLevel::link,
                 "link_type" => PermissionLevel::link_type,
 
@@ -58,7 +59,7 @@ impl Repository {
             };
             let name = row.get::<String, &str>("name");
             let object = row.get::<String, &str>("object");
-            let id = Some(row.get::<String, &str>("id"));
+            let id = Some(row.get::<i64, &str>("id").to_string());
             res.push(Permission {
                 id,
                 access,
@@ -115,7 +116,7 @@ impl Repository {
     }
 
     pub async fn getUserGroupsbyUser(user: User) -> Result<Vec<Group>, RepositoryError> {
-        let rows = sql(format!("select g.* from user_group ug join group g on ug.user_id={} and ug.group_id=g.id ", match user.id.as_ref() {
+        let rows = sql(format!("select g.* from \"r_user_group\" ug join \"group\" g on ug.user_id={} and ug.group_id=g.id ", match user.id.as_ref() {
             None => { return Err(RepositoryError { message: format!("User must has id") }); }
             Some(i) => { i }
         }).as_str()).await?;
@@ -153,6 +154,44 @@ impl Repository {
         }
         Ok(res)
     }
+
+    pub async fn getUserGroupsbyUserId(id: String) -> Result<Vec<Group>, RepositoryError> {
+        let rows = sql(format!("select g.* from \"r_user_group\" ug join \"group\" g on ug.user_id={} and ug.group_id=g.id ", id.as_str()).as_str()).await?;
+
+        let mut res: Vec<Group> = Vec::new();
+        for row in rows {
+            let alias = row.get::<String, &str>("alias");
+            let name = row.get::<String, &str>("name");
+            let level = row.get::<String, &str>("level");
+            let id = Some(row.get::<i64, &str>("id").to_string());
+            let permissions_vec = Self::getPermissionsByGroup(Group {
+                id: id.clone(),
+                alias,
+                level: level.clone(),
+                name,
+                permissions: PermissionsGroup {
+                    system: vec![],
+                    object: vec![],
+                    object_type: vec![],
+                    object_type_field: vec![],
+                    link: vec![],
+                    link_type: vec![],
+                },
+            }).await?;
+            let alias = row.get::<String, &str>("alias");
+            let name = row.get::<String, &str>("name");
+            let permissions = Self::getPermissionsGroupByPermissions(permissions_vec);
+            res.push(Group {
+                id,
+                alias,
+                level,
+                name,
+                permissions,
+            });
+        }
+        Ok(res)
+    }
+
     pub async fn getGroupById(id: &str) -> Result<Group, RepositoryError> {
         let ids = id.to_string();
         cache_it!(&ids,group_by_id,{
@@ -161,7 +200,7 @@ impl Repository {
                 alias: group_row.get::<String, &str>("alias"),
                 name: group_row.get::<String, &str>("name"),
                 level: group_row.get::<String, &str>("level"),
-                id: Some(group_row.get::<String, &str>("id")),
+                id: Some(group_row.get::<i64, &str>("id").to_string()),
                 permissions: Self::getPermissionsGroupByPermissions(
                     Self::getPermissionsById(id).await?
                 ),
@@ -194,6 +233,20 @@ impl Repository {
         }
 
         for permission in permissions.object.iter() {
+            nv.push(
+                vec![
+                    ("name".to_string(), permission.name.to_string()),
+                    ("level".to_string(), permission.level.to_string()),
+                    ("alias".to_string(), permission.alias.to_string()),
+                    ("object".to_string(), permission.object.to_string()),
+                    ("kind".to_string(), permission.kind.to_string()),
+                    ("access".to_string(), permission.access.to_string()),
+                    ("group_id".to_string(), id.to_string()),
+                ]
+            );
+        }
+
+        for permission in permissions.object_type.iter() {
             nv.push(
                 vec![
                     ("name".to_string(), permission.name.to_string()),
@@ -248,7 +301,7 @@ impl Repository {
                 ]
             );
         }
-        vec![]
+        nv
     }
 
     pub async fn createGroup(group: &Group) -> Result<String, RepositoryError> {
@@ -278,7 +331,7 @@ impl Repository {
         futures.push(
             spawn(
                 delete(
-                    "permissions".to_string(),
+                    "permission".to_string(),
                     vec![],
                     vec![("group_id".to_string(), "=".to_string(), id.to_string())],
                 )

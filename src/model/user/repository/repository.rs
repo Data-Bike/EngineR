@@ -13,6 +13,7 @@ use crate::model::error::RepositoryError;
 use crate::model::link::entity::link::Link;
 use crate::model::object::entity::object::{Field, Object, ObjectType};
 use crate::model::user::entity::user::User;
+use crate::model::secure::repository::repository::Repository as Secure_Repository;
 
 pub struct Repository {}
 
@@ -23,7 +24,8 @@ impl Repository {
 
     pub async fn getUserById(id: String) -> Result<User, RepositoryError> {
         cache_it!(&id,user_by_login,{
-            let row = sql_one(format!("select * from user where id={}", &id).as_str()).await?;
+            let groups = Secure_Repository::getUserGroupsbyUserId(id.clone()).await?;
+            let row = sql_one(format!("select * from \"user\" where \"id\"='{}'", &id).as_str()).await?;
             User {
                 id: Some(row.get::<String, &str>("login").to_string()),
                 login: row.get::<String, &str>("login").to_string(),
@@ -32,7 +34,7 @@ impl Repository {
                 oauth: row.get::<Option<String>, &str>("oauth").unwrap_or("".to_string()).to_string(),
                 date_last_active: row.try_get::<NaiveDateTime, &str>("date_last_active").ok(),
                 date_registred: row.get::<NaiveDateTime, &str>("date_registred"),
-                groups: vec![],
+                groups: groups,
             }
         })
     }
@@ -89,7 +91,7 @@ impl Repository {
         for nv_user_group in nv_user_groups {
             futures.push(
                 spawn(
-                    insert("user_group".to_string(), nv_user_group)
+                    insert("r_user_group".to_string(), nv_user_group)
                 )
             );
         }
