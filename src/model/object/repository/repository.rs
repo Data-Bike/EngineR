@@ -7,6 +7,7 @@ use sqlx::Row;
 use crate::controllers::pool::pool::{create_table, get_insert, insert, select, sql, sql_one, update};
 use crate::{cache_it, model, remove_it_from_cache};
 use crate::model::error::RepositoryError;
+use crate::model::lfu_cache::cache::CACHE;
 use crate::model::object::entity::object::{Field, Object, ObjectType};
 use crate::model::user::entity::user::User;
 
@@ -66,24 +67,37 @@ impl Repository {
 
 
     pub async fn hydrateFilledObjectType(id: String) -> Result<Object, RepositoryError> {
+        println!("Start getting hydrateFilledObjectType");
         cache_it!(&id,object_by_id,{
+        println!("Start getting getObjectTypeFromObjectId");
                 let mut objectType = Self::getObjectTypeFromObjectId(id.clone()).await?;
-            let row = sql_one(format!("select * from {} where id='{}'", objectType.alias.clone(), id.clone()).as_str()).await?;
+        println!("Start getting getObjectTypeFromObjectId ok");
+        println!("Start getting row = sql_one");
+            let row = sql_one(format!("select * from \"{}\" where id='{}'", objectType.alias.clone(), id.clone()).as_str()).await?;
+        println!("Start getting row = sql_one ok");
+        println!("Start filling fields");
             for field in &mut objectType.fields {
-                field.value = Some(row.get::<String, &str>(field.alias.as_str()));
+                field.value = match field.kind.as_str() {
+                    "timestamp"=>{Some(row.get::<NaiveDateTime, &str>(field.alias.as_str()).to_string())}
+                    _=>{Some(row.get::<String, &str>(field.alias.as_str()).to_string())}
+                };
             }
-            let object_row = sql_one(format!("select * from object where id = '{}' limit 1", id).as_str()).await?;
+        println!("Start filling fields ok");
+        println!("Start  object_row = sql_one");
+            let object_row = sql_one(format!("select * from \"object\" where id = '{}' limit 1", id).as_str()).await?;
+        println!("Start  object_row = sql_one ok");
 
            Object {
                 filled: objectType,
                 date_created: object_row.get::<NaiveDateTime, &str>("date_created"),
-                date_deleted: object_row.get::<Option<NaiveDateTime>, &str>("date_created"),
-                user_created: model::user::repository::repository::Repository::getUserById(object_row.get::<String, &str>("user_created_id")).await?,
+                date_deleted: object_row.get::<Option<NaiveDateTime>, &str>("date_deleted"),
+                user_created: model::user::repository::repository::Repository::getUserById(object_row.get::<i64, &str>("user_created_id").to_string()).await?,
                 user_deleted: match object_row.get::<Option<i64>, &str>("user_deleted_id") {
                     Some(v) => Some(model::user::repository::repository::Repository::getUserById(v.to_string()).await?),
                     None => None
                 },
-                hash: row.get::<String, &str>("hash"),
+                hash:"".to_string(),
+                // hash: object_row.get::<String, &str>("hash"),
                 id: Some(id),
             }
         })
@@ -136,9 +150,9 @@ impl Repository {
 
     pub async fn getObjectTypeFromId(id: String) -> Result<ObjectType, Sqlx_Error> {
         cache_it!(&id,object_type_by_id,{
-            let fields_rows = sql(format!("select * from field where id = '{}'", id).as_str()).await?;
+            let fields_rows = sql(format!("select * from field where object_type_id = '{}'", id).as_str()).await?;
             let fields = Repository::getFieldsFromRows(fields_rows);
-            let row = sql_one(format!("select kind from object_type where id = '{}' limit 1", id).as_str()).await?;
+            let row = sql_one(format!("select * from object_type where id = '{}' limit 1", id).as_str()).await?;
 
             let kind = row.get::<String, &str>("kind").to_string();
             let alias = row.get::<String, &str>("alias").to_string();

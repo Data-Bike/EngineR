@@ -54,7 +54,8 @@ macro_rules! cache_it {
                 {
                 use crate::model::lfu_cache::cache::CACHE;
                 use caches::Cache;
-                Ok(match CACHE.lock().await.$cache.get($key) {
+                let cache_res = CACHE.lock().await.$cache.get($key);
+                Ok(match cache_res {
                     None => {
                         $x
                     }

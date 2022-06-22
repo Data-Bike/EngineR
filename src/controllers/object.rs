@@ -10,10 +10,13 @@ use crate::model::object::repository::repository::Repository;
 
 #[get("/get/<id>")]
 async fn get_object(id: usize) -> RawHtml<String> {
+    println!("Start getting object by id");
     let object = Repository::hydrateFilledObjectType(id.to_string()).await.ok();
+    println!("Got object");
     match object {
         None => { RawHtml(format!("ERROR")) }
         Some(o) => {
+            println!("Object to json");
             RawHtml(
                 match to_value(o) {
                     Ok(x) => { x }
@@ -158,6 +161,8 @@ mod test {
             }
         };
     }
+
+
 
     fn get_user_groups() -> Vec<Group> {
         let g = Group {
@@ -340,6 +345,22 @@ mod test {
             \"user_created\":\"1\",
             \"hash\":\"\"\
         }");
+        // request.add_header(h);
+        let cookie = CookieBuilder::new("user_id", "1").secure(true);
+        let response = request.private_cookie(cookie.finish()).dispatch();
+
+
+        assert_eq!(response.status(), Status::Ok);
+        // assert_eq!(response.into_string().unwrap(), "Hello!");
+    }
+
+    #[test]
+    fn get_object() {
+        let session_cookie = login();
+        println!("Set cookie: '{}'", session_cookie.as_str());
+        let h = Header::new("Cookie", session_cookie);
+        let client = Client::tracked(rocket_build()).expect("valid rocket instance");
+        let request = client.get(uri!("/object/get/1"));
         // request.add_header(h);
         let cookie = CookieBuilder::new("user_id", "1").secure(true);
         let response = request.private_cookie(cookie.finish()).dispatch();
