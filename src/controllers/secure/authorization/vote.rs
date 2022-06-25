@@ -54,21 +54,28 @@ pub struct ObjectTypeVote {}
 
 impl ObjectTypeVote {
     pub fn allow(user: &User, token: &Token) -> bool {
+        println!("Start ObjectTypeVote::allow...");
         let object = match token.object_type.as_ref() {
             None => { return false; }
             Some(o) => { o }
         };
+        println!("Start ObjectTypeVote::allow ok");
         for group in &user.groups {
+
+            println!("Start ObjectTypeVote::allow group '{}'...",group.alias);
             for permission in &group.permissions.object_type {
+                println!("Start ObjectTypeVote::allow permission '{}'...",permission.alias);
                 if permission.object == *match object.id.as_ref() {
-                    None => { return false; }
+                    None => {println!("Start ObjectTypeVote::allow permission NO OBJECT ID '{}'",permission.alias); return true; }
                     Some(o) => { o }
                 } &&
                     permission.kind == token.requestKind &&
                     permission.access == allow {
                     return true;
                 }
+                println!("Start ObjectTypeVote::allow permission '{}' ok",permission.alias);
             }
+            println!("Start ObjectTypeVote::allow group '{}' ok",group.alias);
         }
         return false;
     }

@@ -4,7 +4,7 @@ use rocket::get;
 use rocket::post;
 use rocket::fairing::AdHoc;
 use serde_json::value::to_value;
-use crate::model::object::entity::object::Object;
+use crate::model::object::entity::object::{Object, ObjectType};
 use crate::model::object::repository::repository::Repository;
 
 
@@ -51,6 +51,37 @@ async fn search_object(object: Object) -> RawJson<String> {
     }
 }
 
+#[post("/add_object_type", data = "<object_type>")]
+async fn add_object_type(object_type: ObjectType) -> RawJson<String> {
+    let res = Repository::createObjectType(object_type).await.ok();
+    match res {
+        None => { RawJson(format!("ERROR")) }
+        Some(_) => {
+            RawJson("OK".to_string())
+        }
+    }
+}
+
+
+#[get("/get_object_type/<id>")]
+async fn get_object_type(id: usize) -> RawHtml<String> {
+    println!("Start getting object by id");
+    let object_type = Repository::getObjectTypeFromId(id.to_string()).await.ok();
+    println!("Got object");
+    match object_type {
+        None => { RawHtml(format!("ERROR")) }
+        Some(ot) => {
+            println!("Object to json");
+            RawHtml(
+                match to_value(ot) {
+                    Ok(x) => { x }
+                    Err(e) => { return RawHtml("ERROR".to_string()); }
+                }.to_string()
+            )
+        }
+    }
+}
+
 #[get("/hello")]
 async fn hello() -> RawJson<String> {
     return RawJson(format!("Hello!"));
@@ -59,7 +90,7 @@ async fn hello() -> RawJson<String> {
 
 pub fn stage() -> AdHoc {
     AdHoc::on_ignite("Managing objects", move |rocket| async move {
-        rocket.mount("/object", routes![get_object,add_object,hello])
+        rocket.mount("/object", routes![get_object,add_object,hello,add_object_type,get_object_type])
     })
 }
 
@@ -99,8 +130,7 @@ mod test {
     fn add_object_type() {
         match block_on(Object_Repository::getObjectTypeFromAlias("fl".to_string())) {
             Ok(_) => { return; }
-            Err(_) => {
-            }
+            Err(_) => {}
         };
 
         match block_on(Object_Repository::createObjectType(ObjectType {
@@ -161,7 +191,6 @@ mod test {
             }
         };
     }
-
 
 
     fn get_user_groups() -> Vec<Group> {
@@ -368,5 +397,44 @@ mod test {
 
         assert_eq!(response.status(), Status::Ok);
         // assert_eq!(response.into_string().unwrap(), "Hello!");
+    }
+
+
+    #[test]
+    fn add_object_type_test() {
+        let session_cookie = login();
+        println!("Set cookie: '{}'", session_cookie.as_str());
+        let h = Header::new("Cookie", session_cookie);
+        let client = Client::tracked(rocket_build()).expect("valid rocket instance");
+        let request = client.post(uri!("/object/add_object_type")).body("{\
+                \"fields\":[
+                    {
+                        \"id\":\"1\",
+                        \"alias\":\"code\",
+                        \"kind\":\"varchar(255)\",
+                        \"name\":\"code\",
+                        \"require\":true,
+                        \"index\":true,
+                        \"preview\":true
+                    },
+                    {
+                        \"id\":\"2\",
+                        \"alias\":\"number\",
+                        \"kind\":\"varchar(255)\",
+                        \"name\":\"number\",
+                        \"require\":true,
+                        \"index\":true,
+                        \"preview\":true
+                    }
+                ],
+                \"kind\":\"object\",
+                \"alias\":\"tl\"
+            }");
+        // request.add_header(h);
+        let cookie = CookieBuilder::new("user_id", "1").secure(true);
+        let response = request.private_cookie(cookie.finish()).dispatch();
+
+
+        assert_eq!(response.status(), Status::Ok);
     }
 }
