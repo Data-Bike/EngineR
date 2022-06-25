@@ -1,27 +1,45 @@
-use rocket::{Request};
+use rocket::{Data, Request};
 
 use async_std::task::block_on;
 use bcrypt::{BcryptResult, DEFAULT_COST};
-use chrono::{DateTime, ParseResult, Utc};
-use rocket::http::Status;
+use chrono::{DateTime, NaiveDateTime, ParseResult, Utc};
+use rocket::data::{FromData, ToByteUnit};
+use rocket::http::{Method, Status};
 
 
 use serde_json::{from_str, Value};
 
 
-use crate::model::secure::entity::permission::Group;
+use crate::controllers::secure::authorization::token::Token;
+use crate::model::secure::entity::permission::{Group, PermissionKind};
 use crate::model::user::repository::repository::Repository as User_repository;
 use crate::model::secure::repository::repository::Repository as Secure_repository;
 use crate::model::user::entity::user::User;
 
 use rocket::outcome::IntoOutcome;
-use rocket::outcome::Outcome::Failure;
+use rocket::outcome::Outcome::{Failure, Success};
 use rocket::request::{self, FromRequest};
 use crate::controllers::form_parser::error::ParseError;
 use crate::model::error::RepositoryError;
 
 const LIMIT: u32 = 1024 * 10;
 
+
+pub fn getToken(req: &Request<'_>, object: &User) -> Token {
+    let requestKind = match req.method() {
+        Method::Get => { PermissionKind::read }
+        Method::Post => {
+            match object.id {
+                None => { PermissionKind::create }
+                Some(_) => { PermissionKind::edit }
+            }
+        }
+        _ => { PermissionKind::read }
+    };
+
+    let system = req.uri().path().segments().get(0).unwrap_or("").to_string();
+    Token::fromUser(requestKind, system)
+}
 
 impl User {
     pub async fn from_str(string: &str) -> Result<Self, ParseError> {
@@ -42,7 +60,7 @@ impl User {
                     None => { None }
                     Some(v) => {
                         match v.as_str() {
-                            None => { return Err(ParseError { message: format!("Error {} is not string",$key) }); }
+                            None => { None }
                             Some(v) => { Some(v.to_string()) }
                         }
                     }
@@ -62,8 +80,8 @@ impl User {
         let date_registred_str = err_resolve!(json_object,"date_registred");
         let date_last_active_str = err_resolve_option!(json_object,"date_last_active");
         let date_registred = match DateTime::parse_from_rfc3339(date_registred_str) {
-            Ok(d) => { DateTime::<Utc>::from(d) }
-            Err(_) => { return Err(ParseError { message: format!("Cannt parse date") }); }
+            Ok(d) => {d}
+            Err(e) => { return Err(ParseError { message: format!("Cannt parse date {}",e) }); }
         }.naive_utc();
         let date_last_active = date_last_active_str
             .and_then(|d| DateTime::parse_from_rfc3339(d.as_str()).ok())
@@ -121,8 +139,8 @@ impl<'r> FromRequest<'r> for User {
     type Error = ParseError;
 
     async fn from_request(request: &'r Request<'_>) -> request::Outcome<User, ParseError> {
-        for c in request.cookies().iter(){
-            println!("C:{:?} {:?} {:?}",c.name() ,c.value(), c.secure(), )
+        for c in request.cookies().iter() {
+            println!("C:{:?} {:?} {:?}", c.name(), c.value(), c.secure(), )
         }
         println!("Request start to parse user: {}", request.cookies().get_private("user_id").map(|c| c.value().to_string()).unwrap_or("User not found in the cookie".to_string()));
         match request.cookies()
@@ -140,5 +158,43 @@ impl<'r> FromRequest<'r> for User {
             Err(e) => { return Failure((Status { code: 403 }, ParseError { message: format!("Error get user from cookie: {:?}", e) })); }
         }
             .or_forward(())
+    }
+}
+
+
+#[rocket::async_trait]
+impl<'r> FromData<'r> for User {
+    type Error = ParseError;
+
+    async fn from_data(req: &'r Request<'_>, data: Data<'r>) -> rocket::data::Outcome<'r, Self, Self::Error> {
+        let string = match data.open(LIMIT.bytes()).into_string().await {
+            Ok(string) if string.is_complete() => string.into_inner(),
+            Ok(_) => return Failure((Status::PayloadTooLarge, Self::Error { message: "Error".to_string() })),
+            Err(e) => return Failure((Status::InternalServerError, Self::Error { message: "Error".to_string() })),
+        };
+
+        // We store `string` in request-local cache for long-lived borrows.
+        //let string = request::local_cache!(req, string);
+
+        let user = match User::from_request(req).await {
+            Success(u) => {
+                u
+            }
+            r => {
+                return Failure((Status { code: 401 }, Self::Error {
+                    message: format!("Error {:?}", r)
+                }));
+            }
+        };
+
+        match User::from_str(string.as_str()).await {
+            Ok(o) => {
+                if !getToken(req, &o).authorize(&user) {
+                    return Failure((Status { code: 403 }, Self::Error { message: "Error authorize token".to_string() }));
+                }
+                Success(o)
+            }
+            Err(e) => { Failure((Status { code: 500 }, Self::Error { message: format!("Error other {:?}", e.message) })) }
+        }
     }
 }

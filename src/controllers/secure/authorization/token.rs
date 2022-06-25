@@ -31,6 +31,19 @@ pub const EmptyToken: Token = Token {
 
 
 impl Token {
+    pub fn fromUser(requestKind: PermissionKind, system: String) -> Token {
+        Token {
+            requestLevel: PermissionLevel::system,
+            requestKind,
+            system,
+            object_type: None,
+            object_type_field: None,
+            object: None,
+            link_type: None,
+            link: None,
+            authorized: None,
+        }
+    }
     pub fn fromObject(requestKind: PermissionKind, system: String, object: &Object) -> Token {
         Token {
             requestLevel: PermissionLevel::object,

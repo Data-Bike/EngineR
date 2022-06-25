@@ -195,7 +195,7 @@ impl Repository {
     pub async fn getGroupById(id: &str) -> Result<Group, RepositoryError> {
         let ids = id.to_string();
         cache_it!(&ids,group_by_id,{
-            let group_row = sql_one(format!("select * from group where id = {} limit 1", id).as_str()).await?;
+            let group_row = sql_one(format!("select * from \"group\" where \"id\" = '{}' limit 1", id).as_str()).await?;
             Group {
                 alias: group_row.get::<String, &str>("alias"),
                 name: group_row.get::<String, &str>("name"),
