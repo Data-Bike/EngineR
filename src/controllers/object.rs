@@ -60,7 +60,7 @@ async fn hello() -> RawJson<String> {
 
 pub fn stage() -> AdHoc {
     AdHoc::on_ignite("Managing objects", move |rocket| async move {
-        rocket.mount("/object", routes![get_object,add_object,hello,add_object_type,get_object_type])
+        rocket.mount("/object", routes![get_object,add_object,hello])
     })
 }
 

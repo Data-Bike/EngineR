@@ -81,7 +81,7 @@ mod test {
     #[test]
     fn hello() {
         let client = Client::tracked(rocket_build()).expect("valid rocket instance");
-        let mut response = client.get(uri!("/object/hello")).dispatch();
+        let mut response = client.get(uri!("/object_type/hello")).dispatch();
         assert_eq!(response.status(), Status::Ok);
         assert_eq!(response.into_string().unwrap(), "Hello!");
     }
@@ -281,7 +281,7 @@ mod test {
         println!("Set cookie: '{}'", session_cookie.as_str());
         let h = Header::new("Cookie", session_cookie);
         let client = Client::tracked(rocket_build()).expect("valid rocket instance");
-        let request = client.post(uri!("/object/add_object_type")).body("{\
+        let request = client.post(uri!("/object_type/add")).body("{\
                 \"fields\":[
                     {
                         \"id\":\"1\",
@@ -319,7 +319,7 @@ mod test {
         println!("Set cookie: '{}'", session_cookie.as_str());
         let h = Header::new("Cookie", session_cookie);
         let client = Client::tracked(rocket_build()).expect("valid rocket instance");
-        let request = client.get(uri!("/object/get_object_type/1"));
+        let request = client.get(uri!("/object_type/get/1"));
         // request.add_header(h);
         let cookie = CookieBuilder::new("user_id", "1").secure(true);
         let response = request.private_cookie(cookie.finish()).dispatch();
