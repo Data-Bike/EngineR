@@ -5,3 +5,4 @@ pub mod secure;
 pub mod pool;
 pub mod form_parser;
 pub mod login_logout;
+pub mod object_type;

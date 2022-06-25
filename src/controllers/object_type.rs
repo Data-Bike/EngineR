@@ -8,17 +8,31 @@ use crate::model::object::entity::object::{Object, ObjectType};
 use crate::model::object::repository::repository::Repository;
 
 
+
+
+#[post("/add", data = "<object_type>")]
+async fn add_object_type(object_type: ObjectType) -> RawJson<String> {
+    let res = Repository::createObjectType(object_type).await.ok();
+    match res {
+        None => { RawJson(format!("ERROR")) }
+        Some(_) => {
+            RawJson("OK".to_string())
+        }
+    }
+}
+
+
 #[get("/get/<id>")]
-async fn get_object(id: usize) -> RawHtml<String> {
+async fn get_object_type(id: usize) -> RawHtml<String> {
     println!("Start getting object by id");
-    let object = Repository::hydrateFilledObjectType(id.to_string()).await.ok();
+    let object_type = Repository::getObjectTypeFromId(id.to_string()).await.ok();
     println!("Got object");
-    match object {
+    match object_type {
         None => { RawHtml(format!("ERROR")) }
-        Some(o) => {
+        Some(ot) => {
             println!("Object to json");
             RawHtml(
-                match to_value(o) {
+                match to_value(ot) {
                     Ok(x) => { x }
                     Err(e) => { return RawHtml("ERROR".to_string()); }
                 }.to_string()
@@ -26,31 +40,6 @@ async fn get_object(id: usize) -> RawHtml<String> {
         }
     }
 }
-
-#[post("/add", data = "<object>")]
-async fn add_object(object: Object) -> RawJson<String> {
-    let id = Repository::createObject(&object).await.ok();
-    match id {
-        None => { RawJson(format!("ERROR")) }
-        Some(i) => { RawJson(i) }
-    }
-}
-
-#[post("/search", data = "<object>")]
-async fn search_object(object: Object) -> RawJson<String> {
-    let res = Repository::searchObject(&object).await.ok();
-    match res {
-        None => { RawJson(format!("ERROR")) }
-        Some(r) => {
-            RawJson(
-                match to_value(r) {
-                    Ok(x) => { x }
-                    Err(e) => { return RawJson("ERROR".to_string()); }
-                }.to_string())
-        }
-    }
-}
-
 
 #[get("/hello")]
 async fn hello() -> RawJson<String> {
@@ -60,7 +49,7 @@ async fn hello() -> RawJson<String> {
 
 pub fn stage() -> AdHoc {
     AdHoc::on_ignite("Managing objects", move |rocket| async move {
-        rocket.mount("/object", routes![get_object,add_object,hello,add_object_type,get_object_type])
+        rocket.mount("/object_type", routes![hello,add_object_type,get_object_type])
     })
 }
 
@@ -285,87 +274,58 @@ mod test {
         return cookie_str;
     }
 
+
     #[test]
-    fn add_object() {
-        add_object_type();
+    fn add_object_type_test() {
         let session_cookie = login();
         println!("Set cookie: '{}'", session_cookie.as_str());
         let h = Header::new("Cookie", session_cookie);
         let client = Client::tracked(rocket_build()).expect("valid rocket instance");
-        let mut request = client.post(uri!("/object/add")).body("{\
-            \"filled\":{\
-                \"id\":\"1\",
+        let request = client.post(uri!("/object/add_object_type")).body("{\
                 \"fields\":[
                     {
                         \"id\":\"1\",
-                        \"alias\":\"lastname\",
+                        \"alias\":\"code\",
                         \"kind\":\"varchar(255)\",
-                        \"name\":\"lastname\",
-                        \"value\":\"Platonov\",
+                        \"name\":\"code\",
                         \"require\":true,
                         \"index\":true,
                         \"preview\":true
                     },
                     {
                         \"id\":\"2\",
-                        \"alias\":\"firstname\",
+                        \"alias\":\"number\",
                         \"kind\":\"varchar(255)\",
-                        \"name\":\"firstname\",
-                        \"value\":\"Alexander\",
-                        \"require\":true,
-                        \"index\":true,
-                        \"preview\":true
-                    },
-                    {
-                        \"id\":\"3\",
-                        \"alias\":\"patronymic\",
-                        \"kind\":\"varchar(255)\",
-                        \"name\":\"patronymic\",
-                        \"value\":\"Alexanderovich\",
-                        \"require\":true,
-                        \"index\":true,
-                        \"preview\":true
-                    },
-                    {
-                        \"id\":\"4\",
-                        \"alias\":\"birthday\",
-                        \"kind\":\"timestamp\",
-                        \"name\":\"datetime\",
-                        \"value\":\"1988-03-02T02:00:00.00Z\",
+                        \"name\":\"number\",
                         \"require\":true,
                         \"index\":true,
                         \"preview\":true
                     }
                 ],
                 \"kind\":\"object\",
-                \"alias\":\"fl\"
-            },\
-            \"date_created\":\"1988-03-02T02:30:00.00Z\",\
-            \"user_created\":\"1\",
-            \"hash\":\"\"\
-        }");
+                \"alias\":\"tl\"
+            }");
         // request.add_header(h);
         let cookie = CookieBuilder::new("user_id", "1").secure(true);
         let response = request.private_cookie(cookie.finish()).dispatch();
 
 
         assert_eq!(response.status(), Status::Ok);
-        // assert_eq!(response.into_string().unwrap(), "Hello!");
     }
 
     #[test]
-    fn get_object() {
+    fn get_object_type_test() {
         let session_cookie = login();
         println!("Set cookie: '{}'", session_cookie.as_str());
         let h = Header::new("Cookie", session_cookie);
         let client = Client::tracked(rocket_build()).expect("valid rocket instance");
-        let request = client.get(uri!("/object/get/1"));
+        let request = client.get(uri!("/object/get_object_type/1"));
         // request.add_header(h);
         let cookie = CookieBuilder::new("user_id", "1").secure(true);
         let response = request.private_cookie(cookie.finish()).dispatch();
 
 
         assert_eq!(response.status(), Status::Ok);
-        // assert_eq!(response.into_string().unwrap(), "Hello!");
+        assert_eq!(response.into_string().unwrap(), "{\"alias\":\"fl\",\"fields\":[{\"alias\":\"lastname\",\"default\":\"varchar(255)\",\"id\":\"1\",\"index\":false,\"kind\":\"varchar(255)\",\"name\":\"lastname\",\"preview\":false,\"require\":false,\"value\":null},{\"alias\":\"birthday\",\"default\":\"timestamp\",\"id\":\"2\",\"index\":false,\"kind\":\"timestamp\",\"name\":\"birthday\",\"preview\":false,\"require\":false,\"value\":null},{\"alias\":\"firstname\",\"default\":\"varchar(255)\",\"id\":\"3\",\"index\":false,\"kind\":\"varchar(255)\",\"name\":\"firstname\",\"preview\":false,\"require\":false,\"value\":null},{\"alias\":\"patronymic\",\"default\":\"varchar(255)\",\"id\":\"4\",\"index\":false,\"kind\":\"varchar(255)\",\"name\":\"patronymic\",\"preview\":false,\"require\":false,\"value\":null}],\"id\":\"1\",\"kind\":\"object\"}");
     }
 }
