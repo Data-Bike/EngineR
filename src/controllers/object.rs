@@ -451,6 +451,6 @@ mod test {
 
 
         assert_eq!(response.status(), Status::Ok);
-        // assert_eq!(response.into_string().unwrap(), "Hello!");
+        assert_eq!(response.into_string().unwrap(), "{\"alias\":\"fl\",\"fields\":[{\"alias\":\"lastname\",\"default\":\"varchar(255)\",\"id\":\"1\",\"index\":false,\"kind\":\"varchar(255)\",\"name\":\"lastname\",\"preview\":false,\"require\":false,\"value\":null},{\"alias\":\"birthday\",\"default\":\"timestamp\",\"id\":\"2\",\"index\":false,\"kind\":\"timestamp\",\"name\":\"birthday\",\"preview\":false,\"require\":false,\"value\":null},{\"alias\":\"firstname\",\"default\":\"varchar(255)\",\"id\":\"3\",\"index\":false,\"kind\":\"varchar(255)\",\"name\":\"firstname\",\"preview\":false,\"require\":false,\"value\":null},{\"alias\":\"patronymic\",\"default\":\"varchar(255)\",\"id\":\"4\",\"index\":false,\"kind\":\"varchar(255)\",\"name\":\"patronymic\",\"preview\":false,\"require\":false,\"value\":null}],\"id\":\"1\",\"kind\":\"object\"}");
     }
 }
