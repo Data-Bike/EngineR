@@ -1,12 +1,13 @@
 use caches::Cache;
 use chrono::{DateTime, Utc};
+use futures::executor::block_on;
 use sqlx::postgres::PgRow;
 use sqlx::Row;
 use crate::cache_it;
 use crate::model::link::entity::link::{Link, LinkType};
 use crate::model::user::repository::repository;
 use crate::model::object::repository::repository::Repository as Object_repository;
-use crate::controllers::pool::pool::{insert, sql, sql_one};
+use crate::controllers::pool::pool::{insert, select, sql, sql_one};
 use crate::model::error::RepositoryError;
 use crate::model::lfu_cache::cache::CACHE;
 use crate::model::secure::entity::permission::PermissionLevel::link;
@@ -74,7 +75,7 @@ impl Repository {
         Ok(lt)
     }
 
-    pub async fn getEnityFromRow(&'static mut self, row: PgRow) -> Result<Link, RepositoryError> {
+    pub async fn getEnityFromRow(row: &PgRow) -> Result<Link, RepositoryError> {
         let object_from = Object_repository::hydrateFilledObjectType(
             row.get::<String, &str>("object_from_id").to_string(),
         ).await?;
@@ -102,16 +103,61 @@ impl Repository {
         })
     }
 
-    pub async fn setLink(id1: String, id2: String, userName: String) -> Result<(), RepositoryError> {
+    pub async fn getLinksFromRows(rows: Vec<PgRow>) -> Result<Vec<Link>, RepositoryError> {
+        Ok(rows
+            .iter()
+            .map(|r| block_on(Self::getEnityFromRow(r)))
+            .collect::<Result<Vec<Link>, RepositoryError>>()?)
+    }
+
+    pub async fn getLinkById(id: String) -> Result<Link, RepositoryError> {
+        let rs = select(
+            "link".to_string(),
+            vec!["*".to_string()],
+            vec![vec![("id".to_string(), "=".to_string(), id)]],
+        ).await?;
+        let lnk = match Self::getLinksFromRows(rs).await?.pop() {
+            None => { return Err(RepositoryError { message: format!("Does not have any link") }); }
+            Some(l) => { l }
+        };
+        Ok(lnk)
+    }
+
+    pub async fn setLink(the_link: Link) -> Result<(), RepositoryError> {
+        let id1 = match the_link.object_from.id {
+            None => { return Err(RepositoryError { message: format!("Object_from must has id") }); }
+            Some(i) => { i }
+        };
+
+        let id2 = match the_link.object_to.id {
+            None => { return Err(RepositoryError { message: format!("Object_to must has id") }); }
+            Some(i) => { i }
+        };
+
+        let userId = match the_link.user_created.id {
+            None => { return Err(RepositoryError { message: format!("User_created must has id") }); }
+            Some(i) => { i }
+        };
+
         let sql = format!("insert into link (object_from_id,object_to_id,user_created_id,date_created) values ({},{},{},{})",
-                          id1, id2, userName, chrono::offset::Utc::now().to_rfc3339());
+                          id1, id2, userId, chrono::offset::Utc::now().to_rfc3339());
         sql_one(sql.as_str()).await?;
         Ok(())
     }
 
-    pub async fn unsetLink(id: String, userName: String) -> Result<(), RepositoryError> {
+    pub async fn unsetLink(the_link: Link) -> Result<(), RepositoryError> {
+        let id = match the_link.id {
+            None => { return Err(RepositoryError { message: format!("Link must has id") }); }
+            Some(i) => { i }
+        };
+
+        let userId = match the_link.user_deleted.and_then(|u| u.id) {
+            None => { return Err(RepositoryError { message: format!("User_deleted must has id") }); }
+            Some(i) => { i }
+        };
+
         let sql = format!("update link set user_deleted = '{}', date_deleted = '{}' where id = '{}'",
-                          userName, chrono::offset::Utc::now().to_rfc3339(), id);
+                          userId, chrono::offset::Utc::now().to_rfc3339(), id);
         sql_one(sql.as_str()).await?;
         Ok(())
     }
