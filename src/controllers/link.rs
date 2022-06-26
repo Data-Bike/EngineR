@@ -52,7 +52,7 @@ pub fn stage() -> AdHoc {
     })
 }
 
-// #[cfg(test)]
+// #[cfg(object)]
 // mod tests;
 
 #[cfg(test)]
@@ -166,6 +166,22 @@ mod test {
                     kind: PermissionKind::create,
                     name: "system_of_object_access".to_string(),
                     object: "object".to_string(),
+                },Permission {
+                    access: Access::allow,
+                    alias: "system_of_object_access".to_string(),
+                    id: None,
+                    level: PermissionLevel::system,
+                    kind: PermissionKind::create,
+                    name: "system_of_object_access".to_string(),
+                    object: "user".to_string(),
+                },Permission {
+                    access: Access::allow,
+                    alias: "system_of_object_access".to_string(),
+                    id: None,
+                    level: PermissionLevel::system,
+                    kind: PermissionKind::create,
+                    name: "system_of_object_access".to_string(),
+                    object: "object_type".to_string(),
                 }],
                 object: vec![],
                 object_type: vec![Permission {

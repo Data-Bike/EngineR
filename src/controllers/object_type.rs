@@ -53,7 +53,7 @@ pub fn stage() -> AdHoc {
     })
 }
 
-// #[cfg(test)]
+// #[cfg(object)]
 // mod tests;
 
 #[cfg(test)]
@@ -154,24 +154,40 @@ mod test {
 
     fn get_user_groups() -> Vec<Group> {
         let g = Group {
-            alias: "acc_object".to_string(),
+            alias: "acc_object3".to_string(),
             name: "acc_object".to_string(),
             level: "system".to_string(),
             id: Some("1".to_string()),
             permissions: PermissionsGroup {
                 system: vec![Permission {
                     access: Access::allow,
-                    alias: "system_of_object_access".to_string(),
+                    alias: "system_of_object_access4".to_string(),
                     id: None,
                     level: PermissionLevel::system,
                     kind: PermissionKind::create,
                     name: "system_of_object_access".to_string(),
                     object: "object".to_string(),
+                },Permission {
+                    access: Access::allow,
+                    alias: "system_of_user_access4".to_string(),
+                    id: None,
+                    level: PermissionLevel::system,
+                    kind: PermissionKind::create,
+                    name: "system_of_object_access".to_string(),
+                    object: "user".to_string(),
+                },Permission {
+                    access: Access::allow,
+                    alias: "system_of_object_type_access4".to_string(),
+                    id: None,
+                    level: PermissionLevel::system,
+                    kind: PermissionKind::create,
+                    name: "system_of_object_access".to_string(),
+                    object: "object_type".to_string(),
                 }],
                 object: vec![],
                 object_type: vec![Permission {
                     access: Access::allow,
-                    alias: "Access to FL".to_string(),
+                    alias: "Access to FL5".to_string(),
                     id: None,
                     level: PermissionLevel::object_type,
                     kind: PermissionKind::create,
@@ -181,7 +197,7 @@ mod test {
                 object_type_field: vec![
                     Permission {
                         access: Access::allow,
-                        alias: "Access to Lastname".to_string(),
+                        alias: "Access to Lastname4".to_string(),
                         id: None,
                         level: PermissionLevel::object_type_field,
                         kind: PermissionKind::create,
@@ -190,7 +206,7 @@ mod test {
                     },
                     Permission {
                         access: Access::allow,
-                        alias: "Access to Firstname".to_string(),
+                        alias: "Access to Firstname4".to_string(),
                         id: None,
                         level: PermissionLevel::object_type_field,
                         kind: PermissionKind::create,
@@ -199,7 +215,7 @@ mod test {
                     },
                     Permission {
                         access: Access::allow,
-                        alias: "Access to Patronymic".to_string(),
+                        alias: "Access to Patronymic4".to_string(),
                         id: None,
                         level: PermissionLevel::object_type_field,
                         kind: PermissionKind::create,
@@ -208,7 +224,7 @@ mod test {
                     },
                     Permission {
                         access: Access::allow,
-                        alias: "Access to birthday".to_string(),
+                        alias: "Access to birthday4".to_string(),
                         id: None,
                         level: PermissionLevel::object_type_field,
                         kind: PermissionKind::create,
@@ -231,7 +247,7 @@ mod test {
     }
 
     pub fn add_test_user() {
-        match block_on(User_Repository::getUserByLogin("root".to_string())) {
+        match block_on(User_Repository::getUserByLogin("root1".to_string())) {
             Ok(_) => { return; }
             Err(_) => {}
         };
@@ -239,7 +255,7 @@ mod test {
         let user = User {
             id: None,
             login: "root".to_string(),
-            password: match bcrypt::hash("testestest".to_string(), DEFAULT_COST) {
+            password: match bcrypt::hash("testestest2".to_string(), DEFAULT_COST) {
                 Ok(h) => { h }
                 Err(e) => { panic!("Cannt hashed password"); }
             },
@@ -257,7 +273,7 @@ mod test {
         add_test_user();
         let client = Client::tracked(rocket_build()).expect("valid rocket instance");
         let mut response = client.post(uri!("/login")).body("{\
-            \"login\":\"root\",\
+            \"login\":\"root2\",\
             \"password\":\"testestest\"\
         }").remote(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080))
             .dispatch();
@@ -273,7 +289,7 @@ mod test {
         assert_eq!(response.into_string(), Some("OK".to_string()));
         return cookie_str;
     }
-
+    use rand::{distributions::Alphanumeric, Rng};
 
     #[test]
     fn add_object_type_test() {
@@ -281,30 +297,39 @@ mod test {
         println!("Set cookie: '{}'", session_cookie.as_str());
         let h = Header::new("Cookie", session_cookie);
         let client = Client::tracked(rocket_build()).expect("valid rocket instance");
-        let request = client.post(uri!("/object_type/add")).body("{\
+
+        let alias: String = rand::thread_rng()
+            .sample_iter(&Alphanumeric)
+            .take(7)
+            .map(char::from)
+            .collect();
+
+        let str_tmp_ot = format!("{{\
                 \"fields\":[
-                    {
-                        \"id\":\"1\",
+                    {{
                         \"alias\":\"code\",
                         \"kind\":\"varchar(255)\",
                         \"name\":\"code\",
                         \"require\":true,
                         \"index\":true,
                         \"preview\":true
-                    },
-                    {
-                        \"id\":\"2\",
+                    }},
+                    {{
                         \"alias\":\"number\",
                         \"kind\":\"varchar(255)\",
                         \"name\":\"number\",
                         \"require\":true,
                         \"index\":true,
                         \"preview\":true
-                    }
+                    }}
                 ],
                 \"kind\":\"object\",
-                \"alias\":\"tl\"
-            }");
+                \"alias\":\"{}\"
+            }}", alias);
+
+        // let str_ot = format!(str_tmp_ot);
+
+        let request = client.post(uri!("/object_type/add")).body(str_tmp_ot);
         // request.add_header(h);
         let cookie = CookieBuilder::new("user_id", "1").secure(true);
         let response = request.private_cookie(cookie.finish()).dispatch();
@@ -321,7 +346,7 @@ mod test {
         let client = Client::tracked(rocket_build()).expect("valid rocket instance");
         let request = client.get(uri!("/object_type/get/1"));
         // request.add_header(h);
-        let cookie = CookieBuilder::new("user_id", "1").secure(true);
+        let cookie = CookieBuilder::new("user_id", "2").secure(true);
         let response = request.private_cookie(cookie.finish()).dispatch();
 
 

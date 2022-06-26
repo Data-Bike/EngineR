@@ -71,7 +71,6 @@ mod test {
 
 
     pub fn add_test_user() {
-
         let user = User {
             id: None,
             login: "root".to_string(),
@@ -85,6 +84,10 @@ mod test {
             date_last_active: None,
             date_registred: Utc::now().naive_utc(),
         };
+
+        if block_on(User_Repository::getUserByLogin(user.login.clone())).is_ok() {
+            return;
+        }
         let res = block_on(User_Repository::createUser(&user));
         assert_eq!(res, Ok("1".to_string()));
     }
