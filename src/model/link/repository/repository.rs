@@ -77,15 +77,16 @@ impl Repository {
 
     pub async fn getEnityFromRow(row: &PgRow) -> Result<Link, RepositoryError> {
         let object_from = Object_repository::hydrateFilledObjectType(
-            row.get::<String, &str>("object_from_id").to_string(),
+            row.get::<i64, &str>("object_from_id").to_string(),
         ).await?;
 
         let object_to = Object_repository::hydrateFilledObjectType(
-            row.get::<String, &str>("object_to_id").to_string(),
+            row.get::<i64, &str>("object_to_id").to_string(),
         ).await?;
 
-        let user_created = repository::Repository::getUserById(row.get::<String, &str>("user_created_id").to_string()).await?;
-        let user_deleted = if row.get::<i64, &str>("user_deleted_id").to_string().as_str() != "" { Some(repository::Repository::getUserById(row.get::<String, &str>("user_deleted_id")).await?) } else { None };
+        let user_created = repository::Repository::getUserById(row.get::<i64, &str>("user_created_id").to_string()).await?;
+        let user_deleted =  row.get::<Option<i64>, &str>("user_deleted_id").and_then(|d| Some(block_on(repository::Repository::getUserById(d.to_string())))).transpose()?;
+        // { Some(repository::Repository::getUserById(row.get::<i64, &str>("user_deleted_id").to_string()).await?) } else { None };
         let date_created = row.get::<NaiveDateTime, &str>("date_created");
         let date_deleted = row.get::<Option<NaiveDateTime>, &str>("date_deleted");
         let link_type_id = row.get::<i64, &str>("link_type_id").to_string();

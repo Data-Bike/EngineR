@@ -3,7 +3,7 @@ use crate::model::secure::entity::permission::Group;
 use serde::{Serialize, Deserialize};
 
 
-#[derive(Serialize, Deserialize, Debug,  Clone)]
+#[derive(Serialize, Deserialize, Debug,  Clone, PartialEq)]
 pub struct User {
     pub id: Option<String>,
     pub login: String,

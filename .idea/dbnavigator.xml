@@ -32,7 +32,7 @@
       <console name="EngineR" type="STANDARD" schema="public" session="Main"><![CDATA[select
   *
 from
-  "link";]]></console>
+  "link_type";]]></console>
     </connection>
   </component>
   <component name="DBNavigator.Project.DatabaseFileManager">
@@ -104,7 +104,7 @@ from
           <deprecated-pwd value="dGVzdHBhc3N3b3Jk" />
         </database>
         <properties>
-          <auto-commit value="false" />
+          <auto-commit value="true" />
         </properties>
         <ssh-settings>
           <active value="false" />

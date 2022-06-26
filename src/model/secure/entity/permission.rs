@@ -58,7 +58,7 @@ impl ToString for PermissionKind {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct PermissionsGroup {
     pub system: Vec<Permission>,
     pub object: Vec<Permission>,
@@ -68,7 +68,7 @@ pub struct PermissionsGroup {
     pub link_type: Vec<Permission>,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct Group {
     pub alias: String,
     pub name: String,
@@ -77,7 +77,7 @@ pub struct Group {
     pub permissions: PermissionsGroup,
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct Permission {
     pub access: Access,
     pub alias: String,

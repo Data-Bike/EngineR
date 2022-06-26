@@ -91,7 +91,7 @@ mod test {
         // println!("Set cookie: '{}'", session_cookie.as_str());
         // let h = Header::new("Cookie", session_cookie);
         let client = Client::tracked(rocket_build()).expect("valid rocket instance");
-        let request = client.post(uri!("/user/add")).body("{\"access_token\":\"\",\"date_last_active\":null,\"date_registred\":\"1996-12-19T16:39:57-08:00\",\"groups\":[\"1\"],\"login\":\"root2\",\"oauth\":\"\",\"password\":\"$2b$12$4H2xurOmbAlkrk2ZcgbeBe4RgaPk23D118IhYLv1kLOCBCPIDxj62\"}");
+        let request = client.post(uri!("/user/add")).body("{\"access_token\":\"\",\"date_last_active\":null,\"date_registred\":\"1996-12-19T16:39:57.123456\",\"groups\":[\"1\"],\"login\":\"root2\",\"oauth\":\"\",\"password\":\"$2b$12$4H2xurOmbAlkrk2ZcgbeBe4RgaPk23D118IhYLv1kLOCBCPIDxj62\"}");
         // request.add_header(h);
         let cookie = CookieBuilder::new("user_id", user.id.unwrap()).secure(true);
         let response = request.private_cookie(cookie.finish()).dispatch();
@@ -114,6 +114,12 @@ mod test {
 
 
         assert_eq!(response.status(), Status::Ok);
-        assert_eq!(response.into_string().unwrap(), "{\"access_token\":\"\",\"date_last_active\":null,\"date_registred\":\"2022-06-26T13:12:27.323376\",\"groups\":[],\"id\":\"1\",\"login\":\"root\",\"oauth\":\"\",\"password\":\"$2b$12$Cv/IRehHUxGhobc5KiZmNumQmauD3qe6EaQ6lNfw2LLxJmrENCy0G\"}");
+        let u_gotten =
+            block_on(
+                User::from_str(response.into_string().unwrap().as_str())
+            ).unwrap();
+        let u_saved = block_on(User_Repository::getUserById("1".to_string())).unwrap();
+        assert_eq!(u_gotten.id, u_saved.id);
+        // assert_eq!(response.into_string().unwrap(), "{\"access_token\":\"\",\"date_last_active\":null,\"date_registred\":\"2022-06-26T13:12:27.323376\",\"groups\":[],\"id\":\"1\",\"login\":\"root\",\"oauth\":\"\",\"password\":\"$2b$12$Cv/IRehHUxGhobc5KiZmNumQmauD3qe6EaQ6lNfw2LLxJmrENCy0G\"}");
     }
 }

@@ -53,7 +53,7 @@ impl Field {
                     None => { return Err(ParseError { message: format!("Error {} not found",$key) }); }
                     Some(v) => { v }
                 }.as_bool() {
-                    None => { return Err(ParseError { message: format!("Error {} is not string",$key) }); }
+                    None => { return Err(ParseError { message: format!("Error {} is not bool",$key) }); }
                     Some(v) => { v }
                 }
             };
@@ -64,7 +64,7 @@ impl Field {
                     None => { None }
                     Some(v) => {
                         match v.as_str() {
-                            None => { return Err(ParseError { message: format!("Error {} is not string",$key) }); }
+                            None => { None }
                             Some(v) => { Some(v.to_string()) }
                         }
                     }

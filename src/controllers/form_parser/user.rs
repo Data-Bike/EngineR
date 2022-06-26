@@ -79,13 +79,12 @@ impl User {
         let oauth = err_resolve!(json_object,"oauth");
         let date_registred_str = err_resolve!(json_object,"date_registred");
         let date_last_active_str = err_resolve_option!(json_object,"date_last_active");
-        let date_registred = match DateTime::parse_from_rfc3339(date_registred_str) {
+        let date_registred = match NaiveDateTime::parse_from_str(date_registred_str,"%Y-%m-%dT%H:%M:%S%.6f") {
             Ok(d) => {d}
-            Err(e) => { return Err(ParseError { message: format!("Cannt parse date {}",e) }); }
-        }.naive_utc();
+            Err(e) => { return Err(ParseError { message: format!("Cannt parse date with value:'{}' {}",date_registred_str,e) }); }
+        };
         let date_last_active = date_last_active_str
-            .and_then(|d| DateTime::parse_from_rfc3339(d.as_str()).ok())
-            .map(|d| DateTime::<Utc>::from(d).naive_utc());
+            .and_then(|d| NaiveDateTime::parse_from_str(d.as_str(),"%Y-%m-%dT%H:%M:%S%.6f").ok());
         let groups = match match json_object.get("groups") {
             None => { return Err(ParseError { message: format!("Error {} not found", "groups") }); }
             Some(v) => { v }

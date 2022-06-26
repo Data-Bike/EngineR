@@ -3,7 +3,7 @@ use crate::model::user::entity::user::User;
 
 use serde::{Serialize, Deserialize};
 
-#[derive(Serialize, Deserialize, Debug,  Clone)]
+#[derive(Serialize, Deserialize, Debug,  Clone, PartialEq)]
 pub struct Field {
     pub id: Option<String>,
     pub alias: String,
@@ -16,7 +16,7 @@ pub struct Field {
     pub preview: bool,
 }
 
-#[derive(Serialize, Deserialize, Debug,  Clone)]
+#[derive(Serialize, Deserialize, Debug,  Clone, PartialEq)]
 pub struct ObjectType {
     pub id: Option<String>,
     pub fields: Vec<Field>,
@@ -24,7 +24,7 @@ pub struct ObjectType {
     pub alias: String,
 }
 
-#[derive(Serialize, Deserialize, Debug,  Clone)]
+#[derive(Serialize, Deserialize, Debug,  Clone, PartialEq)]
 pub struct Object {
     pub(crate) filled: ObjectType,
     pub date_created: NaiveDateTime,

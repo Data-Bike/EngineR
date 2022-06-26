@@ -32,7 +32,8 @@
           <list>
             <DockerVolumeBindingImpl>
               <option name="containerPath" value="/docker-entrypoint-initdb.d" />
-              <option name="hostPath" value="C:\Users\gorod\IdeaProjects\EngineR\src\model\sql\" />
+              <option name="hostPath" value="C:\Users\gorod\IdeaProjects\EngineR\src\model\sql" />
+              <option name="readOnly" value="true" />
             </DockerVolumeBindingImpl>
           </list>
         </option>
