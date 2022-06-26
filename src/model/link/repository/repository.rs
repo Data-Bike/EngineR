@@ -139,8 +139,13 @@ impl Repository {
             Some(i) => { i }
         };
 
-        let sql = format!("insert into link (object_from_id,object_to_id,user_created_id,date_created) values ({},{},{},{})",
-                          id1, id2, userId, chrono::offset::Utc::now().to_rfc3339());
+        let linkTypeId = match the_link.link_type.id {
+            None => { return Err(RepositoryError { message: format!("Link_type must has id") }); }
+            Some(i) => { i }
+        };
+
+        let sql = format!("insert into \"link\" (\"object_from_id\",\"object_to_id\",\"user_created_id\",\"date_created\",\"link_type_id\") values ('{}','{}','{}','{}','{}')",
+                          id1, id2, userId, chrono::offset::Utc::now().to_rfc3339(),linkTypeId);
         sql_one(sql.as_str()).await?;
         Ok(())
     }

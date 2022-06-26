@@ -32,7 +32,7 @@
       <console name="EngineR" type="STANDARD" schema="public" session="Main"><![CDATA[select
   *
 from
-  "field";]]></console>
+  "link";]]></console>
     </connection>
   </component>
   <component name="DBNavigator.Project.DatabaseFileManager">
