@@ -1,5 +1,5 @@
 use caches::Cache;
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDateTime, Utc};
 use futures::executor::block_on;
 use sqlx::postgres::PgRow;
 use sqlx::Row;
@@ -41,8 +41,8 @@ impl Repository {
                     id: Some(id.to_string()),
                     alias: row.get::<String, &str>("alias"),
                     name: row.get::<String, &str>("name"),
-                    object_type_from: Object_repository::getObjectTypeFromId(row.get::<String, &str>("object_type_from_id")).await?,
-                    object_type_to: Object_repository::getObjectTypeFromId(row.get::<String, &str>("object_type_to_id")).await?,
+                    object_type_from: Object_repository::getObjectTypeFromId(row.get::<i64, &str>("object_type_from_id").to_string()).await?,
+                    object_type_to: Object_repository::getObjectTypeFromId(row.get::<i64, &str>("object_type_to_id").to_string()).await?,
                 }
         })
     }
@@ -85,12 +85,12 @@ impl Repository {
         ).await?;
 
         let user_created = repository::Repository::getUserById(row.get::<String, &str>("user_created_id").to_string()).await?;
-        let user_deleted = if row.get::<String, &str>("user_deleted_id").as_str() != "" { Some(repository::Repository::getUserById(row.get::<String, &str>("user_deleted_id")).await?) } else { None };
-        let date_created = row.get::<DateTime<Utc>, &str>("date_created");
-        let date_deleted = row.get::<Option<DateTime<Utc>>, &str>("date_deleted");
-        let link_type_id = row.get::<&str, &str>("link_type_id");
-        let link_type = Self::getLinkTypeById(link_type_id).await?;
-        let id = Some(row.get::<String, &str>("id"));
+        let user_deleted = if row.get::<i64, &str>("user_deleted_id").to_string().as_str() != "" { Some(repository::Repository::getUserById(row.get::<String, &str>("user_deleted_id")).await?) } else { None };
+        let date_created = row.get::<NaiveDateTime, &str>("date_created");
+        let date_deleted = row.get::<Option<NaiveDateTime>, &str>("date_deleted");
+        let link_type_id = row.get::<i64, &str>("link_type_id").to_string();
+        let link_type = Self::getLinkTypeById(link_type_id.as_str()).await?;
+        let id = Some(row.get::<i64, &str>("id").to_string());
         Ok(Link {
             id,
             object_from,

@@ -3,6 +3,7 @@ use rocket::{Data, Request};
 
 
 use chrono::{DateTime, Utc};
+use futures::executor::block_on;
 
 use rocket::http::{Method, Status};
 use rocket::outcome::Outcome::{Failure, Success};
@@ -17,6 +18,7 @@ use crate::model::secure::entity::permission::{PermissionKind};
 use crate::model::user::repository::repository::Repository as User_repository;
 use crate::model::link::repository::repository::Repository as Link_repository;
 use crate::model::user::entity::user::User;
+use crate::user;
 
 const LIMIT: u32 = 1024 * 10;
 
@@ -51,6 +53,20 @@ impl Link {
             };
         }
 
+        macro_rules! err_resolve_option {
+            ( $x:expr, $key:expr ) => {
+                match $x.get($key) {
+                    None => { None }
+                    Some(v) => {
+                        match v.as_str() {
+                            None => { return Err(ParseError { message: format!("Error {} is not string",$key) }); }
+                            Some(v) => { Some(v.to_string()) }
+                        }
+                    }
+                }
+            };
+        }
+
         let json_object: Value = match from_str::<Value>(string) {
             Ok(v) => { v }
             Err(e) => { return Err(ParseError { message: "Error cannot parse JSON".to_string() }); }
@@ -64,24 +80,33 @@ impl Link {
         };
         let object_to_id = err_resolve!(json_object,"object_to_id");
         let user_created_id = err_resolve!(json_object,"user_created_id");
-        let user_deleted_id = err_resolve!(json_object,"user_deleted_id");
+        let user_deleted_id = err_resolve_option!(json_object,"user_deleted_id");
         let link_type_id = err_resolve!(json_object,"link_type_id");
         let date_created_str = err_resolve!(json_object,"date_created");
-        let date_deleted_str = err_resolve!(json_object,"date_deleted");
+        let date_deleted_str = err_resolve_option!(json_object,"date_deleted");
+
+        let user_deleted_pre_res = user_deleted_id.and_then(|id| Some(block_on(User_repository::getUserById(id))));
+        let user_deleted = match user_deleted_pre_res {
+            None => { None }
+            Some(x) => { Some(x?) }
+        };
+
+
+        let date_deleted = date_deleted_str
+            .and_then(|d| DateTime::parse_from_rfc3339(d.as_str()).ok())
+            .and_then(|d| Some(DateTime::<Utc>::from(d).naive_utc()));
+
+
+        let date_created = DateTime::<Utc>::from(match DateTime::parse_from_rfc3339(date_created_str) {
+            Ok(d) => { d }
+            Err(e) => { return Err(ParseError { message: "Error date_created is not rfc3339 date".to_string() }); }
+        }).naive_utc();
+
+
         let object_from = Object_repository::hydrateFilledObjectType(object_from_id.to_string()).await?;
         let object_to = Object_repository::hydrateFilledObjectType(object_to_id.to_string()).await?;
         let user_created = User_repository::getUserById(user_created_id.to_string()).await?;
-        let user_deleted = if user_deleted_id == "" { None } else { Some(User_repository::getUserById(user_deleted_id.to_string()).await?) };
-        let date_created = DateTime::<Utc>::from(match DateTime::parse_from_rfc3339(date_created_str) {
-            Ok(x) => { x }
-            Err(e) => { return Err(ParseError { message: e.to_string() }); }
-        });
-        let date_deleted = if date_deleted_str == "" { None } else {
-            Some(DateTime::<Utc>::from(match DateTime::parse_from_rfc3339(date_deleted_str) {
-                Ok(x) => { x }
-                Err(e) => { return Err(ParseError { message: e.to_string() }); }
-            }))
-        };
+
         let link_type = Link_repository::getLinkTypeById(link_type_id).await?;
         let id = match json_object.get("id") {
             None => { None }
@@ -120,25 +145,25 @@ impl<'r> FromData<'r> for Link {
     async fn from_data(req: &'r Request<'_>, data: Data<'r>) -> Outcome<'r, Self, Self::Error> {
         let string = match data.open(LIMIT.bytes()).into_string().await {
             Ok(string) if string.is_complete() => string.into_inner(),
-            Ok(_) => return Failure((Status::PayloadTooLarge, Self::Error { message: "Error".to_string() })),
-            Err(e) => return Failure((Status::InternalServerError, Self::Error { message: "Error".to_string() })),
+            Ok(r) => return Failure((Status::PayloadTooLarge, Self::Error { message: format!("Error {}",r.value)  })),
+            Err(e) => return Failure((Status::InternalServerError, Self::Error { message: format!("Error {}",e)  })),
         };
         let user = match User::from_request(req).await {
             Success(u) => {
                 u
             }
             r => {
-                return Failure((Status { code: 401 }, Self::Error { message: "Error".to_string() }));
+                return Failure((Status { code: 401 }, Self::Error { message: format!("Error {}",r.to_string()) }));
             }
         };
         match Link::from_str(string.as_str()).await {
             Ok(o) => {
                 if !getToken(req, &o).authorize(&user) {
-                    return Failure((Status { code: 403 }, Self::Error { message: "Error".to_string() }));
+                    return Failure((Status { code: 403 }, Self::Error { message: format!("Error {}","authorize") }));
                 }
                 Success(o)
             }
-            Err(e) => { Failure((Status { code: 500 }, Self::Error { message: "Error".to_string() })) }
+            Err(e) => { Failure((Status { code: 500 }, Self::Error { message: format!("Error {}",e) })) }
         }
     }
 }

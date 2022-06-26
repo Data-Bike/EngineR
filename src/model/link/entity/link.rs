@@ -1,4 +1,4 @@
-use chrono::{ DateTime, Utc};
+use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
 use crate::model::object::entity::object::{Object, ObjectType};
 use crate::model::user::entity::user::User;
 use serde::{Serialize, Deserialize};
@@ -20,6 +20,6 @@ pub struct Link {
     pub link_type: LinkType,
     pub user_created: User,
     pub user_deleted: Option<User>,
-    pub date_created: DateTime<Utc>,
-    pub date_deleted: Option<DateTime<Utc>>,
+    pub date_created: NaiveDateTime,
+    pub date_deleted: Option<NaiveDateTime>,
 }

@@ -14,9 +14,34 @@ use crate::model::object::entity::object::{Field, ObjectType};
 use crate::model::secure::entity::permission::{Access, Group, Permission, PermissionKind, PermissionLevel, PermissionsGroup};
 use crate::model::user::entity::user::User;
 use crate::model::user::repository::repository::Repository as User_Repository;
+use crate::model::link::repository::repository::Repository as Link_Repository;
 use crate::model::object::repository::repository::Repository as Object_Repository;
 use crate::model::secure::repository::repository::Repository as Secure_Repository;
 use rand::{distributions::Alphanumeric, Rng};
+use crate::model::link::entity::link::LinkType;
+
+pub fn add_link_type() -> LinkType {
+    let alias = format!("test_link_type_{}", rand::thread_rng()
+        .sample_iter(&Alphanumeric)
+        .take(7)
+        .map(char::from)
+        .collect::<String>());
+    let name = format!("Test link type {}", alias);
+    let object_type_from = block_on(Object_Repository::getObjectTypeFromId("1".to_string())).unwrap();
+    let object_type_to = block_on(Object_Repository::getObjectTypeFromId("2".to_string())).unwrap();
+
+    let lt = LinkType {
+        id: None,
+        alias,
+        name,
+        object_type_from,
+        object_type_to,
+    };
+
+    let res = block_on(Link_Repository::createLinkType(&lt)).unwrap();
+    return res;
+}
+
 
 pub fn add_object_type() {
     match block_on(Object_Repository::getObjectTypeFromAlias("fl".to_string())) {
@@ -131,6 +156,18 @@ pub fn get_user_groups() -> Vec<Group> {
                 kind: PermissionKind::create,
                 name: "system_of_object_access".to_string(),
                 object: "object_type".to_string(),
+            }, Permission {
+                access: Access::allow,
+                alias: format!("system_of_{}_access_", rand::thread_rng()
+                    .sample_iter(&Alphanumeric)
+                    .take(7)
+                    .map(char::from)
+                    .collect::<String>()),
+                id: None,
+                level: PermissionLevel::system,
+                kind: PermissionKind::create,
+                name: "system_of_object_access".to_string(),
+                object: "link".to_string(),
             }],
             object: vec![],
             object_type: vec![Permission {
@@ -205,7 +242,20 @@ pub fn get_user_groups() -> Vec<Group> {
                 },
             ],
             link: vec![],
-            link_type: vec![],
+            link_type: vec![
+                Permission {
+                    access: Access::allow,
+                    alias: format!("system_of_{}_access_", rand::thread_rng()
+                        .sample_iter(&Alphanumeric)
+                        .take(7)
+                        .map(char::from)
+                        .collect::<String>()),
+                    id: None,
+                    level: PermissionLevel::link_type,
+                    kind: PermissionKind::create,
+                    name: "Access to birthday".to_string(),
+                    object: "*".to_string(),
+                }, ],
         },
     };
     match block_on(Secure_Repository::createGroup(&g)) {
@@ -255,7 +305,7 @@ pub fn login() -> User {
     let mut response = client.post(uri!("/login")).body(format!("{{\
             \"login\":\"{}\",\
             \"password\":\"testestest\"\
-        }}",user.login)).remote(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080))
+        }}", user.login)).remote(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080))
         .dispatch();
     let cookie_str = response
         .headers()

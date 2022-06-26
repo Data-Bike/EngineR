@@ -68,7 +68,7 @@ mod test {
     use rocket::log::private::kv::Source;
     use rocket::uri;
     use crate::{rocket_build};
-    use crate::controllers::test::login;
+    use crate::controllers::test::{add_link_type, login};
     use crate::model::error::RepositoryError;
     use crate::model::object::entity::object::{Field, ObjectType};
     use crate::model::secure::entity::permission::{Access, Group, Permission, PermissionKind, PermissionLevel, PermissionsGroup};
@@ -88,35 +88,20 @@ mod test {
 
 
     #[test]
-    fn add_object_type_test() {
+    fn add_link_test() {
         let user = login();
+        let lt = add_link_type();
         // println!("Set cookie: '{}'", session_cookie.as_str());
         // let h = Header::new("Cookie", session_cookie);
         let client = Client::tracked(rocket_build()).expect("valid rocket instance");
-        let request = client.post(uri!("/link/add")).body("{\
-                \"fields\":[
-                    {
-                        \"id\":\"1\",
-                        \"alias\":\"code\",
-                        \"kind\":\"varchar(255)\",
-                        \"name\":\"code\",
-                        \"require\":true,
-                        \"index\":true,
-                        \"preview\":true
-                    },
-                    {
-                        \"id\":\"2\",
-                        \"alias\":\"number\",
-                        \"kind\":\"varchar(255)\",
-                        \"name\":\"number\",
-                        \"require\":true,
-                        \"index\":true,
-                        \"preview\":true
-                    }
-                ],
-                \"kind\":\"object\",
-                \"alias\":\"tl\"
-            }");
+        let request = client.post(uri!("/link/add")).body(format!("{{\
+                \"object_from_id\":\"1\",
+                \"object_to_id\":\"2\",
+                \"user_created_id\":\"1\",
+                \"link_type_id\":\"{}\",
+                \"date_created\":\"2022-03-02T02:00:00.00Z\",
+                \"object_from_id\":\"1\"
+            }}", lt.id.unwrap()));
         // request.add_header(h);
         let cookie = CookieBuilder::new("user_id", user.id.unwrap()).secure(true);
         let response = request.private_cookie(cookie.finish()).dispatch();
@@ -126,7 +111,7 @@ mod test {
     }
 
     #[test]
-    fn get_object_type_test() {
+    fn get_link_test() {
         let user = login();
         // println!("Set cookie: '{}'", session_cookie.as_str());
         // let h = Header::new("Cookie", session_cookie);
