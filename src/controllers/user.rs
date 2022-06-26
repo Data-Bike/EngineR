@@ -107,13 +107,13 @@ mod test {
         // println!("Set cookie: '{}'", session_cookie.as_str());
         // let h = Header::new("Cookie", session_cookie);
         let client = Client::tracked(rocket_build()).expect("valid rocket instance");
-        let request = client.get(uri!("/user/get/2"));
+        let request = client.get(uri!("/user/get/1"));
         // request.add_header(h);
         let cookie = CookieBuilder::new("user_id", user.id.unwrap()).secure(true);
         let response = request.private_cookie(cookie.finish()).dispatch();
 
 
         assert_eq!(response.status(), Status::Ok);
-        assert_eq!(response.into_string().unwrap(), "{\"access_token\":\"\",\"date_last_active\":null,\"date_registred\":\"2022-06-21T17:13:18.039234\",\"groups\":[{\"alias\":\"acc_object\",\"id\":\"1\",\"level\":\"system\",\"name\":\"acc_object\",\"permissions\":{\"link\":[],\"link_type\":[],\"object\":[],\"object_type\":[{\"access\":\"allow\",\"alias\":\"Access to FL\",\"id\":\"4\",\"kind\":\"create\",\"level\":\"object_type\",\"name\":\"system_of_object_access\",\"object\":\"1\"}],\"object_type_field\":[{\"access\":\"allow\",\"alias\":\"Access to Firstname\",\"id\":\"1\",\"kind\":\"create\",\"level\":\"object_type_field\",\"name\":\"Access to Firstname\",\"object\":\"2\"},{\"access\":\"allow\",\"alias\":\"Access to Lastname\",\"id\":\"6\",\"kind\":\"create\",\"level\":\"object_type_field\",\"name\":\"Access to Lastname\",\"object\":\"1\"},{\"access\":\"allow\",\"alias\":\"Access to birthday\",\"id\":\"5\",\"kind\":\"create\",\"level\":\"object_type_field\",\"name\":\"Access to birthday\",\"object\":\"4\"},{\"access\":\"allow\",\"alias\":\"Access to Patronymic\",\"id\":\"2\",\"kind\":\"create\",\"level\":\"object_type_field\",\"name\":\"Access to Patronymic\",\"object\":\"3\"}],\"system\":[{\"access\":\"allow\",\"alias\":\"system_of_object_access\",\"id\":\"3\",\"kind\":\"create\",\"level\":\"system\",\"name\":\"system_of_object_access\",\"object\":\"object\"}]}}],\"id\":\"1\",\"login\":\"root\",\"oauth\":\"\",\"password\":\"$2b$12$4H2xurOmbAlkrk2ZcgbeBe4RgaPk23D118IhYLv1kLOCBCPIDxj62\"}");
+        assert_eq!(response.into_string().unwrap(), "{\"access_token\":\"\",\"date_last_active\":null,\"date_registred\":\"2022-06-26T13:12:27.323376\",\"groups\":[],\"id\":\"1\",\"login\":\"root\",\"oauth\":\"\",\"password\":\"$2b$12$Cv/IRehHUxGhobc5KiZmNumQmauD3qe6EaQ6lNfw2LLxJmrENCy0G\"}");
     }
 }
