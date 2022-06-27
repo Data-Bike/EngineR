@@ -171,6 +171,10 @@ pub async fn select(table: String, names: Vec<String>, where_cases: Vec<Vec<(Str
     Ok(sql(get_select(table, names, where_cases).as_str()).await?)
 }
 
+pub async fn select_one(table: String, names: Vec<String>, where_cases: Vec<Vec<(String, String, String)>>) -> Result<PgRow, Sqlx_Error> {
+    Ok(sql_one(get_select(table, names, where_cases).as_str()).await?)
+}
+
 pub async fn create_table(table: String, fields: Vec<(String, String)>) -> Result<String, Sqlx_Error> {
     Ok(exec(get_create_table(table, fields).as_str()).await?.rows_affected().to_string())
 }
