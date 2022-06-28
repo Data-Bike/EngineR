@@ -6,7 +6,7 @@ use crate::model::user::entity::user::User;
 use lazy_static::lazy_static;
 use crate::model::link::entity::link::LinkType;
 use futures::lock::Mutex;
-use crate::model::dictionary::entity::dictionary::{Dictionary, DictionaryGroup};
+use crate::model::dictionary::entity::dictionary::{Dictionary, DictionaryType};
 
 pub struct LFU {
     pub user_by_id: WTinyLFUCache<String, User, DefaultKeyHasher<String>>,
@@ -17,8 +17,8 @@ pub struct LFU {
     pub link_type_by_id: WTinyLFUCache<String, LinkType, DefaultKeyHasher<String>>,
     pub link_type_by_alias: WTinyLFUCache<String, LinkType, DefaultKeyHasher<String>>,
     pub group_by_id: WTinyLFUCache<String, Group, DefaultKeyHasher<String>>,
-    pub dictionary_group_by_alias: WTinyLFUCache<String, DictionaryGroup, DefaultKeyHasher<String>>,
-    pub dictionary_group_by_id: WTinyLFUCache<String, DictionaryGroup, DefaultKeyHasher<String>>,
+    pub dictionary_type_by_alias: WTinyLFUCache<String, DictionaryType, DefaultKeyHasher<String>>,
+    pub dictionary_type_by_id: WTinyLFUCache<String, DictionaryType, DefaultKeyHasher<String>>,
     pub dictionary_by_alias: WTinyLFUCache<String, Dictionary, DefaultKeyHasher<String>>,
     pub dictionary_by_id: WTinyLFUCache<String, Dictionary, DefaultKeyHasher<String>>,
 }
@@ -34,6 +34,10 @@ impl LFU {
             link_type_by_id: WTinyLFUCache::with_sizes(1, 2, 2, samples).unwrap(),
             link_type_by_alias: WTinyLFUCache::with_sizes(1, 2, 2, samples).unwrap(),
             group_by_id: WTinyLFUCache::with_sizes(1, 2, 2, samples).unwrap(),
+            dictionary_type_by_alias: WTinyLFUCache::with_sizes(1, 2, 2, samples).unwrap(),
+            dictionary_type_by_id: WTinyLFUCache::with_sizes(1, 2, 2, samples).unwrap(),
+            dictionary_by_alias: WTinyLFUCache::with_sizes(1, 2, 2, samples).unwrap(),
+            dictionary_by_id: WTinyLFUCache::with_sizes(1, 2, 2, samples).unwrap()
         }
     }
 }
