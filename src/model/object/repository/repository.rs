@@ -11,6 +11,8 @@ use crate::model::lfu_cache::cache::CACHE;
 use crate::model::object::entity::object::{Field, Object, ObjectType};
 use crate::model::user::entity::user::User;
 
+use crate::model::dictionary::repository::repository::Repository as Dictionary_Repository;
+
 pub struct Repository {}
 
 impl Repository {
@@ -19,6 +21,8 @@ impl Repository {
     }
 
     fn getFieldFromRow(row: PgRow) -> Field {
+        let dictionary_type_id = row.get::<Option<i64>, &str>("dictionary_type_id").map(|dti| dti.to_string());
+        let dictionary_type = dictionary_type_id.and_then(|dti| block_on(Dictionary_Repository::getDictionaryTypeById(dti)).ok());
         Field {
             id: Some(row.get::<i64, &str>("id").to_string()),
             alias: row.get::<String, &str>("alias"),
@@ -29,6 +33,7 @@ impl Repository {
             require: row.get::<bool, &str>("require"),
             index: row.get::<bool, &str>("index"),
             preview: row.get::<bool, &str>("preview"),
+            dictionary_type,
         }
     }
 
@@ -241,6 +246,7 @@ impl Repository {
                 ("index".to_string(), if field.index { "1".to_string() } else { "0".to_string() }),
                 ("preview".to_string(), if field.preview { "1".to_string() } else { "0".to_string() }),
                 ("object_type_id".to_string(), id.to_string()),
+                ("dictionary_type_id".to_string(), field.dictionary_type.clone().and_then(|dt| dt.id).unwrap_or("".to_string())),
             ])));
         }
 

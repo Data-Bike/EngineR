@@ -7,3 +7,4 @@ pub mod form_parser;
 pub mod login_logout;
 pub mod object_type;
 pub mod test;
+pub mod dictionary_type;

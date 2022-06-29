@@ -1,10 +1,11 @@
 use crate::controllers::secure::authorization::authorization::Authorization;
+use crate::model::dictionary::entity::dictionary::{Dictionary, DictionaryType};
 use crate::model::link::entity::link::{Link, LinkType};
 use crate::model::object::entity::object::{Field, Object, ObjectType};
 use crate::model::secure::entity::permission::{PermissionKind, PermissionLevel};
 use crate::model::user::entity::user::User;
 
-#[derive(Debug,  Clone)]
+#[derive(Debug, Clone)]
 pub struct Token {
     pub requestLevel: PermissionLevel,
     pub requestKind: PermissionKind,
@@ -80,6 +81,32 @@ impl Token {
             object: None,
             link_type: Some(link.link_type.clone()),
             link: Some(link.clone()),
+            authorized: None,
+        }
+    }
+    pub fn fromDictionaryType(requestKind: PermissionKind, system: String, dictionary_type: &DictionaryType) -> Token {
+        Token {
+            requestLevel: PermissionLevel::system,
+            requestKind,
+            system,
+            object_type: None,
+            object_type_field: None,
+            object: None,
+            link_type: None,
+            link: None,
+            authorized: None,
+        }
+    }
+    pub fn fromDictionary(requestKind: PermissionKind, system: String, dictionary: &Dictionary) -> Token {
+        Token {
+            requestLevel: PermissionLevel::system,
+            requestKind,
+            system,
+            object_type: None,
+            object_type_field: None,
+            object: None,
+            link_type: None,
+            link: None,
             authorized: None,
         }
     }

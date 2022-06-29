@@ -875,6 +875,166 @@
       <rise:timeStamp>2022-06-26T23:16:14</rise:timeStamp>
       <rise:comment>Created from snapshot of model New Model (enginer,18d41853-4b64-481c-91ea-c6aa01c72055) at evolution #26</rise:comment>
     </rise:release>
+    <rise:newEntity>
+      <rise:sequenceNumber>23</rise:sequenceNumber>
+      <rise:timeStamp>2022-06-29T01:08:03</rise:timeStamp>
+      <rise:entity>
+        <rise:name>Entity</rise:name>
+        <rise:maxID>0</rise:maxID>
+      </rise:entity>
+    </rise:newEntity>
+    <rise:renameEntity>
+      <rise:sequenceNumber>24</rise:sequenceNumber>
+      <rise:timeStamp>2022-06-29T01:08:14</rise:timeStamp>
+      <rise:entityName>Entity</rise:entityName>
+      <rise:newEntityName>dictionary</rise:newEntityName>
+    </rise:renameEntity>
+    <rise:newAttribute>
+      <rise:sequenceNumber>25</rise:sequenceNumber>
+      <rise:timeStamp>2022-06-29T01:09:10</rise:timeStamp>
+      <rise:entity>
+        <rise:name>dictionary</rise:name>
+        <rise:attribute>
+          <rise:name>name</rise:name>
+          <rise:dataTypeAlias />
+          <rise:dataType>string</rise:dataType>
+          <rise:dataSize>255</rise:dataSize>
+          <rise:mustBeUnique>False</rise:mustBeUnique>
+          <rise:mustExist>True</rise:mustExist>
+          <rise:description />
+        </rise:attribute>
+        <rise:maxID>0</rise:maxID>
+      </rise:entity>
+    </rise:newAttribute>
+    <rise:newAttribute>
+      <rise:sequenceNumber>26</rise:sequenceNumber>
+      <rise:timeStamp>2022-06-29T01:09:36</rise:timeStamp>
+      <rise:entity>
+        <rise:name>dictionary</rise:name>
+        <rise:attribute>
+          <rise:name>alias</rise:name>
+          <rise:dataTypeAlias />
+          <rise:dataType>string</rise:dataType>
+          <rise:dataSize>255</rise:dataSize>
+          <rise:mustBeUnique>True</rise:mustBeUnique>
+          <rise:mustExist>True</rise:mustExist>
+          <rise:description />
+        </rise:attribute>
+        <rise:maxID>0</rise:maxID>
+      </rise:entity>
+    </rise:newAttribute>
+    <rise:newEntity>
+      <rise:sequenceNumber>27</rise:sequenceNumber>
+      <rise:timeStamp>2022-06-29T01:09:50</rise:timeStamp>
+      <rise:entity>
+        <rise:name>Entity</rise:name>
+        <rise:maxID>0</rise:maxID>
+      </rise:entity>
+    </rise:newEntity>
+    <rise:renameEntity>
+      <rise:sequenceNumber>28</rise:sequenceNumber>
+      <rise:timeStamp>2022-06-29T01:10:01</rise:timeStamp>
+      <rise:entityName>Entity</rise:entityName>
+      <rise:newEntityName>dictionary_type</rise:newEntityName>
+    </rise:renameEntity>
+    <rise:newAttribute>
+      <rise:sequenceNumber>29</rise:sequenceNumber>
+      <rise:timeStamp>2022-06-29T01:10:31</rise:timeStamp>
+      <rise:entity>
+        <rise:name>dictionary_type</rise:name>
+        <rise:attribute>
+          <rise:name>name</rise:name>
+          <rise:dataTypeAlias />
+          <rise:dataType>string</rise:dataType>
+          <rise:dataSize>255</rise:dataSize>
+          <rise:mustBeUnique>False</rise:mustBeUnique>
+          <rise:mustExist>True</rise:mustExist>
+          <rise:description />
+        </rise:attribute>
+        <rise:maxID>0</rise:maxID>
+      </rise:entity>
+    </rise:newAttribute>
+    <rise:newAttribute>
+      <rise:sequenceNumber>30</rise:sequenceNumber>
+      <rise:timeStamp>2022-06-29T01:10:42</rise:timeStamp>
+      <rise:entity>
+        <rise:name>dictionary_type</rise:name>
+        <rise:attribute>
+          <rise:name>alias</rise:name>
+          <rise:dataTypeAlias />
+          <rise:dataType>string</rise:dataType>
+          <rise:dataSize>255</rise:dataSize>
+          <rise:mustBeUnique>False</rise:mustBeUnique>
+          <rise:mustExist>True</rise:mustExist>
+          <rise:description />
+        </rise:attribute>
+        <rise:maxID>0</rise:maxID>
+      </rise:entity>
+    </rise:newAttribute>
+    <rise:editAttribute>
+      <rise:sequenceNumber>31</rise:sequenceNumber>
+      <rise:timeStamp>2022-06-29T01:10:55</rise:timeStamp>
+      <rise:entity>
+        <rise:name>dictionary_type</rise:name>
+        <rise:attribute>
+          <rise:name>alias</rise:name>
+          <rise:dataTypeAlias />
+          <rise:dataType>string</rise:dataType>
+          <rise:dataSize>255</rise:dataSize>
+          <rise:mustBeUnique>True</rise:mustBeUnique>
+          <rise:mustExist>True</rise:mustExist>
+        </rise:attribute>
+        <rise:maxID>0</rise:maxID>
+      </rise:entity>
+    </rise:editAttribute>
+    <rise:newRelation>
+      <rise:sequenceNumber>32</rise:sequenceNumber>
+      <rise:timeStamp>2022-06-29T01:12:15</rise:timeStamp>
+      <rise:relation>
+        <rise:name>dictionary_typedictionary</rise:name>
+        <rise:node>
+          <rise:name>dictionary_type</rise:name>
+          <rise:entityName>dictionary_type</rise:entityName>
+          <rise:cardinality>0or1</rise:cardinality>
+        </rise:node>
+        <rise:node>
+          <rise:name>dictionary</rise:name>
+          <rise:entityName>dictionary</rise:entityName>
+          <rise:cardinality>0toN</rise:cardinality>
+        </rise:node>
+        <rise:maxID>0</rise:maxID>
+      </rise:relation>
+    </rise:newRelation>
+    <rise:renameRelation>
+      <rise:sequenceNumber>33</rise:sequenceNumber>
+      <rise:timeStamp>2022-06-29T01:12:39</rise:timeStamp>
+      <rise:relationName>dictionary_typedictionary</rise:relationName>
+      <rise:newRelationName>dictionary_type_dictionary</rise:newRelationName>
+    </rise:renameRelation>
+    <rise:newRelation>
+      <rise:sequenceNumber>34</rise:sequenceNumber>
+      <rise:timeStamp>2022-06-29T01:16:15</rise:timeStamp>
+      <rise:relation>
+        <rise:name>dictionary_typefield</rise:name>
+        <rise:node>
+          <rise:name>dictionary_type</rise:name>
+          <rise:entityName>dictionary_type</rise:entityName>
+          <rise:cardinality>0or1</rise:cardinality>
+        </rise:node>
+        <rise:node>
+          <rise:name>field</rise:name>
+          <rise:entityName>field</rise:entityName>
+          <rise:cardinality>0toN</rise:cardinality>
+        </rise:node>
+        <rise:maxID>0</rise:maxID>
+      </rise:relation>
+    </rise:newRelation>
+    <rise:renameRelation>
+      <rise:sequenceNumber>35</rise:sequenceNumber>
+      <rise:timeStamp>2022-06-29T01:16:29</rise:timeStamp>
+      <rise:relationName>dictionary_typefield</rise:relationName>
+      <rise:newRelationName>dictionary_type_field</rise:newRelationName>
+    </rise:renameRelation>
   </rise:evolution>
   <rise:publish />
   <rise:presentation>
@@ -885,8 +1045,8 @@
         <rise:showAttributeDetails>False</rise:showAttributeDetails>
         <rise:showIndexes>False</rise:showIndexes>
         <rise:boundingBox>
-          <rise:x>557</rise:x>
-          <rise:y>278</rise:y>
+          <rise:x>609</rise:x>
+          <rise:y>247</rise:y>
           <rise:sizeX>100</rise:sizeX>
           <rise:sizeY>150</rise:sizeY>
         </rise:boundingBox>
@@ -900,8 +1060,8 @@
         <rise:showAttributeDetails>False</rise:showAttributeDetails>
         <rise:showIndexes>False</rise:showIndexes>
         <rise:boundingBox>
-          <rise:x>376</rise:x>
-          <rise:y>213</rise:y>
+          <rise:x>393</rise:x>
+          <rise:y>227</rise:y>
           <rise:sizeX>100</rise:sizeX>
           <rise:sizeY>86</rise:sizeY>
         </rise:boundingBox>
@@ -915,10 +1075,10 @@
         <rise:showAttributeDetails>False</rise:showAttributeDetails>
         <rise:showIndexes>False</rise:showIndexes>
         <rise:boundingBox>
-          <rise:x>7</rise:x>
-          <rise:y>24</rise:y>
+          <rise:x>0</rise:x>
+          <rise:y>5</rise:y>
           <rise:sizeX>100</rise:sizeX>
-          <rise:sizeY>150</rise:sizeY>
+          <rise:sizeY>80</rise:sizeY>
         </rise:boundingBox>
         <rise:color>
           <rise:bgColor>255;176;224;230;PowderBlue</rise:bgColor>
@@ -930,10 +1090,10 @@
         <rise:showAttributeDetails>False</rise:showAttributeDetails>
         <rise:showIndexes>False</rise:showIndexes>
         <rise:boundingBox>
-          <rise:x>14</rise:x>
-          <rise:y>357</rise:y>
+          <rise:x>0</rise:x>
+          <rise:y>457</rise:y>
           <rise:sizeX>100</rise:sizeX>
-          <rise:sizeY>145</rise:sizeY>
+          <rise:sizeY>89</rise:sizeY>
         </rise:boundingBox>
         <rise:color>
           <rise:bgColor>255;176;224;230;PowderBlue</rise:bgColor>
@@ -945,10 +1105,10 @@
         <rise:showAttributeDetails>False</rise:showAttributeDetails>
         <rise:showIndexes>False</rise:showIndexes>
         <rise:boundingBox>
-          <rise:x>829</rise:x>
-          <rise:y>10</rise:y>
+          <rise:x>858</rise:x>
+          <rise:y>0</rise:y>
           <rise:sizeX>100</rise:sizeX>
-          <rise:sizeY>150</rise:sizeY>
+          <rise:sizeY>82</rise:sizeY>
         </rise:boundingBox>
         <rise:color>
           <rise:bgColor>255;176;224;230;PowderBlue</rise:bgColor>
@@ -960,10 +1120,10 @@
         <rise:showAttributeDetails>False</rise:showAttributeDetails>
         <rise:showIndexes>False</rise:showIndexes>
         <rise:boundingBox>
-          <rise:x>826</rise:x>
-          <rise:y>361</rise:y>
+          <rise:x>854</rise:x>
+          <rise:y>451</rise:y>
           <rise:sizeX>100</rise:sizeX>
-          <rise:sizeY>150</rise:sizeY>
+          <rise:sizeY>83</rise:sizeY>
         </rise:boundingBox>
         <rise:color>
           <rise:bgColor>255;176;224;230;PowderBlue</rise:bgColor>
@@ -975,10 +1135,10 @@
         <rise:showAttributeDetails>False</rise:showAttributeDetails>
         <rise:showIndexes>False</rise:showIndexes>
         <rise:boundingBox>
-          <rise:x>108</rise:x>
-          <rise:y>179</rise:y>
+          <rise:x>74</rise:x>
+          <rise:y>107</rise:y>
           <rise:sizeX>100</rise:sizeX>
-          <rise:sizeY>150</rise:sizeY>
+          <rise:sizeY>127</rise:sizeY>
         </rise:boundingBox>
         <rise:color>
           <rise:bgColor>255;176;224;230;PowderBlue</rise:bgColor>
@@ -990,10 +1150,40 @@
         <rise:showAttributeDetails>False</rise:showAttributeDetails>
         <rise:showIndexes>False</rise:showIndexes>
         <rise:boundingBox>
-          <rise:x>568</rise:x>
-          <rise:y>81</rise:y>
+          <rise:x>588</rise:x>
+          <rise:y>73</rise:y>
           <rise:sizeX>100</rise:sizeX>
           <rise:sizeY>150</rise:sizeY>
+        </rise:boundingBox>
+        <rise:color>
+          <rise:bgColor>255;176;224;230;PowderBlue</rise:bgColor>
+          <rise:textColor>255;0;0;0;Black</rise:textColor>
+        </rise:color>
+      </rise:drawEntity>
+      <rise:drawEntity>
+        <rise:entityName>dictionary</rise:entityName>
+        <rise:showAttributeDetails>False</rise:showAttributeDetails>
+        <rise:showIndexes>False</rise:showIndexes>
+        <rise:boundingBox>
+          <rise:x>98</rise:x>
+          <rise:y>249</rise:y>
+          <rise:sizeX>100</rise:sizeX>
+          <rise:sizeY>77</rise:sizeY>
+        </rise:boundingBox>
+        <rise:color>
+          <rise:bgColor>255;176;224;230;PowderBlue</rise:bgColor>
+          <rise:textColor>255;0;0;0;Black</rise:textColor>
+        </rise:color>
+      </rise:drawEntity>
+      <rise:drawEntity>
+        <rise:entityName>dictionary_type</rise:entityName>
+        <rise:showAttributeDetails>False</rise:showAttributeDetails>
+        <rise:showIndexes>False</rise:showIndexes>
+        <rise:boundingBox>
+          <rise:x>365</rise:x>
+          <rise:y>356</rise:y>
+          <rise:sizeX>102</rise:sizeX>
+          <rise:sizeY>96</rise:sizeY>
         </rise:boundingBox>
         <rise:color>
           <rise:bgColor>255;176;224;230;PowderBlue</rise:bgColor>

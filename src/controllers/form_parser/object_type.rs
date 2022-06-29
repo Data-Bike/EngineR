@@ -1,3 +1,4 @@
+use futures::executor::block_on;
 use rocket::data::{FromData, ToByteUnit};
 use rocket::{Data, Request};
 
@@ -12,6 +13,7 @@ use crate::controllers::secure::authorization::token::{Token};
 
 use crate::model::object::entity::object::{Field, ObjectType};
 use crate::model::secure::entity::permission::{PermissionKind};
+use crate::model::dictionary::repository::repository::Repository as Dictionary_Repository;
 
 use crate::model::user::entity::user::User;
 
@@ -90,7 +92,8 @@ impl Field {
         let preview = err_resolve_bool!(json_object,"preview");
         let default = err_resolve_option!(json_object,"default");
         let value = err_resolve_option!(json_object,"value");
-
+        let dictionary_type_id = err_resolve_option!(json_object,"dictionary_type_id");
+        let dictionary_type = dictionary_type_id.and_then(|dti| block_on(Dictionary_Repository::getDictionaryTypeById(dti)).ok());
 
         Ok(Field {
             id,
@@ -99,6 +102,7 @@ impl Field {
             name,
             default,
             value,
+            dictionary_type,
             require,
             index,
             preview,
