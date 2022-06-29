@@ -396,7 +396,136 @@ begin
     update "public"."t_rise_u_model" set "c_u_version"=1,"c_u_versionSequenceNumber"=22 where "c_u_prefix"='enginer' and "c_u_guid"='52e3a3e0-2e81-40af-af8a-96b9b5729074';
   end if;
 
-  return 22;
+  -- #23 New entity Entity
+  if not exists(select * from "public"."t_rise_u_log" where "c_r_model"=v_model_id and "c_u_sequenceNumber"=23) then
+    insert into "public"."t_rise_u_log" ("c_r_model","c_u_sequenceNumber","c_u_timeStamp","c_u_xml") values (v_model_id,23,now(),'<rise:newEntity xmlns:rise="http://www.r2bsoftware/ns/rise/"><rise:sequenceNumber>23</rise:sequenceNumber><rise:timeStamp>2022-06-29T01:08:03</rise:timeStamp><rise:entity><rise:name>Entity</rise:name><rise:maxID>0</rise:maxID></rise:entity></rise:newEntity>');
+    if not exists (select * from pg_catalog.pg_tables where schemaname='public' and tablename='Entity') then
+      create table  "public"."Entity"
+      (
+        "id" bigserial not null
+      );
+      execute 'alter table "public"."Entity" add constraint "pk_enginer_' || nextval('"public"."pk_enginer_constraint_seq"'::regclass) || '" primary key ("id");';
+    end if;
+  end if;
+
+  -- #24 Rename entity Entity to dictionary
+  if not exists(select * from "public"."t_rise_u_log" where "c_r_model"=v_model_id and "c_u_sequenceNumber"=24) then
+    insert into "public"."t_rise_u_log" ("c_r_model","c_u_sequenceNumber","c_u_timeStamp","c_u_xml") values (v_model_id,24,now(),'<rise:renameEntity xmlns:rise="http://www.r2bsoftware/ns/rise/"><rise:sequenceNumber>24</rise:sequenceNumber><rise:timeStamp>2022-06-29T01:08:14</rise:timeStamp><rise:entityName>Entity</rise:entityName><rise:newEntityName>dictionary</rise:newEntityName></rise:renameEntity>');
+    if exists (select * from pg_catalog.pg_tables where schemaname='public' and tablename='Entity') then
+      if not exists (select * from pg_catalog.pg_tables where schemaname='public' and tablename='dictionary') then
+        alter table "public"."Entity" rename to "dictionary";
+      end if;
+    end if;
+    if exists(select * from pg_statio_all_sequences where schemaname='public' and relname='Entity_id_seq') then
+      alter sequence "public"."Entity_id_seq" rename to "dictionary_id_seq";
+    end if;
+  end if;
+
+  -- #25 New dictionary attributes name
+  if not exists(select * from "public"."t_rise_u_log" where "c_r_model"=v_model_id and "c_u_sequenceNumber"=25) then
+    insert into "public"."t_rise_u_log" ("c_r_model","c_u_sequenceNumber","c_u_timeStamp","c_u_xml") values (v_model_id,25,now(),'<rise:newAttribute xmlns:rise="http://www.r2bsoftware/ns/rise/"><rise:sequenceNumber>25</rise:sequenceNumber><rise:timeStamp>2022-06-29T01:09:10</rise:timeStamp><rise:entity><rise:name>dictionary</rise:name><rise:attribute><rise:name>name</rise:name><rise:dataTypeAlias /><rise:dataType>string</rise:dataType><rise:dataSize>255</rise:dataSize><rise:mustBeUnique>False</rise:mustBeUnique><rise:mustExist>True</rise:mustExist><rise:description /></rise:attribute><rise:maxID>0</rise:maxID></rise:entity></rise:newAttribute>');
+    if not exists (select * from pg_catalog.pg_type t join pg_catalog.pg_namespace n on (n.oid = t.typnamespace) join pg_catalog.pg_attribute a on (a.attstattarget = -1 and t.typrelid = a.attrelid) where n.nspname='public' and t.typname='dictionary' and a.attname='name') then
+      alter table "public"."dictionary" add column "name" varchar(255) null;
+      alter table "public"."dictionary" alter column "name" set not null;
+    end if;
+  end if;
+
+  -- #26 New dictionary attributes alias
+  if not exists(select * from "public"."t_rise_u_log" where "c_r_model"=v_model_id and "c_u_sequenceNumber"=26) then
+    insert into "public"."t_rise_u_log" ("c_r_model","c_u_sequenceNumber","c_u_timeStamp","c_u_xml") values (v_model_id,26,now(),'<rise:newAttribute xmlns:rise="http://www.r2bsoftware/ns/rise/"><rise:sequenceNumber>26</rise:sequenceNumber><rise:timeStamp>2022-06-29T01:09:36</rise:timeStamp><rise:entity><rise:name>dictionary</rise:name><rise:attribute><rise:name>alias</rise:name><rise:dataTypeAlias /><rise:dataType>string</rise:dataType><rise:dataSize>255</rise:dataSize><rise:mustBeUnique>True</rise:mustBeUnique><rise:mustExist>True</rise:mustExist><rise:description /></rise:attribute><rise:maxID>0</rise:maxID></rise:entity></rise:newAttribute>');
+    if not exists (select * from pg_catalog.pg_type t join pg_catalog.pg_namespace n on (n.oid = t.typnamespace) join pg_catalog.pg_attribute a on (a.attstattarget = -1 and t.typrelid = a.attrelid) where n.nspname='public' and t.typname='dictionary' and a.attname='alias') then
+      alter table "public"."dictionary" add column "alias" varchar(255) null;
+      alter table "public"."dictionary" alter column "alias" set not null;
+    end if;
+    if not exists (select * from pg_catalog.pg_type t join pg_catalog.pg_namespace n on (n.oid = t.typnamespace) join pg_catalog.pg_constraint c on (c.conrelid=t.typrelid) where n.nspname='public' and c.conname='ix_enginer_dictionary_alias' and c.contype='u') then
+      alter table "public"."dictionary" add constraint "ix_enginer_dictionary_alias" unique ("alias");
+    end if;
+  end if;
+
+  -- #27 New entity Entity
+  if not exists(select * from "public"."t_rise_u_log" where "c_r_model"=v_model_id and "c_u_sequenceNumber"=27) then
+    insert into "public"."t_rise_u_log" ("c_r_model","c_u_sequenceNumber","c_u_timeStamp","c_u_xml") values (v_model_id,27,now(),'<rise:newEntity xmlns:rise="http://www.r2bsoftware/ns/rise/"><rise:sequenceNumber>27</rise:sequenceNumber><rise:timeStamp>2022-06-29T01:09:50</rise:timeStamp><rise:entity><rise:name>Entity</rise:name><rise:maxID>0</rise:maxID></rise:entity></rise:newEntity>');
+    if not exists (select * from pg_catalog.pg_tables where schemaname='public' and tablename='Entity') then
+      create table  "public"."Entity"
+      (
+        "id" bigserial not null
+      );
+      execute 'alter table "public"."Entity" add constraint "pk_enginer_' || nextval('"public"."pk_enginer_constraint_seq"'::regclass) || '" primary key ("id");';
+    end if;
+  end if;
+
+  -- #28 Rename entity Entity to dictionary_type
+  if not exists(select * from "public"."t_rise_u_log" where "c_r_model"=v_model_id and "c_u_sequenceNumber"=28) then
+    insert into "public"."t_rise_u_log" ("c_r_model","c_u_sequenceNumber","c_u_timeStamp","c_u_xml") values (v_model_id,28,now(),'<rise:renameEntity xmlns:rise="http://www.r2bsoftware/ns/rise/"><rise:sequenceNumber>28</rise:sequenceNumber><rise:timeStamp>2022-06-29T01:10:01</rise:timeStamp><rise:entityName>Entity</rise:entityName><rise:newEntityName>dictionary_type</rise:newEntityName></rise:renameEntity>');
+    if exists (select * from pg_catalog.pg_tables where schemaname='public' and tablename='Entity') then
+      if not exists (select * from pg_catalog.pg_tables where schemaname='public' and tablename='dictionary_type') then
+        alter table "public"."Entity" rename to "dictionary_type";
+      end if;
+    end if;
+    if exists(select * from pg_statio_all_sequences where schemaname='public' and relname='Entity_id_seq') then
+      alter sequence "public"."Entity_id_seq" rename to "dictionary_type_id_seq";
+    end if;
+  end if;
+
+  -- #29 New dictionary_type attributes name
+  if not exists(select * from "public"."t_rise_u_log" where "c_r_model"=v_model_id and "c_u_sequenceNumber"=29) then
+    insert into "public"."t_rise_u_log" ("c_r_model","c_u_sequenceNumber","c_u_timeStamp","c_u_xml") values (v_model_id,29,now(),'<rise:newAttribute xmlns:rise="http://www.r2bsoftware/ns/rise/"><rise:sequenceNumber>29</rise:sequenceNumber><rise:timeStamp>2022-06-29T01:10:31</rise:timeStamp><rise:entity><rise:name>dictionary_type</rise:name><rise:attribute><rise:name>name</rise:name><rise:dataTypeAlias /><rise:dataType>string</rise:dataType><rise:dataSize>255</rise:dataSize><rise:mustBeUnique>False</rise:mustBeUnique><rise:mustExist>True</rise:mustExist><rise:description /></rise:attribute><rise:maxID>0</rise:maxID></rise:entity></rise:newAttribute>');
+    if not exists (select * from pg_catalog.pg_type t join pg_catalog.pg_namespace n on (n.oid = t.typnamespace) join pg_catalog.pg_attribute a on (a.attstattarget = -1 and t.typrelid = a.attrelid) where n.nspname='public' and t.typname='dictionary_type' and a.attname='name') then
+      alter table "public"."dictionary_type" add column "name" varchar(255) null;
+      alter table "public"."dictionary_type" alter column "name" set not null;
+    end if;
+  end if;
+
+  -- #30 New dictionary_type attributes alias
+  if not exists(select * from "public"."t_rise_u_log" where "c_r_model"=v_model_id and "c_u_sequenceNumber"=30) then
+    insert into "public"."t_rise_u_log" ("c_r_model","c_u_sequenceNumber","c_u_timeStamp","c_u_xml") values (v_model_id,30,now(),'<rise:newAttribute xmlns:rise="http://www.r2bsoftware/ns/rise/"><rise:sequenceNumber>30</rise:sequenceNumber><rise:timeStamp>2022-06-29T01:10:42</rise:timeStamp><rise:entity><rise:name>dictionary_type</rise:name><rise:attribute><rise:name>alias</rise:name><rise:dataTypeAlias /><rise:dataType>string</rise:dataType><rise:dataSize>255</rise:dataSize><rise:mustBeUnique>False</rise:mustBeUnique><rise:mustExist>True</rise:mustExist><rise:description /></rise:attribute><rise:maxID>0</rise:maxID></rise:entity></rise:newAttribute>');
+    if not exists (select * from pg_catalog.pg_type t join pg_catalog.pg_namespace n on (n.oid = t.typnamespace) join pg_catalog.pg_attribute a on (a.attstattarget = -1 and t.typrelid = a.attrelid) where n.nspname='public' and t.typname='dictionary_type' and a.attname='alias') then
+      alter table "public"."dictionary_type" add column "alias" varchar(255) null;
+      alter table "public"."dictionary_type" alter column "alias" set not null;
+    end if;
+  end if;
+
+  -- #31 Edit dictionary_type attributes alias
+  if not exists(select * from "public"."t_rise_u_log" where "c_r_model"=v_model_id and "c_u_sequenceNumber"=31) then
+    insert into "public"."t_rise_u_log" ("c_r_model","c_u_sequenceNumber","c_u_timeStamp","c_u_xml") values (v_model_id,31,now(),'<rise:editAttribute xmlns:rise="http://www.r2bsoftware/ns/rise/"><rise:sequenceNumber>31</rise:sequenceNumber><rise:timeStamp>2022-06-29T01:10:55</rise:timeStamp><rise:entity><rise:name>dictionary_type</rise:name><rise:attribute><rise:name>alias</rise:name><rise:dataTypeAlias /><rise:dataType>string</rise:dataType><rise:dataSize>255</rise:dataSize><rise:mustBeUnique>True</rise:mustBeUnique><rise:mustExist>True</rise:mustExist></rise:attribute><rise:maxID>0</rise:maxID></rise:entity></rise:editAttribute>');
+    if not exists (select * from pg_catalog.pg_type t join pg_catalog.pg_namespace n on (n.oid = t.typnamespace) join pg_catalog.pg_constraint c on (c.conrelid=t.typrelid) where n.nspname='public' and c.conname='ix_enginer_dictionary_type_alias' and c.contype='u') then
+      alter table "public"."dictionary_type" add constraint "ix_enginer_dictionary_type_alias" unique ("alias");
+    end if;
+  end if;
+
+  -- #32 New relation dictionary_typedictionary
+  if not exists(select * from "public"."t_rise_u_log" where "c_r_model"=v_model_id and "c_u_sequenceNumber"=32) then
+    insert into "public"."t_rise_u_log" ("c_r_model","c_u_sequenceNumber","c_u_timeStamp","c_u_xml") values (v_model_id,32,now(),'<rise:newRelation xmlns:rise="http://www.r2bsoftware/ns/rise/"><rise:sequenceNumber>32</rise:sequenceNumber><rise:timeStamp>2022-06-29T01:12:15</rise:timeStamp><rise:relation><rise:name>dictionary_typedictionary</rise:name><rise:node><rise:name>dictionary_type</rise:name><rise:entityName>dictionary_type</rise:entityName><rise:cardinality>0or1</rise:cardinality></rise:node><rise:node><rise:name>dictionary</rise:name><rise:entityName>dictionary</rise:entityName><rise:cardinality>0toN</rise:cardinality></rise:node><rise:maxID>0</rise:maxID></rise:relation></rise:newRelation>');
+    if not exists (select * from pg_catalog.pg_type t join pg_catalog.pg_namespace n on (n.oid = t.typnamespace) join pg_catalog.pg_attribute a on (a.attstattarget = -1 and t.typrelid = a.attrelid) where n.nspname='public' and t.typname='dictionary' and a.attname='dictionary_type_id') then
+      alter table "public"."dictionary" add column "dictionary_type_id" bigint null;
+    end if;
+    if not exists (select * from pg_catalog.pg_type t join pg_catalog.pg_namespace n on (n.oid = t.typnamespace) join pg_catalog.pg_constraint c on (c.conrelid=t.typrelid) where n.nspname='public' and c.conname='fk_enginer_dictionary_dictionary_type_id' and c.contype='f') then
+      alter table "public"."dictionary" add constraint "fk_enginer_dictionary_dictionary_type_id" foreign key ("dictionary_type_id") references "public"."dictionary_type" ("id");
+    end if;
+  end if;
+
+  -- #33 Rename relation dictionary_typedictionary to dictionary_type_dictionary
+  if not exists(select * from "public"."t_rise_u_log" where "c_r_model"=v_model_id and "c_u_sequenceNumber"=33) then
+    insert into "public"."t_rise_u_log" ("c_r_model","c_u_sequenceNumber","c_u_timeStamp","c_u_xml") values (v_model_id,33,now(),'<rise:renameRelation xmlns:rise="http://www.r2bsoftware/ns/rise/"><rise:sequenceNumber>33</rise:sequenceNumber><rise:timeStamp>2022-06-29T01:12:39</rise:timeStamp><rise:relationName>dictionary_typedictionary</rise:relationName><rise:newRelationName>dictionary_type_dictionary</rise:newRelationName></rise:renameRelation>');
+  end if;
+
+  -- #34 New relation dictionary_typefield
+  if not exists(select * from "public"."t_rise_u_log" where "c_r_model"=v_model_id and "c_u_sequenceNumber"=34) then
+    insert into "public"."t_rise_u_log" ("c_r_model","c_u_sequenceNumber","c_u_timeStamp","c_u_xml") values (v_model_id,34,now(),'<rise:newRelation xmlns:rise="http://www.r2bsoftware/ns/rise/"><rise:sequenceNumber>34</rise:sequenceNumber><rise:timeStamp>2022-06-29T01:16:15</rise:timeStamp><rise:relation><rise:name>dictionary_typefield</rise:name><rise:node><rise:name>dictionary_type</rise:name><rise:entityName>dictionary_type</rise:entityName><rise:cardinality>0or1</rise:cardinality></rise:node><rise:node><rise:name>field</rise:name><rise:entityName>field</rise:entityName><rise:cardinality>0toN</rise:cardinality></rise:node><rise:maxID>0</rise:maxID></rise:relation></rise:newRelation>');
+    if not exists (select * from pg_catalog.pg_type t join pg_catalog.pg_namespace n on (n.oid = t.typnamespace) join pg_catalog.pg_attribute a on (a.attstattarget = -1 and t.typrelid = a.attrelid) where n.nspname='public' and t.typname='field' and a.attname='dictionary_type_id') then
+      alter table "public"."field" add column "dictionary_type_id" bigint null;
+    end if;
+    if not exists (select * from pg_catalog.pg_type t join pg_catalog.pg_namespace n on (n.oid = t.typnamespace) join pg_catalog.pg_constraint c on (c.conrelid=t.typrelid) where n.nspname='public' and c.conname='fk_enginer_field_dictionary_type_id' and c.contype='f') then
+      alter table "public"."field" add constraint "fk_enginer_field_dictionary_type_id" foreign key ("dictionary_type_id") references "public"."dictionary_type" ("id");
+    end if;
+  end if;
+
+  -- #35 Rename relation dictionary_typefield to dictionary_type_field
+  if not exists(select * from "public"."t_rise_u_log" where "c_r_model"=v_model_id and "c_u_sequenceNumber"=35) then
+    insert into "public"."t_rise_u_log" ("c_r_model","c_u_sequenceNumber","c_u_timeStamp","c_u_xml") values (v_model_id,35,now(),'<rise:renameRelation xmlns:rise="http://www.r2bsoftware/ns/rise/"><rise:sequenceNumber>35</rise:sequenceNumber><rise:timeStamp>2022-06-29T01:16:29</rise:timeStamp><rise:relationName>dictionary_typefield</rise:relationName><rise:newRelationName>dictionary_type_field</rise:newRelationName></rise:renameRelation>');
+  end if;
+
+  return 35;
 end;
 $$ language plpgsql;
 select "public"."f_rise_enginer"();
