@@ -2,7 +2,7 @@ mod controllers;
 mod model;
 
 use rocket::{Build, Rocket};
-use crate::controllers::{link, object, object_type, user};
+use crate::controllers::{dictionary_type, link, object, object_type, user};
 use crate::controllers::login_logout;
 
 pub fn rocket_build() -> Rocket<Build> {
@@ -12,6 +12,7 @@ pub fn rocket_build() -> Rocket<Build> {
         .attach(object_type::stage())
         .attach(link::stage())
         .attach(user::stage())
+        .attach(dictionary_type::stage())
 }
 
 #[rocket::main]

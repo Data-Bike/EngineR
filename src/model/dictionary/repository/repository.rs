@@ -85,7 +85,7 @@ impl Repository {
                 let id = Some(res.get::<i64,&str>("id").to_string());
                 let alias = res.get::<String,&str>("alias").to_string();
                 let name = res.get::<String,&str>("name").to_string();
-                let type_id = res.get::<i64,&str>("type_id").to_string();
+                let type_id = res.get::<i64,&str>("dictionary_type_id").to_string();
 
                 Dictionary {
                     id,
@@ -99,7 +99,7 @@ impl Repository {
         let res = select(
             "dictionary".to_string(),
             vec!["*".to_string()],
-            vec![vec![("type_id".to_string(), "=".to_string(), type_id)]],
+            vec![vec![("dictionary_type_id".to_string(), "=".to_string(), type_id)]],
         ).await?;
 
         Ok(Self::getDictionariesFromRows(res))
@@ -150,7 +150,7 @@ impl Repository {
         };
         match type_id.as_ref() {
             None => {}
-            Some(i) => { name_values.push(("type_id".to_string(), i.to_string())); }
+            Some(i) => { name_values.push(("dictionary_type_id".to_string(), i.to_string())); }
         };
 
         name_values
@@ -158,7 +158,11 @@ impl Repository {
 
     pub async fn createDictionaryType(the_dictionary_type: &DictionaryType) -> Result<String, RepositoryError> {
         let name_values = Self::dictionaryTypeToNameValues(the_dictionary_type);
-        Ok(insert("dictionary_type".to_string(), name_values).await?)
+        let id = insert("dictionary_type".to_string(), name_values).await?;
+        for dict in the_dictionary_type.dictionaries.iter() {
+            Self::createDictionary(dict,id.clone()).await?;
+        }
+        Ok(id)
     }
 
     pub async fn createDictionary(the_dictionary: &Dictionary, type_id: String) -> Result<String, RepositoryError> {

@@ -30,9 +30,13 @@
   <component name="DBNavigator.Project.DatabaseConsoleManager">
     <connection id="c99551ad-1752-455e-8a38-1f9050c854aa">
       <console name="EngineR" type="STANDARD" schema="public" session="Main"><![CDATA[select
-  *
+  object_type_id
 from
-  "link_type";]]></console>
+  object
+where
+  id = '2'
+limit
+  1]]></console>
     </connection>
   </component>
   <component name="DBNavigator.Project.DatabaseFileManager">

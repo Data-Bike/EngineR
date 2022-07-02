@@ -1,3 +1,4 @@
+use futures::executor::block_on;
 use rocket::data::{FromData, ToByteUnit};
 use rocket::{Data, Request};
 
@@ -36,6 +37,8 @@ pub fn getToken(req: &Request<'_>, dictionary_type: &DictionaryType) -> Token {
 }
 
 
+
+
 impl DictionaryType {
     pub async fn from_json(json_object: &Value) -> Result<Self, ParseError> {
         macro_rules! err_resolve {
@@ -50,7 +53,7 @@ impl DictionaryType {
             };
         }
 
-        let mut dictionaries:Vec<Dictionary> = vec![];
+        let mut dictionaries: Vec<Dictionary> = vec![];
 
         let id = match json_object.get("id") {
             None => { None }
@@ -65,6 +68,23 @@ impl DictionaryType {
                 }
             }
         };
+
+        let dictionaries = match json_object.get("dictionaries") {
+            None => { return Err(ParseError { message: "Error dictionaries not found".to_string() }); }
+            Some(v) => {
+                match v.as_array()
+                {
+                    None => { return Err(ParseError { message: "Error dictionaries is not array".to_string() }); }
+                    Some(v) => {
+                        v
+                            .iter()
+                            .map(|d| block_on(Dictionary::from_json(d)) )
+                            .collect::<Result<Vec<Dictionary>, ParseError>>()?
+                    }
+                }
+            }
+        };
+
 
         let name = err_resolve!(json_object,"name").to_string();
         let alias = err_resolve!(json_object,"alias").to_string();
@@ -123,7 +143,55 @@ impl<'r> FromData<'r> for DictionaryType {
                 }
                 Success(ot)
             }
-            Err(e) => { Failure((Status { code: 500 }, Self::Error { message: "Error".to_string() })) }
+            Err(e) => { Failure((Status { code: 500 }, Self::Error { message: format!("Error {}", e) })) }
         }
+    }
+}
+
+impl Dictionary {
+    pub async fn from_json(json_object: &Value) -> Result<Self, ParseError> {
+        macro_rules! err_resolve {
+            ( $x:expr, $key:expr ) => {
+                match match $x.get($key) {
+                    None => { return Err(ParseError { message: format!("Error {} not found",$key) }); }
+                    Some(v) => { v }
+                }.as_str() {
+                    None => { return Err(ParseError { message: format!("Error {} is not string",$key) }); }
+                    Some(v) => { v }
+                }
+            };
+        }
+
+        let mut dictionaries: Vec<Dictionary> = vec![];
+
+        let id = match json_object.get("id") {
+            None => { None }
+            Some(v) => {
+                match v.as_str()
+                {
+                    None => { return Err(ParseError { message: "Error id is not string".to_string() }); }
+                    Some(v) => {
+                        dictionaries = Repository::getDictionariesByTypeId(v.to_string()).await?;
+                        Some(v.to_string())
+                    }
+                }
+            }
+        };
+
+        let name = err_resolve!(json_object,"name").to_string();
+        let alias = err_resolve!(json_object,"alias").to_string();
+
+        Ok(Dictionary {
+            id,
+            name,
+            alias,
+        })
+    }
+    pub async fn from_str(string: &str) -> Result<Self, ParseError> {
+        let json_object: Value = match from_str::<Value>(string) {
+            Ok(v) => { v }
+            Err(e) => { return Err(ParseError { message: format!("Error parse json '{}'", e.to_string()) }); }
+        };
+        Ok(Self::from_json(&json_object).await?)
     }
 }

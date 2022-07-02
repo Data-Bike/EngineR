@@ -21,6 +21,8 @@ use rand::{distributions::Alphanumeric, Rng};
 use crate::model::link::entity::link::LinkType;
 
 pub fn add_link_type() -> LinkType {
+    add_object_type_rand_alias();
+    add_object_type_rand_alias();
     let alias = format!("test_link_type_{}", rand::thread_rng()
         .sample_iter(&Alphanumeric)
         .take(7)
@@ -112,6 +114,87 @@ pub fn add_object_type() {
     };
 }
 
+pub fn add_object_type_rand_alias() {
+    let mut alias = rand::thread_rng()
+        .sample_iter(&Alphanumeric)
+        .take(7)
+        .map(char::from)
+        .collect::<String>();
+
+    while match block_on(Object_Repository::getObjectTypeFromAlias(alias.to_string())) {
+        Ok(_) => { true }
+        Err(_) => { false }
+    } {
+        alias = rand::thread_rng()
+            .sample_iter(&Alphanumeric)
+            .take(7)
+            .map(char::from)
+            .collect::<String>();
+    }
+
+    match block_on(Object_Repository::createObjectType(ObjectType {
+        id: None,
+        fields: vec![
+            Field {
+                id: None,
+                alias: format!("lastname_{}", alias),
+                kind: "varchar(255)".to_string(),
+                name: "lastname".to_string(),
+                default: None,
+                value: None,
+                dictionary_type: None,
+                require: false,
+                index: false,
+                preview: false,
+            },
+            Field {
+                id: None,
+                alias: format!("firstname_{}", alias),
+                kind: "varchar(255)".to_string(),
+                name: "firstname".to_string(),
+                default: None,
+                value: None,
+                dictionary_type: None,
+                require: false,
+                index: false,
+                preview: false,
+            },
+            Field {
+                id: None,
+                alias: format!("patronymic_{}", alias),
+                kind: "varchar(255)".to_string(),
+                name: "patronymic".to_string(),
+                default: None,
+                value: None,
+                dictionary_type: None,
+                require: false,
+                index: false,
+                preview: false,
+            },
+            Field {
+                id: None,
+                alias: format!("birthday_{}", alias),
+                kind: "timestamp".to_string(),
+                name: "birthday".to_string(),
+                default: None,
+                value: None,
+                dictionary_type: None,
+                require: false,
+                index: false,
+                preview: false,
+            },
+        ],
+        kind: "object".to_string(),
+        alias: format!("fl_{}", alias),
+    })) {
+        Ok(_) => {}
+        Err(e) => {
+            println!("{:?}", e);
+            panic!("Error create object type");
+        }
+    };
+}
+
 
 pub fn get_user_groups() -> Vec<Group> {
     let mut g = Group {
@@ -172,6 +255,18 @@ pub fn get_user_groups() -> Vec<Group> {
                 kind: PermissionKind::create,
                 name: "system_of_object_access".to_string(),
                 object: "link".to_string(),
+            }, Permission {
+                access: Access::allow,
+                alias: format!("system_of_{}_access_", rand::thread_rng()
+                    .sample_iter(&Alphanumeric)
+                    .take(7)
+                    .map(char::from)
+                    .collect::<String>()),
+                id: None,
+                level: PermissionLevel::system,
+                kind: PermissionKind::create,
+                name: "system_of_object_access".to_string(),
+                object: "dictionary_type".to_string(),
             }],
             object: vec![],
             object_type: vec![Permission {
