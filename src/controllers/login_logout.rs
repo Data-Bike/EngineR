@@ -66,41 +66,49 @@ mod test {
     use rocket::uri;
     use crate::{rocket_build};
     use crate::controllers::form_parser::error::ParseError;
+    use crate::controllers::test::add_test_user;
     use crate::model::user::entity::user::User;
     use crate::model::user::repository::repository::Repository as User_Repository;
 
 
-    pub fn add_test_user() {
-        let user = User {
-            id: None,
-            login: "root".to_string(),
-            password: match bcrypt::hash("testestest".to_string(), DEFAULT_COST) {
-                Ok(h) => { h }
-                Err(e) => { panic!("Cannt hashed password"); }
-            },
-            access_token: "".to_string(),
-            oauth: "".to_string(),
-            groups: vec![],
-            date_last_active: None,
-            date_registred: Utc::now().naive_utc(),
-        };
-
-        if block_on(User_Repository::getUserByLogin(user.login.clone())).is_ok() {
-            return;
-        }
-        let res = block_on(User_Repository::createUser(&user));
-        assert_eq!(res, Ok("1".to_string()));
-    }
+    // pub fn add_test_user() {
+    //     let user = User {
+    //         id: None,
+    //         login: "root".to_string(),
+    //         password: match bcrypt::hash("testestest".to_string(), DEFAULT_COST) {
+    //             Ok(h) => { h }
+    //             Err(e) => { panic!("Cannt hashed password"); }
+    //         },
+    //         access_token: "".to_string(),
+    //         oauth: "".to_string(),
+    //         groups: vec![],
+    //         date_last_active: None,
+    //         date_registred: Utc::now().naive_utc(),
+    //     };
+    //
+    //     if block_on(User_Repository::getUserByLogin(user.login.clone())).is_ok() {
+    //         return;
+    //     }
+    //     let res = block_on(User_Repository::createUser(&user));
+    //     assert_eq!(res, Ok("1".to_string()));
+    // }
 
     #[test]
     fn login() {
-        add_test_user();
+        let user = add_test_user();
         let client = Client::tracked(rocket_build()).expect("valid rocket instance");
-        let mut response = client.post(uri!("/login")).body("{\
-            \"login\":\"root\",\
+        let mut response = client.post(uri!("/login")).body(format!("{{\
+            \"login\":\"{}\",\
             \"password\":\"testestest\"\
-        }").remote(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080))
+        }}", user.login)).remote(SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), 8080))
             .dispatch();
+        let cookie_str = response
+            .headers()
+            .get("Set-Cookie")
+            .collect::<Vec<&str>>()
+            .pop()
+            .unwrap()
+            .to_string();
         assert_eq!(response.status(), Status::Ok);
         assert!(response.headers().get("Set-Cookie").count() >= 1);
         assert_eq!(response.into_string(), Some("OK".to_string()));

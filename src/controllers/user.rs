@@ -15,13 +15,13 @@ async fn get_user(id: usize) -> RawHtml<String> {
     let object = Repository::getUserById(id.to_string()).await.ok();
     println!("Got user");
     match object {
-        None => { RawHtml(format!("ERROR")) }
+        None => { RawHtml(format!("ERROR cannt get user")) }
         Some(o) => {
             println!("User to json");
             RawHtml(
                 match to_value(o) {
                     Ok(x) => { x }
-                    Err(e) => { return RawHtml("ERROR".to_string()); }
+                    Err(e) => { return RawHtml(format!("ERROR serialize user {}",e)); }
                 }.to_string()
             )
         }
@@ -60,6 +60,8 @@ mod test {
     use async_std::task::block_on;
     use bcrypt::DEFAULT_COST;
     use chrono::Utc;
+    use rand::distributions::Alphanumeric;
+    use rand::Rng;
     use rocket::local::blocking::Client;
     use rocket::http::{Header, Status};
     use rocket::http::private::cookie::CookieBuilder;
@@ -76,6 +78,7 @@ mod test {
     use crate::model::secure::repository::repository::Repository as Secure_Repository;
 
 
+
     #[test]
     fn hello() {
         let client = Client::tracked(rocket_build()).expect("valid rocket instance");
@@ -88,10 +91,16 @@ mod test {
     fn add_user() {
         add_object_type();
         let user = login();
+        let login = rand::thread_rng()
+            .sample_iter(&Alphanumeric)
+            .take(7)
+            .map(char::from)
+            .collect::<String>();
         // println!("Set cookie: '{}'", session_cookie.as_str());
         // let h = Header::new("Cookie", session_cookie);
         let client = Client::tracked(rocket_build()).expect("valid rocket instance");
-        let request = client.post(uri!("/user/add")).body("{\"access_token\":\"\",\"date_last_active\":null,\"date_registred\":\"1996-12-19T16:39:57.123456\",\"groups\":[\"1\"],\"login\":\"root2\",\"oauth\":\"\",\"password\":\"$2b$12$4H2xurOmbAlkrk2ZcgbeBe4RgaPk23D118IhYLv1kLOCBCPIDxj62\"}");
+
+        let request = client.post(uri!("/user/add")).body(format!("{{\"access_token\":\"\",\"date_last_active\":null,\"date_registred\":\"1996-12-19T16:39:57.123456\",\"groups\":[\"1\"],\"login\":\"root2_{}\",\"oauth\":\"\",\"password\":\"$2b$12$4H2xurOmbAlkrk2ZcgbeBe4RgaPk23D118IhYLv1kLOCBCPIDxj62\"}}",login));
         // request.add_header(h);
         let cookie = CookieBuilder::new("user_id", user.id.unwrap()).secure(true);
         let response = request.private_cookie(cookie.finish()).dispatch();
@@ -111,12 +120,12 @@ mod test {
         // request.add_header(h);
         let cookie = CookieBuilder::new("user_id", user.id.unwrap()).secure(true);
         let response = request.private_cookie(cookie.finish()).dispatch();
-
-
         assert_eq!(response.status(), Status::Ok);
+        let response_str = response.into_string().unwrap();
+        println!("response_str: {}",response_str);
         let u_gotten =
             block_on(
-                User::from_str(response.into_string().unwrap().as_str())
+                User::from_str(response_str.as_str())
             ).unwrap();
         let u_saved = block_on(User_Repository::getUserById("1".to_string())).unwrap();
         assert_eq!(u_gotten.id, u_saved.id);

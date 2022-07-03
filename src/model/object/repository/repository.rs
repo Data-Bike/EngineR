@@ -6,6 +6,7 @@ use sqlx::postgres::PgRow;
 use sqlx::Row;
 use crate::controllers::pool::pool::{create_table, get_insert, insert, select, sql, sql_one, update};
 use crate::{cache_it, model, remove_it_from_cache};
+use crate::model::dictionary::entity::dictionary::DictionaryType;
 use crate::model::error::RepositoryError;
 use crate::model::lfu_cache::cache::CACHE;
 use crate::model::object::entity::object::{Field, Object, ObjectType};
@@ -221,11 +222,16 @@ impl Repository {
             .collect::<Result<Vec<Object>, RepositoryError>>()
     }
 
-    pub async fn createObjectType(object_type: ObjectType) -> Result<(), RepositoryError> {
+    pub async fn createObjectType(object_type: ObjectType) -> Result<String, RepositoryError> {
         let fields = object_type
             .fields
             .iter()
-            .map(|f| (f.alias.clone(), f.kind.clone()))
+            .map(
+                |f| (f.alias.clone(), match f.dictionary_type.as_ref() {
+                    None => {f.kind.clone()}
+                    Some(dt) => {format!("bigint")}
+                }  )
+            )
             .collect::<Vec<_>>();
 
         let id = insert("object_type", vec![
@@ -253,7 +259,7 @@ impl Repository {
         for future in futures {
             block_on(future)?;
         }
-        Ok(())
+        Ok(id)
     }
 
 

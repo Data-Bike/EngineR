@@ -93,6 +93,7 @@ mod test {
     fn add_link_test() {
         let user = login();
         let lt = add_link_type();
+
         // println!("Set cookie: '{}'", session_cookie.as_str());
         // let h = Header::new("Cookie", session_cookie);
         let client = Client::tracked(rocket_build()).expect("valid rocket instance");

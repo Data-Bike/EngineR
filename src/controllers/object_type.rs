@@ -104,7 +104,7 @@ mod test {
         let str_tmp_ot = format!("{{\
                 \"fields\":[
                     {{
-                        \"alias\":\"code\",
+                        \"alias\":\"code_{}\",
                         \"kind\":\"varchar(255)\",
                         \"name\":\"code\",
                         \"require\":true,
@@ -112,7 +112,7 @@ mod test {
                         \"preview\":true
                     }},
                     {{
-                        \"alias\":\"number\",
+                        \"alias\":\"number_{}\",
                         \"kind\":\"varchar(255)\",
                         \"name\":\"number\",
                         \"require\":true,
@@ -122,7 +122,63 @@ mod test {
                 ],
                 \"kind\":\"object\",
                 \"alias\":\"{}\"
-            }}", alias);
+            }}", alias, alias, alias);
+
+        // let str_ot = format!(str_tmp_ot);
+
+        let request = client.post(uri!("/object_type/add")).body(str_tmp_ot);
+        // request.add_header(h);
+        let cookie = CookieBuilder::new("user_id", user.id.unwrap()).secure(true);
+        let response = request.private_cookie(cookie.finish()).dispatch();
+
+
+        assert_eq!(response.status(), Status::Ok);
+    }
+    
+    #[test]
+    fn add_object_type_with_dictionary_test() {
+        let user = login();
+        // println!("Set cookie: '{}'", session_cookie.as_str());
+        // let h = Header::new("Cookie", session_cookie);
+        let client = Client::tracked(rocket_build()).expect("valid rocket instance");
+
+        let alias: String = rand::thread_rng()
+            .sample_iter(&Alphanumeric)
+            .take(7)
+            .map(char::from)
+            .collect();
+
+        let str_tmp_ot = format!("{{\
+                \"fields\":[
+                    {{
+                        \"alias\":\"code_{}\",
+                        \"kind\":\"varchar(255)\",
+                        \"name\":\"code\",
+                        \"require\":true,
+                        \"index\":true,
+                        \"preview\":true
+                    }},
+                    {{
+                        \"alias\":\"number_{}\",
+                        \"kind\":\"varchar(255)\",
+                        \"name\":\"number\",
+                        \"require\":true,
+                        \"index\":true,
+                        \"preview\":true
+                    }},
+                    {{
+                        \"alias\":\"dicionary_test_{}\",
+                        \"kind\":\"dictionary\",
+                        \"dictionary_type_id\":\"1\",
+                        \"name\":\"number\",
+                        \"require\":true,
+                        \"index\":true,
+                        \"preview\":true
+                    }}
+                ],
+                \"kind\":\"object\",
+                \"alias\":\"tl_with_dict_{}\"
+            }}", alias, alias, alias, alias);
 
         // let str_ot = format!(str_tmp_ot);
 

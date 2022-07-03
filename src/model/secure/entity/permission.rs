@@ -73,6 +73,7 @@ pub struct Group {
     pub alias: String,
     pub name: String,
     pub level: String,
+    #[serde(flatten)]
     pub id: Option<String>,
     pub permissions: PermissionsGroup,
 }
