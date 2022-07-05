@@ -7,7 +7,7 @@ use rocket::shield::Feature::Accelerometer;
 use sqlx::Row;
 use sqlx::Error as Sqlx_Error;
 use crate::{cache_it, remove_it_from_cache};
-use crate::controllers::pool::pool::{delete, insert, sql, sql_one, update};
+use crate::model::app::pool::pool::{delete, insert, sql, sql_one, update};
 use crate::model::error::RepositoryError;
 use crate::model::link::entity::link::Link;
 use crate::model::object::entity::object::{Field, Object, ObjectType};

@@ -7,7 +7,7 @@ use crate::cache_it;
 use crate::model::link::entity::link::{Link, LinkType};
 use crate::model::user::repository::repository;
 use crate::model::object::repository::repository::Repository as Object_repository;
-use crate::controllers::pool::pool::{insert, select, sql, sql_one};
+use crate::model::app::pool::pool::{insert, select, sql, sql_one};
 use crate::model::error::RepositoryError;
 use crate::model::lfu_cache::cache::CACHE;
 use crate::model::secure::entity::permission::PermissionLevel::link;

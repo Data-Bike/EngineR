@@ -8,7 +8,7 @@ use lazy_static::lazy_static;
 
 use sqlx::{Error as Sqlx_Error, Pool, Postgres, Row, Transaction};
 use sqlx::postgres::{PgPoolOptions, PgQueryResult, PgRow};
-use crate::model::config::entity::config::{Config, CONFIG};
+use crate::model::app::config::entity::config::{Config, CONFIG};
 
 pub fn get_connected_string()->String{
     format!(

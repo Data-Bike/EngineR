@@ -4,7 +4,7 @@ use sqlx::Error as Sqlx_Error;
 use async_std::task::{block_on, JoinHandle, spawn};
 use sqlx::postgres::PgRow;
 use sqlx::Row;
-use crate::controllers::pool::pool::{create_table, get_insert, insert, select, select_one, sql, sql_one, update};
+use crate::model::app::pool::pool::{create_table, get_insert, insert, select, select_one, sql, sql_one, update};
 use crate::{cache_it, model, remove_it_from_cache};
 use crate::model::dictionary::entity::dictionary::{Dictionary, DictionaryType};
 use crate::model::error::RepositoryError;
