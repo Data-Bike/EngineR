@@ -23,6 +23,7 @@ dependencies = [
  "serde_json",
  "sled",
  "sqlx",
+ "toml",
 ]
 
 [[package]]

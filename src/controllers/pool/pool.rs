@@ -8,11 +8,22 @@ use lazy_static::lazy_static;
 
 use sqlx::{Error as Sqlx_Error, Pool, Postgres, Row, Transaction};
 use sqlx::postgres::{PgPoolOptions, PgQueryResult, PgRow};
+use crate::model::config::entity::config::{Config, CONFIG};
+
+pub fn get_connected_string()->String{
+    format!(
+        "postgres://{user}:{password}@{host}/{database}",
+        user = CONFIG.user,
+        password = CONFIG.password,
+        host = CONFIG.host,
+        database = CONFIG.database,
+    )
+}
 
 lazy_static! {
  static ref  pool: Pool<Postgres> = block_on(PgPoolOptions::new()
     .max_connections(5)
-    .connect("postgres://enginer:testpassword@localhost/enginer")
+    .connect(get_connected_string().as_str())
 ).expect("Failed to connect to database");
 }
 
@@ -31,6 +42,7 @@ impl Std_Error for DBError {}
 
 
 pub async fn sql(sql: &str) -> Result<Vec<PgRow>, Sqlx_Error> {
+    let c = &CONFIG;
     match sqlx::query(sql).fetch_all(pool.deref()).await {
         Ok(rows) => Ok(rows),
         Err(e) => Err(e)

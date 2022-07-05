@@ -8,3 +8,4 @@ pub mod app;
 pub mod error;
 pub mod lfu_cache;
 pub mod dictionary;
+pub mod config;
