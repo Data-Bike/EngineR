@@ -1,0 +1,145 @@
+{
+  "bundle_id": "skr-core",
+  "version": "1.0.0",
+  "description": "Excel mapping profile for ЮЛ import (docs/15 §5)",
+  "profile_id": "00000000-0000-0000-0004-000000000001",
+  "stable_alias": "legal_entity_excel_import",
+  "source": {
+    "sheet": "ЮЛ",
+    "header_row": 1,
+    "data_start_row": 2
+  },
+  "identity_policy_id": "00000000-0000-0000-0001-000000000002",
+  "conflict_action": "create_new_assertion",
+  "empty_semantics": "skip",
+  "mappings": [
+    {
+      "source_column": "ОПФ",
+      "target_predicate_id": "00000000-0000-0000-0000-000000000210",
+      "target_type_id": "00000000-0000-0000-0000-000000000002",
+      "parser": "text",
+      "normalizer": "opf-ru-v1"
+    },
+    {
+      "source_column": "Наименование",
+      "target_predicate_id": "00000000-0000-0000-0000-000000000201",
+      "target_type_id": "00000000-0000-0000-0000-000000000002",
+      "parser": "text",
+      "normalizer": "text-trim-v1"
+    },
+    {
+      "source_column": "ИНН",
+      "target_predicate_id": "00000000-0000-0000-0000-000000000202",
+      "target_type_id": "00000000-0000-0000-0000-000000000002",
+      "parser": "text",
+      "normalizer": "inn-ru-v1"
+    },
+    {
+      "source_column": "ОГРН",
+      "target_predicate_id": "00000000-0000-0000-0000-000000000203",
+      "target_type_id": "00000000-0000-0000-0000-000000000002",
+      "parser": "text",
+      "normalizer": "ogrn-ru-v1"
+    },
+    {
+      "source_column": "КПП",
+      "target_predicate_id": "00000000-0000-0000-0000-000000000204",
+      "target_type_id": "00000000-0000-0000-0000-000000000002",
+      "parser": "text",
+      "normalizer": "kpp-ru-v1"
+    },
+    {
+      "source_column": "ОКВЭД",
+      "target_predicate_id": "00000000-0000-0000-0000-000000000213",
+      "target_type_id": "00000000-0000-0000-0000-000000000002",
+      "parser": "text",
+      "normalizer": "okved-ru-v1"
+    },
+    {
+      "source_column": "Уставный капитал",
+      "target_predicate_id": "00000000-0000-0000-0000-000000000212",
+      "target_type_id": "00000000-0000-0000-0000-000000000002",
+      "parser": "money",
+      "normalizer": null
+    },
+    {
+      "source_column": "Дата регистрации",
+      "target_predicate_id": "00000000-0000-0000-0000-000000000211",
+      "target_type_id": "00000000-0000-0000-0000-000000000002",
+      "parser": "date",
+      "normalizer": null
+    },
+    {
+      "source_column": "Юридический адрес",
+      "target_predicate_id": "00000000-0000-0000-0000-000000000401",
+      "target_type_id": "00000000-0000-0000-0000-000000000004",
+      "parser": "text",
+      "normalizer": "text-trim-v1",
+      "relation": {
+        "edge_predicate_id": "00000000-0000-0000-0000-000000000240",
+        "direction": "outgoing"
+      }
+    },
+    {
+      "source_column": "Телефон",
+      "target_predicate_id": "00000000-0000-0000-0000-000000000502",
+      "target_type_id": "00000000-0000-0000-0000-000000000005",
+      "parser": "phone",
+      "normalizer": "phone-e164-v1",
+      "relation": {
+        "edge_predicate_id": "00000000-0000-0000-0000-000000000220",
+        "direction": "outgoing"
+      },
+      "fixed_predicates": [
+        {"predicate_id": "00000000-0000-0000-0000-000000000501", "value": "phone"}
+      ]
+    },
+    {
+      "source_column": "E-mail",
+      "target_predicate_id": "00000000-0000-0000-0000-000000000502",
+      "target_type_id": "00000000-0000-0000-0000-000000000005",
+      "parser": "email",
+      "normalizer": "text-trim-v1",
+      "relation": {
+        "edge_predicate_id": "00000000-0000-0000-0000-000000000220",
+        "direction": "outgoing"
+      },
+      "fixed_predicates": [
+        {"predicate_id": "00000000-0000-0000-0000-000000000501", "value": "email"}
+      ]
+    },
+    {
+      "source_column": "Руководитель ФИО",
+      "target_predicate_id": null,
+      "target_type_id": "00000000-0000-0000-0000-000000000001",
+      "parser": "text",
+      "normalizer": "text-trim-v1",
+      "relation": {
+        "edge_predicate_id": "00000000-0000-0000-0000-000000000250",
+        "direction": "outgoing"
+      },
+      "split_predicates": [
+        {"target_predicate_id": "00000000-0000-0000-0000-000000000101", "part": "last_name"},
+        {"target_predicate_id": "00000000-0000-0000-0000-000000000102", "part": "first_name"}
+      ]
+    },
+    {
+      "source_column": "Учредитель",
+      "target_predicate_id": null,
+      "target_type_id": null,
+      "parser": "text",
+      "normalizer": "text-trim-v1",
+      "relation": {
+        "edge_predicate_id": "00000000-0000-0000-0000-000000000260",
+        "direction": "outgoing"
+      },
+      "entity_resolution": {
+        "candidate_types": [
+          "00000000-0000-0000-0000-000000000001",
+          "00000000-0000-0000-0000-000000000002"
+        ],
+        "match_mode": "fuzzy"
+      }
+    }
+  ]
+}

@@ -1,0 +1,153 @@
+{
+  "bundle_id": "skr-core",
+  "version": "1.0.0",
+  "description": "Workflow definitions for SKR processes (docs/13, docs/14 §7)",
+  "workflows": [
+    {
+      "workflow_id": "00000000-0000-0000-0003-000000000001",
+      "stable_alias": "request_processing",
+      "initial_state": "new",
+      "states": [
+        {
+          "name": "new",
+          "transitions": [
+            {"to": "in_review", "action": "start_review"},
+            {"to": "cancelled", "action": "cancel"}
+          ]
+        },
+        {
+          "name": "in_review",
+          "transitions": [
+            {"to": "checks_running", "action": "launch_checks"},
+            {"to": "cancelled", "action": "cancel"},
+            {"to": "new", "action": "return_to_new"}
+          ]
+        },
+        {
+          "name": "checks_running",
+          "transitions": [
+            {"to": "assessment", "action": "start_assessment"},
+            {"to": "in_review", "action": "checks_failed_return"}
+          ]
+        },
+        {
+          "name": "assessment",
+          "transitions": [
+            {"to": "decision", "action": "submit_for_decision"},
+            {"to": "checks_running", "action": "request_additional_checks"}
+          ]
+        },
+        {
+          "name": "decision",
+          "transitions": [
+            {"to": "completed", "action": "finalize"}
+          ]
+        },
+        {
+          "name": "completed",
+          "transitions": []
+        },
+        {
+          "name": "cancelled",
+          "transitions": []
+        }
+      ]
+    },
+    {
+      "workflow_id": "00000000-0000-0000-0003-000000000002",
+      "stable_alias": "check_execution",
+      "initial_state": "pending",
+      "states": [
+        {
+          "name": "pending",
+          "transitions": [
+            {"to": "running", "action": "start"},
+            {"to": "failed", "action": "abort"}
+          ]
+        },
+        {
+          "name": "running",
+          "transitions": [
+            {"to": "completed", "action": "complete"},
+            {"to": "failed", "action": "fail"},
+            {"to": "pending", "action": "retry"}
+          ]
+        },
+        {
+          "name": "completed",
+          "transitions": []
+        },
+        {
+          "name": "failed",
+          "transitions": [
+            {"to": "pending", "action": "reschedule"}
+          ]
+        }
+      ]
+    },
+    {
+      "workflow_id": "00000000-0000-0000-0003-000000000003",
+      "stable_alias": "risk_assessment",
+      "initial_state": "draft",
+      "states": [
+        {
+          "name": "draft",
+          "transitions": [
+            {"to": "pending_approval", "action": "submit_for_approval"}
+          ]
+        },
+        {
+          "name": "pending_approval",
+          "transitions": [
+            {"to": "approved", "action": "approve"},
+            {"to": "draft", "action": "reject"}
+          ]
+        },
+        {
+          "name": "approved",
+          "transitions": [
+            {"to": "superseded", "action": "supersede"}
+          ]
+        },
+        {
+          "name": "superseded",
+          "transitions": []
+        }
+      ]
+    },
+    {
+      "workflow_id": "00000000-0000-0000-0003-000000000004",
+      "stable_alias": "monitoring_cycle",
+      "initial_state": "scheduled",
+      "states": [
+        {
+          "name": "scheduled",
+          "transitions": [
+            {"to": "running", "action": "start_cycle"}
+          ]
+        },
+        {
+          "name": "running",
+          "transitions": [
+            {"to": "reviewed", "action": "complete_review"},
+            {"to": "escalated", "action": "escalate"}
+          ]
+        },
+        {
+          "name": "reviewed",
+          "transitions": [
+            {"to": "scheduled", "action": "schedule_next"},
+            {"to": "escalated", "action": "escalate"}
+          ]
+        },
+        {
+          "name": "escalated",
+          "transitions": [
+            {"to": "reviewed", "action": "resolve_escalation"},
+            {"to": "scheduled", "action": "schedule_next"}
+          ]
+        }
+      ]
+    }
+  ]
+}

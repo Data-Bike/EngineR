@@ -1,0 +1,21 @@
+[package]
+name = "enginer-query-engine"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+description = "Query AST, security rewrite and SQL compiler (docs/07)"
+
+[dependencies]
+enginer-domain = { workspace = true }
+enginer-security-domain = { workspace = true }
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[lints]
+workspace = true

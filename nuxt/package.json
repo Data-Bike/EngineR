@@ -1,0 +1,36 @@
+{
+  "name": "enginer-nuxt",
+  "version": "0.1.0",
+  "description": "EngineR admin UI — Nuxt 4 + Vue 3 + Nuxt UI 4 (docs/16, docs/17)",
+  "type": "module",
+  "scripts": {
+    "dev": "nuxt dev",
+    "build": "nuxt build",
+    "generate": "nuxt generate",
+    "preview": "nuxt preview",
+    "typecheck": "nuxt typecheck",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "license": "AGPL-3.0-or-later",
+  "dependencies": {
+    "@nuxt/ui": "^4.10.0",
+    "@nuxtjs/i18n": "^10.6.0",
+    "@pinia/nuxt": "^1.0.1",
+    "nuxt": "^4.5.1",
+    "pinia": "^4.0.2",
+    "vue": "^3.5.0",
+    "vue-i18n": "^11.4.8",
+    "vue-router": "^4.5.0"
+  },
+  "devDependencies": {
+    "@nuxt/test-utils": "^4.1.0",
+    "@playwright/test": "^1.62.1",
+    "@vitejs/plugin-vue": "^6.0.8",
+    "@vue/test-utils": "^2.4.11",
+    "happy-dom": "^20.11.1",
+    "typescript": "^5.7.0",
+    "vitest": "^4.1.10",
+    "vue-tsc": "^2.2.0"
+  }
+}

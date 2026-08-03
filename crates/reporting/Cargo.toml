@@ -1,0 +1,24 @@
+[package]
+name = "enginer-reporting"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+description = "Reporting: datasets, report definitions, template rendering (docs/15 §8-11)"
+
+[dependencies]
+enginer-domain = { workspace = true }
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+pretty_assertions.workspace = true
+
+[lints]
+workspace = true

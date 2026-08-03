@@ -1,0 +1,80 @@
+# EngineR full stack — PostgreSQL + API + Worker + Nuxt UI.
+#
+# Usage:
+#   docker compose up -d --build
+#   # API:     http://localhost:8000
+#   # Nuxt UI: http://localhost:3000
+#   # PG:      localhost:5432
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: enginer-postgres
+    environment:
+      POSTGRES_USER: enginer_admin
+      POSTGRES_PASSWORD: enginer_admin
+      POSTGRES_DB: enginer
+      POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C.UTF-8"
+    ports:
+      - "5432:5432"
+    volumes:
+      - enginer-pgdata:/var/lib/postgresql/data
+      - ./docker/postgres-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U enginer_admin -d enginer"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    shm_size: 256m
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: enginer-api
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ENGINER_CONFIG: /app/config/enginer.docker.toml
+      ENGINER_DATABASE_URL: postgres://enginer_app:enginer_app@postgres:5432/enginer
+      ROCKET_PORT: "8010"
+      ROCKET_ADDRESS: "0.0.0.0"
+      ROCKET_SECRET_KEY: "XwAPzDh3+kiZh+r+bbKm9qQtBo6WD1c8CS9LQP/7EQo="
+    ports:
+      - "8010:8010"
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: enginer-worker
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ENGINER_DATABASE_URL: postgres://enginer_worker:enginer_worker@postgres:5432/enginer
+    entrypoint: ["tini", "--"]
+    command: ["/app/entrypoint-worker.sh"]
+    restart: unless-stopped
+
+  web:
+    build:
+      context: .
+      dockerfile: nuxt/Dockerfile
+    container_name: enginer-web
+    depends_on:
+      - api
+    environment:
+      NODE_ENV: production
+      HOST: "0.0.0.0"
+      PORT: "3000"
+      # API URL for Nuxt server-side proxy (nitro routeRules)
+      ENGINER_API_URL: http://enginer-api:8010
+    ports:
+      - "3000:3000"
+    restart: unless-stopped
+
+volumes:
+  enginer-pgdata:

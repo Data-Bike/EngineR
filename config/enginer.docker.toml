@@ -1,0 +1,18 @@
+# EngineR API configuration for Docker (docs/23 §4).
+
+[http]
+public_origin = "http://localhost:8010"
+request_timeout_ms = 10000
+max_json_bytes = 1048576
+
+[database]
+url_secret_ref = "postgres://enginer_app:enginer_app@postgres:5432/enginer"
+max_connections = 20
+acquire_timeout_ms = 1000
+statement_timeout_ms = 5000
+db_executor_queue = 200
+
+[security]
+policy_cache_ttl_seconds = 30
+fail_closed = false
+internal_mtls_identity = "enginer-api"

@@ -1,0 +1,33 @@
+[package]
+name = "enginer-worker"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+description = "EngineR background worker (outbox, jobs, projections) — skeleton"
+
+[[bin]]
+name = "enginer-worker"
+path = "src/main.rs"
+
+[dependencies]
+enginer-domain = { workspace = true }
+enginer-application = { workspace = true }
+enginer-observability = { workspace = true }
+enginer-db-runtime = { workspace = true }
+enginer-persistence = { workspace = true }
+enginer-security-domain = { workspace = true }
+tokio = { workspace = true }
+async-std.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+sqlx.workspace = true
+
+[lints]
+workspace = true

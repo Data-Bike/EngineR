@@ -1,0 +1,5 @@
+[default]
+secret_key = "XwAPzDh3+kiZh+r+bbKm9qQtBo6WD1c8CS9LQP/7EQo="
+
+[release]
+secret_key = "XwAPzDh3+kiZh+r+bbKm9qQtBo6WD1c8CS9LQP/7EQo="

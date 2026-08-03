@@ -1,0 +1,108 @@
+{
+  "bundle_id": "skr-core",
+  "version": "1.0.0",
+  "description": "СКР core schema bundle: ФЛ/ЮЛ/холдинг/contact/document/address/request/check/risk (docs/03 §10, docs/24 §9)",
+  "tenant_scope": "global",
+  "types": [
+    {
+      "type_id": "00000000-0000-0000-0000-000000000001",
+      "stable_alias": "person",
+      "entity_class": "data",
+      "predicates": [
+        {"predicate_id": "00000000-0000-0000-0000-000000000101", "required": true,  "min_cardinality": 1, "max_cardinality": 1, "order": 1, "group": "identity"},
+        {"predicate_id": "00000000-0000-0000-0000-000000000102", "required": true,  "min_cardinality": 1, "max_cardinality": 1, "order": 2, "group": "identity"},
+        {"predicate_id": "00000000-0000-0000-0000-000000000103", "required": false, "min_cardinality": 0, "max_cardinality": 1, "order": 3, "group": "identity"},
+        {"predicate_id": "00000000-0000-0000-0000-000000000104", "required": false, "min_cardinality": 0, "max_cardinality": 1, "order": 4, "group": "identity"},
+        {"predicate_id": "00000000-0000-0000-0000-000000000110", "required": false, "min_cardinality": 0, "max_cardinality": 1, "order": 10, "group": "demographics"},
+        {"predicate_id": "00000000-0000-0000-0000-000000000111", "required": false, "min_cardinality": 0, "max_cardinality": 1, "order": 11, "group": "demographics"},
+        {"predicate_id": "00000000-0000-0000-0000-000000000120", "required": false, "min_cardinality": 0, "max_cardinality": null, "order": 20, "group": "contact"},
+        {"predicate_id": "00000000-0000-0000-0000-000000000130", "required": false, "min_cardinality": 0, "max_cardinality": null, "order": 30, "group": "documents"},
+        {"predicate_id": "00000000-0000-0000-0000-000000000140", "required": false, "min_cardinality": 0, "max_cardinality": null, "order": 40, "group": "address"}
+      ],
+      "identity_policy_ids": ["00000000-0000-0000-0001-000000000001"]
+    },
+    {
+      "type_id": "00000000-0000-0000-0000-000000000002",
+      "stable_alias": "legal_entity",
+      "entity_class": "data",
+      "predicates": [
+        {"predicate_id": "00000000-0000-0000-0000-000000000201", "required": true,  "min_cardinality": 1, "max_cardinality": 1, "order": 1, "group": "identity"},
+        {"predicate_id": "00000000-0000-0000-0000-000000000202", "required": true,  "min_cardinality": 1, "max_cardinality": 1, "order": 2, "group": "identity"},
+        {"predicate_id": "00000000-0000-0000-0000-000000000203", "required": false, "min_cardinality": 0, "max_cardinality": 1, "order": 3, "group": "identity"},
+        {"predicate_id": "00000000-0000-0000-0000-000000000204", "required": false, "min_cardinality": 0, "max_cardinality": 1, "order": 4, "group": "identity"},
+        {"predicate_id": "00000000-0000-0000-0000-000000000210", "required": false, "min_cardinality": 0, "max_cardinality": 1, "order": 10, "group": "registration"},
+        {"predicate_id": "00000000-0000-0000-0000-000000000211", "required": false, "min_cardinality": 0, "max_cardinality": 1, "order": 11, "group": "registration"},
+        {"predicate_id": "00000000-0000-0000-0000-000000000212", "required": false, "min_cardinality": 0, "max_cardinality": 1, "order": 12, "group": "registration"},
+        {"predicate_id": "00000000-0000-0000-0000-000000000213", "required": false, "min_cardinality": 0, "max_cardinality": 1, "order": 13, "group": "registration"},
+        {"predicate_id": "00000000-0000-0000-0000-000000000220", "required": false, "min_cardinality": 0, "max_cardinality": null, "order": 20, "group": "contact"},
+        {"predicate_id": "00000000-0000-0000-0000-000000000230", "required": false, "min_cardinality": 0, "max_cardinality": null, "order": 30, "group": "documents"},
+        {"predicate_id": "00000000-0000-0000-0000-000000000240", "required": false, "min_cardinality": 0, "max_cardinality": null, "order": 40, "group": "address"},
+        {"predicate_id": "00000000-0000-0000-0000-000000000250", "required": false, "min_cardinality": 0, "max_cardinality": null, "order": 50, "group": "management"},
+        {"predicate_id": "00000000-0000-0000-0000-000000000260", "required": false, "min_cardinality": 0, "max_cardinality": null, "order": 60, "group": "ownership"}
+      ],
+      "identity_policy_ids": ["00000000-0000-0000-0001-000000000002"]
+    },
+    {
+      "type_id": "00000000-0000-0000-0000-000000000003",
+      "stable_alias": "holding_view",
+      "entity_class": "data",
+      "predicates": [
+        {"predicate_id": "00000000-0000-0000-0000-000000000301", "required": true,  "min_cardinality": 1, "max_cardinality": 1, "order": 1, "group": "identity"},
+        {"predicate_id": "00000000-0000-0000-0000-000000000310", "required": false, "min_cardinality": 0, "max_cardinality": 1, "order": 10, "group": "composition"},
+        {"predicate_id": "00000000-0000-0000-0000-000000000320", "required": false, "min_cardinality": 0, "max_cardinality": null, "order": 20, "group": "members"}
+      ],
+      "identity_policy_ids": []
+    },
+    {
+      "type_id": "00000000-0000-0000-0000-000000000004",
+      "stable_alias": "address",
+      "entity_class": "data",
+      "predicates": [
+        {"predicate_id": "00000000-0000-0000-0000-000000000401", "required": true,  "min_cardinality": 1, "max_cardinality": 1, "order": 1, "group": "address"},
+        {"predicate_id": "00000000-0000-0000-0000-000000000402", "required": false, "min_cardinality": 0, "max_cardinality": 1, "order": 2, "group": "address"},
+        {"predicate_id": "00000000-0000-0000-0000-000000000403", "required": false, "min_cardinality": 0, "max_cardinality": 1, "order": 3, "group": "address"},
+        {"predicate_id": "00000000-0000-0000-0000-000000000404", "required": false, "min_cardinality": 0, "max_cardinality": 1, "order": 4, "group": "address"},
+        {"predicate_id": "00000000-0000-0000-0000-000000000405", "required": false, "min_cardinality": 0, "max_cardinality": 1, "order": 5, "group": "address"}
+      ],
+      "identity_policy_ids": []
+    },
+    {
+      "type_id": "00000000-0000-0000-0000-000000000005",
+      "stable_alias": "contact_point",
+      "entity_class": "data",
+      "predicates": [
+        {"predicate_id": "00000000-0000-0000-0000-000000000501", "required": true,  "min_cardinality": 1, "max_cardinality": 1, "order": 1, "group": "contact"},
+        {"predicate_id": "00000000-0000-0000-0000-000000000502", "required": false, "min_cardinality": 0, "max_cardinality": 1, "order": 2, "group": "contact"},
+        {"predicate_id": "00000000-0000-0000-0000-000000000503", "required": false, "min_cardinality": 0, "max_cardinality": 1, "order": 3, "group": "contact"}
+      ],
+      "identity_policy_ids": ["00000000-0000-0000-0001-000000000003"]
+    },
+    {
+      "type_id": "00000000-0000-0000-0000-000000000006",
+      "stable_alias": "document",
+      "entity_class": "data",
+      "predicates": [
+        {"predicate_id": "00000000-0000-0000-0000-000000000601", "required": true,  "min_cardinality": 1, "max_cardinality": 1, "order": 1, "group": "document"},
+        {"predicate_id": "00000000-0000-0000-0000-000000000602", "required": true,  "min_cardinality": 1, "max_cardinality": 1, "order": 2, "group": "document"},
+        {"predicate_id": "00000000-0000-0000-0000-000000000603", "required": false, "min_cardinality": 0, "max_cardinality": 1, "order": 3, "group": "document"},
+        {"predicate_id": "00000000-0000-0000-0000-000000000604", "required": false, "min_cardinality": 0, "max_cardinality": 1, "order": 4, "group": "document"},
+        {"predicate_id": "00000000-0000-0000-0000-000000000605", "required": false, "min_cardinality": 0, "max_cardinality": 1, "order": 5, "group": "document"},
+        {"predicate_id": "00000000-0000-0000-0000-000000000606", "required": false, "min_cardinality": 0, "max_cardinality": 1, "order": 6, "group": "document"}
+      ],
+      "identity_policy_ids": ["00000000-0000-0000-0001-000000000004"]
+    },
+    {
+      "type_id": "00000000-0000-0000-0000-000000000007",
+      "stable_alias": "license",
+      "entity_class": "data",
+      "predicates": [
+        {"predicate_id": "00000000-0000-0000-0000-000000000701", "required": true,  "min_cardinality": 1, "max_cardinality": 1, "order": 1, "group": "license"},
+        {"predicate_id": "00000000-0000-0000-0000-000000000702", "required": false, "min_cardinality": 0, "max_cardinality": 1, "order": 2, "group": "license"},
+        {"predicate_id": "00000000-0000-0000-0000-000000000703", "required": false, "min_cardinality": 0, "max_cardinality": 1, "order": 3, "group": "license"},
+        {"predicate_id": "00000000-0000-0000-0000-000000000704", "required": false, "min_cardinality": 0, "max_cardinality": 1, "order": 4, "group": "license"},
+        {"predicate_id": "00000000-0000-0000-0000-000000000705", "required": false, "min_cardinality": 0, "max_cardinality": 1, "order": 5, "group": "license"}
+      ],
+      "identity_policy_ids": []
+    }
+  ]
+}

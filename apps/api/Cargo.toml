@@ -1,0 +1,47 @@
+[package]
+name = "enginer-api"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+description = "EngineR Rocket JSON API"
+
+[[bin]]
+name = "enginer-api"
+path = "src/main.rs"
+
+[dependencies]
+enginer-domain = { workspace = true }
+enginer-contracts = { workspace = true }
+enginer-application = { workspace = true }
+enginer-observability = { workspace = true }
+enginer-db-runtime = { workspace = true }
+enginer-persistence = { workspace = true }
+enginer-security-domain = { workspace = true }
+enginer-security-pdp = { workspace = true }
+enginer-security-api = { workspace = true }
+enginer-schema-registry = { workspace = true }
+enginer-identity = { workspace = true }
+enginer-query-engine = { workspace = true }
+enginer-connectors = { workspace = true }
+enginer-risk-engine = { workspace = true }
+enginer-workflow = { workspace = true }
+enginer-files = { workspace = true }
+enginer-reporting = { workspace = true }
+enginer-security = { workspace = true }
+enginer-audit-persistence = { workspace = true }
+rocket = { workspace = true }
+tokio = { workspace = true }
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+toml.workspace = true
+sqlx.workspace = true
+
+[lints]
+workspace = true

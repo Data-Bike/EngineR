@@ -1,0 +1,26 @@
+[package]
+name = "enginer-connectors"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+description = "Connector SDK: source adapters, rate limit, raw payload/provenance (docs/14)"
+
+[dependencies]
+enginer-domain = { workspace = true }
+enginer-contracts = { workspace = true }
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+async-std = { workspace = true }
+
+[dev-dependencies]
+proptest.workspace = true
+pretty_assertions.workspace = true
+
+[lints]
+workspace = true

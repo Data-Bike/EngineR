@@ -1,0 +1,220 @@
+<template>
+  <div class="space-y-4">
+    <!-- Header -->
+    <div class="flex items-center justify-between">
+      <h3 class="font-medium">{{ t('entity.tabs.tasks') }}</h3>
+      <UButton size="sm" icon="i-lucide-plus" @click="showCreate = true">
+        {{ t('entity.tasks.create') }}
+      </UButton>
+    </div>
+
+    <!-- Task list -->
+    <div v-if="tasks.length === 0" class="text-center py-8 text-[var(--ui-text-muted)]">
+      {{ t('entity.empty') }}
+    </div>
+    <div v-else class="space-y-2">
+      <div
+        v-for="task in sortedTasks"
+        :key="task.task_id"
+        class="rounded-md border border-[var(--ui-border)] p-3 hover:border-[var(--ui-border-muted)]"
+      >
+        <div class="flex items-start justify-between">
+          <div class="flex items-start gap-3 flex-1">
+            <!-- Status icon -->
+            <UIcon :name="taskStatusIcon(task.status)" class="text-xl shrink-0" :class="taskStatusClass(task.status)" />
+            <div class="flex-1">
+              <div class="flex items-center gap-2">
+                <p class="font-medium">{{ task.title }}</p>
+                <UBadge v-if="task.blocking" color="error" size="sm">{{ t('entity.tasks.blocking') }}</UBadge>
+              </div>
+              <p v-if="task.description" class="text-sm text-[var(--ui-text-muted)] mt-1">{{ task.description }}</p>
+              <!-- Meta -->
+              <div class="flex flex-wrap items-center gap-3 mt-2 text-xs text-[var(--ui-text-muted)]">
+                <UBadge variant="subtle" size="sm">{{ t(`entity.tasks.kind.${task.kind}`) }}</UBadge>
+                <UBadge :color="taskStatusColor(task.status)" size="sm">
+                  {{ t(`entity.tasks.status.${task.status}`) }}
+                </UBadge>
+                <span v-if="task.assignee">{{ t('entity.tasks.assignee') }}: {{ task.assignee }}</span>
+                <span v-if="task.due_date" :class="{ 'text-red-500': isOverdue(task.due_date) }">
+                  {{ t('entity.tasks.due_date') }}: {{ task.due_date }}
+                </span>
+                <span>{{ t('entity.tasks.created') }}: {{ task.created_at }}</span>
+              </div>
+              <!-- Sub-tasks -->
+              <div v-if="task.sub_tasks.length > 0" class="mt-2 text-xs text-[var(--ui-text-muted)]">
+                {{ t('entity.tasks.sub_tasks') }}: {{ task.sub_tasks.length }}
+              </div>
+            </div>
+          </div>
+          <!-- Actions -->
+          <div class="flex gap-1">
+            <UButton
+              v-if="task.status === 'not_started' || task.status === 'waiting'"
+              size="xs"
+              variant="outline"
+              @click="startTask(task.task_id)"
+            >
+              {{ t('entity.tasks.start') }}
+            </UButton>
+            <UButton
+              v-if="task.status === 'in_progress'"
+              size="xs"
+              variant="outline"
+              @click="completeTask(task.task_id)"
+            >
+              {{ t('entity.tasks.complete') }}
+            </UButton>
+            <UButton
+              v-if="canCancel(task.status)"
+              size="xs"
+              variant="ghost"
+              color="error"
+              @click="cancelTask(task.task_id)"
+            >
+              {{ t('common.cancel') }}
+            </UButton>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Create task dialog -->
+    <UModal v-model:open="showCreate">
+      <template #content>
+        <div class="p-6 space-y-4">
+          <h2 class="text-lg font-bold">{{ t('entity.tasks.create') }}</h2>
+          <UFormField :label="t('entity.tasks.title')">
+            <UInput v-model="newTitle" class="w-full" />
+          </UFormField>
+          <UFormField :label="t('entity.tasks.kind_label')">
+            <USelect v-model="newKind" :items="kindOptions" class="w-full" />
+          </UFormField>
+          <UFormField :label="t('entity.tasks.due_date')">
+            <UInput v-model="newDueDate" type="date" class="w-full" />
+          </UFormField>
+          <UFormField :label="t('entity.tasks.description')">
+            <UTextarea v-model="newDescription" :rows="3" class="w-full" />
+          </UFormField>
+          <div class="flex justify-end gap-2">
+            <UButton variant="outline" @click="showCreate = false">{{ t('common.cancel') }}</UButton>
+            <UButton @click="createTask" :loading="creating">{{ t('common.save') }}</UButton>
+          </div>
+        </div>
+      </template>
+    </UModal>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { ref, computed, onMounted } from 'vue';
+import { useI18n } from 'vue-i18n';
+import type { WorkflowTask, TaskStatus, TaskKind } from '@enginer/api-client';
+
+defineProps<{
+  entityId?: string;
+  requestId?: string;
+}>();
+
+const { t } = useI18n();
+
+const tasks = ref<WorkflowTask[]>([]);
+const showCreate = ref(false);
+const creating = ref(false);
+const newTitle = ref('');
+const newKind = ref<TaskKind>('check_execution');
+const newDueDate = ref('');
+const newDescription = ref('');
+
+const sortedTasks = computed(() =>
+  [...tasks.value].sort((a, b) => a.priority - b.priority || a.created_at.localeCompare(b.created_at)),
+);
+
+const kindOptions = computed(() => [
+  { label: t('entity.tasks.kind.request_processing'), value: 'request_processing' },
+  { label: t('entity.tasks.kind.check_execution'), value: 'check_execution' },
+  { label: t('entity.tasks.kind.risk_assessment'), value: 'risk_assessment' },
+  { label: t('entity.tasks.kind.monitoring_review'), value: 'monitoring_review' },
+  { label: t('entity.tasks.kind.report_generation'), value: 'report_generation' },
+  { label: t('entity.tasks.kind.approval'), value: 'approval' },
+  { label: t('entity.tasks.kind.notification'), value: 'notification' },
+]);
+
+function taskStatusIcon(status: TaskStatus): string {
+  const icons: Record<TaskStatus, string> = {
+    not_started: 'i-lucide-circle',
+    in_progress: 'i-lucide-play-circle',
+    waiting: 'i-lucide-clock',
+    completed: 'i-lucide-check-circle',
+    cancelled: 'i-lucide-x-circle',
+    error: 'i-lucide-alert-octagon',
+  };
+  return icons[status] ?? 'i-lucide-circle';
+}
+
+function taskStatusClass(status: TaskStatus): string {
+  const classes: Record<TaskStatus, string> = {
+    not_started: 'text-[var(--ui-text-muted)]',
+    in_progress: 'text-blue-500',
+    waiting: 'text-yellow-500',
+    completed: 'text-green-500',
+    cancelled: 'text-[var(--ui-text-muted)]',
+    error: 'text-red-500',
+  };
+  return classes[status] ?? '';
+}
+
+type BadgeColor = 'primary' | 'secondary' | 'success' | 'info' | 'warning' | 'error' | 'neutral';
+
+function taskStatusColor(status: TaskStatus): BadgeColor {
+  const colors: Record<TaskStatus, BadgeColor> = {
+    not_started: 'neutral',
+    in_progress: 'primary',
+    waiting: 'warning',
+    completed: 'success',
+    cancelled: 'neutral',
+    error: 'error',
+  };
+  return colors[status] ?? 'neutral';
+}
+
+function isOverdue(dueDate: string): boolean {
+  return new Date(dueDate) < new Date();
+}
+
+function canCancel(status: TaskStatus): boolean {
+  return ['not_started', 'in_progress', 'waiting'].includes(status);
+}
+
+async function fetchTasks() {
+  // Would call api.tasks.list({ entityId: props.entityId, requestId: props.requestId })
+  tasks.value = [];
+}
+
+async function startTask(_taskId: string) {
+  await fetchTasks();
+}
+
+async function completeTask(_taskId: string) {
+  await fetchTasks();
+}
+
+async function cancelTask(_taskId: string) {
+  await fetchTasks();
+}
+
+async function createTask() {
+  creating.value = true;
+  try {
+    // Would call api.tasks.create({...})
+    showCreate.value = false;
+    newTitle.value = '';
+    newDescription.value = '';
+    newDueDate.value = '';
+    await fetchTasks();
+  } finally {
+    creating.value = false;
+  }
+}
+
+onMounted(fetchTasks);
+</script>

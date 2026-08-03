@@ -1,0 +1,208 @@
+<template>
+  <div class="p-6 space-y-6">
+    <!-- Page header -->
+    <div class="flex items-center justify-between">
+      <div>
+        <h1 class="text-2xl font-bold">{{ t('nav.reports') }}</h1>
+        <p class="text-[var(--ui-text-muted)] mt-1">{{ t('entity.reports.subtitle') }}</p>
+      </div>
+      <UButton icon="i-lucide-file-plus" @click="showGenerate = true">
+        {{ t('entity.reports.generate') }}
+      </UButton>
+    </div>
+
+    <!-- Summary cards -->
+    <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+      <StatCard
+        :label="t('entity.reports.ready')"
+        :value="readyCount"
+        icon="i-lucide-file-check"
+      />
+      <StatCard
+        :label="t('entity.reports.generating')"
+        :value="generatingCount"
+        icon="i-lucide-loader"
+      />
+      <StatCard
+        :label="t('entity.reports.expired_label')"
+        :value="expiredCount"
+        icon="i-lucide-file-x"
+      />
+    </div>
+
+    <!-- Reports table -->
+    <UCard>
+      <div v-if="loading" class="py-8 text-center text-[var(--ui-text-muted)]">
+        {{ t('common.loading') }}
+      </div>
+      <div v-else-if="reports.length === 0" class="py-8 text-center text-[var(--ui-text-muted)]">
+        {{ t('entity.empty') }}
+      </div>
+      <table v-else class="w-full text-sm">
+        <thead>
+          <tr class="border-b border-[var(--ui-border)] text-left">
+            <th class="py-2 px-3 font-medium text-[var(--ui-text-muted)]">{{ t('entity.reports.title') }}</th>
+            <th class="py-2 px-3 font-medium text-[var(--ui-text-muted)]">{{ t('entity.reports.entity') }}</th>
+            <th class="py-2 px-3 font-medium text-[var(--ui-text-muted)]">{{ t('entity.reports.format') }}</th>
+            <th class="py-2 px-3 font-medium text-[var(--ui-text-muted)]">{{ t('entity.reports.status_label') }}</th>
+            <th class="py-2 px-3 font-medium text-[var(--ui-text-muted)]">{{ t('entity.reports.generated') }}</th>
+            <th class="py-2 px-3 font-medium text-[var(--ui-text-muted)]">{{ t('entity.reports.size') }}</th>
+            <th class="py-2 px-3 font-medium text-[var(--ui-text-muted)]">{{ t('entity.actions') }}</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr
+            v-for="report in reports"
+            :key="report.report_id"
+            class="border-b border-[var(--ui-border)] hover:bg-[var(--ui-bg-muted)]"
+          >
+            <td class="py-2 px-3 font-medium">{{ report.title }}</td>
+            <td class="py-2 px-3">
+              <NuxtLink :to="`/entities/${report.entity_public_id}`" class="hover:underline">
+                {{ report.entity_public_id }}
+              </NuxtLink>
+            </td>
+            <td class="py-2 px-3">
+              <UBadge variant="subtle" size="sm">{{ report.format.toUpperCase() }}</UBadge>
+            </td>
+            <td class="py-2 px-3">
+              <UBadge :color="reportStatusColor(report.status)" size="sm">
+                {{ t(`entity.reports.status.${report.status}`) }}
+              </UBadge>
+            </td>
+            <td class="py-2 px-3">{{ report.generated_at ?? '—' }}</td>
+            <td class="py-2 px-3">{{ report.size_bytes ? formatFileSize(report.size_bytes) : '—' }}</td>
+            <td class="py-2 px-3">
+              <UButton
+                v-if="report.status === 'ready' && report.download_url && !isExpired(report)"
+                size="xs"
+                variant="outline"
+                icon="i-lucide-download"
+                @click="downloadReport(report)"
+              >
+                {{ t('entity.reports.download') }}
+              </UButton>
+              <span v-else-if="isExpired(report)" class="text-xs text-[var(--ui-text-muted)]">
+                {{ t('entity.reports.expired_label') }}
+              </span>
+            </td>
+          </tr>
+        </tbody>
+      </table>
+    </UCard>
+
+    <!-- Generate dialog -->
+    <UModal v-model:open="showGenerate">
+      <template #content>
+        <div class="p-6 space-y-4">
+          <h2 class="text-lg font-bold">{{ t('entity.reports.generate') }}</h2>
+          <UFormField :label="t('entity.reports.entity')">
+            <UInput v-model="newEntityId" :placeholder="t('entity.search')" class="w-full" />
+          </UFormField>
+          <UFormField :label="t('entity.reports.template')">
+            <USelect v-model="newTemplate" :items="templateOptions" class="w-full" />
+          </UFormField>
+          <UFormField :label="t('entity.reports.format')">
+            <USelect v-model="newFormat" :items="formatOptions" class="w-full" />
+          </UFormField>
+          <div class="flex justify-end gap-2">
+            <UButton variant="outline" @click="showGenerate = false">{{ t('common.cancel') }}</UButton>
+            <UButton @click="generateReport" :loading="generating">{{ t('entity.reports.generate') }}</UButton>
+          </div>
+        </div>
+      </template>
+    </UModal>
+  </div>
+</template>
+
+<script setup lang="ts">
+import { ref, computed, onMounted } from 'vue';
+import { useI18n } from 'vue-i18n';
+import type { ReportInstance, ReportFormat, ReportStatus } from '@enginer/api-client';
+
+definePageMeta({
+  middleware: 'auth',
+});
+
+const { t } = useI18n();
+
+const reports = ref<ReportInstance[]>([]);
+const loading = ref(false);
+const showGenerate = ref(false);
+const generating = ref(false);
+const newEntityId = ref('');
+const newTemplate = ref('standard');
+const newFormat = ref<ReportFormat>('pdf');
+
+const readyCount = computed(() => reports.value.filter((r) => r.status === 'ready').length);
+const generatingCount = computed(() => reports.value.filter((r) => r.status === 'generating').length);
+const expiredCount = computed(() => reports.value.filter((r) => isExpired(r)).length);
+
+const templateOptions = computed(() => [
+  { label: t('entity.reports.template.standard'), value: 'standard' },
+  { label: t('entity.reports.template.due_diligence'), value: 'due_diligence' },
+  { label: t('entity.reports.template.compliance'), value: 'compliance' },
+]);
+
+const formatOptions = computed(() => [
+  { label: 'PDF', value: 'pdf' },
+  { label: 'Excel', value: 'xlsx' },
+  { label: 'Word', value: 'docx' },
+  { label: 'JSON', value: 'json' },
+  { label: 'CSV', value: 'csv' },
+]);
+
+type BadgeColor = 'primary' | 'secondary' | 'success' | 'info' | 'warning' | 'error' | 'neutral';
+
+function reportStatusColor(status: ReportStatus): BadgeColor {
+  const colors: Record<ReportStatus, BadgeColor> = {
+    draft: 'neutral',
+    generating: 'primary',
+    ready: 'success',
+    failed: 'error',
+    expired: 'neutral',
+  };
+  return colors[status];
+}
+
+function isExpired(report: ReportInstance): boolean {
+  if (!report.expires_at) return false;
+  return new Date(report.expires_at) < new Date();
+}
+
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function downloadReport(report: ReportInstance) {
+  if (report.download_url) {
+    window.open(report.download_url, '_blank');
+  }
+}
+
+async function fetchReports() {
+  loading.value = true;
+  try {
+    // Would call api.reports.list()
+    reports.value = [];
+  } finally {
+    loading.value = false;
+  }
+}
+
+async function generateReport() {
+  generating.value = true;
+  try {
+    // Would call api.reports.generate({...})
+    showGenerate.value = false;
+    newEntityId.value = '';
+    await fetchReports();
+  } finally {
+    generating.value = false;
+  }
+}
+
+onMounted(fetchReports);
+</script>

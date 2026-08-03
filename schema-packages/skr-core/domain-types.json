@@ -1,0 +1,178 @@
+{
+  "bundle_id": "skr-core",
+  "version": "1.0.0",
+  "description": "SKR domain types: request/check/risk/workflow/contract/collateral (docs/03 §10, docs/14)",
+  "types": [
+    {
+      "type_id": "00000000-0000-0000-0000-000000000010",
+      "stable_alias": "request",
+      "entity_class": "data",
+      "predicates": [
+        {"predicate_id": "00000000-0000-0000-0000-000000000901", "required": true,  "min_cardinality": 1, "max_cardinality": 1, "order": 1, "group": "request"},
+        {"predicate_id": "00000000-0000-0000-0000-000000000902", "required": true,  "min_cardinality": 1, "max_cardinality": 1, "order": 2, "group": "request"},
+        {"predicate_id": "00000000-0000-0000-0000-000000000903", "required": false, "min_cardinality": 0, "max_cardinality": 1, "order": 3, "group": "request"},
+        {"predicate_id": "00000000-0000-0000-0000-000000000904", "required": false, "min_cardinality": 0, "max_cardinality": 1, "order": 4, "group": "request"},
+        {"predicate_id": "00000000-0000-0000-0000-000000000905", "required": false, "min_cardinality": 0, "max_cardinality": 1, "order": 5, "group": "request"},
+        {"predicate_id": "00000000-0000-0000-0000-000000000910", "required": false, "min_cardinality": 0, "max_cardinality": null, "order": 10, "group": "target"},
+        {"predicate_id": "00000000-0000-0000-0000-000000000920", "required": false, "min_cardinality": 0, "max_cardinality": null, "order": 20, "group": "checks"}
+      ],
+      "identity_policy_ids": ["00000000-0000-0000-0001-000000000010"]
+    },
+    {
+      "type_id": "00000000-0000-0000-0000-000000000011",
+      "stable_alias": "check",
+      "entity_class": "data",
+      "predicates": [
+        {"predicate_id": "00000000-0000-0000-0000-000000000a01", "required": true,  "min_cardinality": 1, "max_cardinality": 1, "order": 1, "group": "check"},
+        {"predicate_id": "00000000-0000-0000-0000-000000000a02", "required": true,  "min_cardinality": 1, "max_cardinality": 1, "order": 2, "group": "check"},
+        {"predicate_id": "00000000-0000-0000-0000-000000000a03", "required": true,  "min_cardinality": 1, "max_cardinality": 1, "order": 3, "group": "check"},
+        {"predicate_id": "00000000-0000-0000-0000-000000000a04", "required": false, "min_cardinality": 0, "max_cardinality": 1, "order": 4, "group": "check"},
+        {"predicate_id": "00000000-0000-0000-0000-000000000a05", "required": false, "min_cardinality": 0, "max_cardinality": 1, "order": 5, "group": "check"},
+        {"predicate_id": "00000000-0000-0000-0000-000000000a06", "required": false, "min_cardinality": 0, "max_cardinality": 1, "order": 6, "group": "check"},
+        {"predicate_id": "00000000-0000-0000-0000-000000000a10", "required": false, "min_cardinality": 0, "max_cardinality": null, "order": 10, "group": "evidence"}
+      ],
+      "identity_policy_ids": ["00000000-0000-0000-0001-000000000011"]
+    },
+    {
+      "type_id": "00000000-0000-0000-0000-000000000012",
+      "stable_alias": "risk_factor",
+      "entity_class": "data",
+      "predicates": [
+        {"predicate_id": "00000000-0000-0000-0000-000000000b01", "required": true,  "min_cardinality": 1, "max_cardinality": 1, "order": 1, "group": "factor"},
+        {"predicate_id": "00000000-0000-0000-0000-000000000b02", "required": true,  "min_cardinality": 1, "max_cardinality": 1, "order": 2, "group": "factor"},
+        {"predicate_id": "00000000-0000-0000-0000-000000000b03", "required": true,  "min_cardinality": 1, "max_cardinality": 1, "order": 3, "group": "factor"},
+        {"predicate_id": "00000000-0000-0000-0000-000000000b04", "required": false, "min_cardinality": 0, "max_cardinality": 1, "order": 4, "group": "factor"},
+        {"predicate_id": "00000000-0000-0000-0000-000000000b05", "required": false, "min_cardinality": 0, "max_cardinality": 1, "order": 5, "group": "factor"},
+        {"predicate_id": "00000000-0000-0000-0000-000000000b06", "required": false, "min_cardinality": 0, "max_cardinality": 1, "order": 6, "group": "factor"},
+        {"predicate_id": "00000000-0000-0000-0000-000000000b10", "required": false, "min_cardinality": 0, "max_cardinality": null, "order": 10, "group": "evidence"}
+      ],
+      "identity_policy_ids": []
+    },
+    {
+      "type_id": "00000000-0000-0000-0000-000000000013",
+      "stable_alias": "assessment",
+      "entity_class": "data",
+      "predicates": [
+        {"predicate_id": "00000000-0000-0000-0000-000000000c01", "required": true,  "min_cardinality": 1, "max_cardinality": 1, "order": 1, "group": "assessment"},
+        {"predicate_id": "00000000-0000-0000-0000-000000000c02", "required": true,  "min_cardinality": 1, "max_cardinality": 1, "order": 2, "group": "assessment"},
+        {"predicate_id": "00000000-0000-0000-0000-000000000c03", "required": true,  "min_cardinality": 1, "max_cardinality": 1, "order": 3, "group": "assessment"},
+        {"predicate_id": "00000000-0000-0000-0000-000000000c04", "required": false, "min_cardinality": 0, "max_cardinality": 1, "order": 4, "group": "assessment"},
+        {"predicate_id": "00000000-0000-0000-0000-000000000c05", "required": false, "min_cardinality": 0, "max_cardinality": 1, "order": 5, "group": "assessment"},
+        {"predicate_id": "00000000-0000-0000-0000-000000000c06", "required": false, "min_cardinality": 0, "max_cardinality": 1, "order": 6, "group": "assessment"},
+        {"predicate_id": "00000000-0000-0000-0000-000000000c10", "required": false, "min_cardinality": 0, "max_cardinality": null, "order": 10, "group": "factors"}
+      ],
+      "identity_policy_ids": []
+    },
+    {
+      "type_id": "00000000-0000-0000-0000-000000000014",
+      "stable_alias": "decision",
+      "entity_class": "data",
+      "predicates": [
+        {"predicate_id": "00000000-0000-0000-0000-000000000d01", "required": true,  "min_cardinality": 1, "max_cardinality": 1, "order": 1, "group": "decision"},
+        {"predicate_id": "00000000-0000-0000-0000-000000000d02", "required": true,  "min_cardinality": 1, "max_cardinality": 1, "order": 2, "group": "decision"},
+        {"predicate_id": "00000000-0000-0000-0000-000000000d03", "required": false, "min_cardinality": 0, "max_cardinality": 1, "order": 3, "group": "decision"},
+        {"predicate_id": "00000000-0000-0000-0000-000000000d04", "required": false, "min_cardinality": 0, "max_cardinality": 1, "order": 4, "group": "decision"}
+      ],
+      "identity_policy_ids": []
+    },
+    {
+      "type_id": "00000000-0000-0000-0000-000000000015",
+      "stable_alias": "task",
+      "entity_class": "workflow",
+      "predicates": [
+        {"predicate_id": "00000000-0000-0000-0000-000000000e01", "required": true,  "min_cardinality": 1, "max_cardinality": 1, "order": 1, "group": "task"},
+        {"predicate_id": "00000000-0000-0000-0000-000000000e02", "required": true,  "min_cardinality": 1, "max_cardinality": 1, "order": 2, "group": "task"},
+        {"predicate_id": "00000000-0000-0000-0000-000000000e03", "required": false, "min_cardinality": 0, "max_cardinality": 1, "order": 3, "group": "task"},
+        {"predicate_id": "00000000-0000-0000-0000-000000000e04", "required": false, "min_cardinality": 0, "max_cardinality": 1, "order": 4, "group": "task"},
+        {"predicate_id": "00000000-0000-0000-0000-000000000e05", "required": false, "min_cardinality": 0, "max_cardinality": 1, "order": 5, "group": "task"},
+        {"predicate_id": "00000000-0000-0000-0000-000000000e06", "required": false, "min_cardinality": 0, "max_cardinality": 1, "order": 6, "group": "task"}
+      ],
+      "identity_policy_ids": []
+    },
+    {
+      "type_id": "00000000-0000-0000-0000-000000000016",
+      "stable_alias": "contract",
+      "entity_class": "data",
+      "predicates": [
+        {"predicate_id": "00000000-0000-0000-0000-000000000f01", "required": true,  "min_cardinality": 1, "max_cardinality": 1, "order": 1, "group": "contract"},
+        {"predicate_id": "00000000-0000-0000-0000-000000000f02", "required": true,  "min_cardinality": 1, "max_cardinality": 1, "order": 2, "group": "contract"},
+        {"predicate_id": "00000000-0000-0000-0000-000000000f03", "required": false, "min_cardinality": 0, "max_cardinality": 1, "order": 3, "group": "contract"},
+        {"predicate_id": "00000000-0000-0000-0000-000000000f04", "required": false, "min_cardinality": 0, "max_cardinality": 1, "order": 4, "group": "contract"},
+        {"predicate_id": "00000000-0000-0000-0000-000000000f05", "required": false, "min_cardinality": 0, "max_cardinality": 1, "order": 5, "group": "contract"},
+        {"predicate_id": "00000000-0000-0000-0000-000000000f10", "required": false, "min_cardinality": 0, "max_cardinality": null, "order": 10, "group": "collateral"}
+      ],
+      "identity_policy_ids": ["00000000-0000-0000-0001-000000000016"]
+    },
+    {
+      "type_id": "00000000-0000-0000-0000-000000000017",
+      "stable_alias": "collateral",
+      "entity_class": "data",
+      "predicates": [
+        {"predicate_id": "00000000-0000-0000-0000-000000001001", "required": true,  "min_cardinality": 1, "max_cardinality": 1, "order": 1, "group": "collateral"},
+        {"predicate_id": "00000000-0000-0000-0000-000000001002", "required": true,  "min_cardinality": 1, "max_cardinality": 1, "order": 2, "group": "collateral"},
+        {"predicate_id": "00000000-0000-0000-0000-000000001003", "required": false, "min_cardinality": 0, "max_cardinality": 1, "order": 3, "group": "collateral"},
+        {"predicate_id": "00000000-0000-0000-0000-000000001004", "required": false, "min_cardinality": 0, "max_cardinality": 1, "order": 4, "group": "collateral"},
+        {"predicate_id": "00000000-0000-0000-0000-000000001005", "required": false, "min_cardinality": 0, "max_cardinality": 1, "order": 5, "group": "collateral"}
+      ],
+      "identity_policy_ids": []
+    }
+  ],
+  "predicates": [
+    {"predicate_id": "00000000-0000-0000-0000-000000000901", "stable_alias": "request.number",           "is_edge": false, "direction": "directed", "domain_type_id": "00000000-0000-0000-0000-000000000010", "range_type_id": null, "scalar_kind": "text",      "min_cardinality": 1, "max_cardinality": 1, "participates_in_identity": true,  "confidentiality_class": "public",    "normalizer_version": "text-trim-v1"},
+    {"predicate_id": "00000000-0000-0000-0000-000000000902", "stable_alias": "request.date",             "is_edge": false, "direction": "directed", "domain_type_id": "00000000-0000-0000-0000-000000000010", "range_type_id": null, "scalar_kind": "date",      "min_cardinality": 1, "max_cardinality": 1, "participates_in_identity": false, "confidentiality_class": "public",    "normalizer_version": null},
+    {"predicate_id": "00000000-0000-0000-0000-000000000903", "stable_alias": "request.initiator",        "is_edge": false, "direction": "directed", "domain_type_id": "00000000-0000-0000-0000-000000000010", "range_type_id": null, "scalar_kind": "text",      "min_cardinality": 0, "max_cardinality": 1, "participates_in_identity": false, "confidentiality_class": "public",    "normalizer_version": "text-trim-v1"},
+    {"predicate_id": "00000000-0000-0000-0000-000000000904", "stable_alias": "request.category",         "is_edge": false, "direction": "directed", "domain_type_id": "00000000-0000-0000-0000-000000000010", "range_type_id": null, "scalar_kind": "text",      "min_cardinality": 0, "max_cardinality": 1, "participates_in_identity": false, "confidentiality_class": "public",    "normalizer_version": "enum-request-category-v1"},
+    {"predicate_id": "00000000-0000-0000-0000-000000000905", "stable_alias": "request.status",           "is_edge": false, "direction": "directed", "domain_type_id": "00000000-0000-0000-0000-000000000010", "range_type_id": null, "scalar_kind": "text",      "min_cardinality": 0, "max_cardinality": 1, "participates_in_identity": false, "confidentiality_class": "public",    "normalizer_version": "enum-request-status-v1"},
+    {"predicate_id": "00000000-0000-0000-0000-000000000910", "stable_alias": "request.target",           "is_edge": true,  "direction": "directed", "domain_type_id": "00000000-0000-0000-0000-000000000010", "range_type_id": "00000000-0000-0000-0000-000000000001", "scalar_kind": null, "min_cardinality": 0, "max_cardinality": null, "participates_in_identity": false, "confidentiality_class": "public",    "normalizer_version": null},
+    {"predicate_id": "00000000-0000-0000-0000-000000000920", "stable_alias": "request.has_check",        "is_edge": true,  "direction": "directed", "domain_type_id": "00000000-0000-0000-0000-000000000010", "range_type_id": "00000000-0000-0000-0000-000000000011", "scalar_kind": null, "min_cardinality": 0, "max_cardinality": null, "participates_in_identity": false, "confidentiality_class": "restricted", "normalizer_version": null},
+
+    {"predicate_id": "00000000-0000-0000-0000-000000000a01", "stable_alias": "check.kind",               "is_edge": false, "direction": "directed", "domain_type_id": "00000000-0000-0000-0000-000000000011", "range_type_id": null, "scalar_kind": "text",      "min_cardinality": 1, "max_cardinality": 1, "participates_in_identity": true,  "confidentiality_class": "public",    "normalizer_version": "enum-check-kind-v1"},
+    {"predicate_id": "00000000-0000-0000-0000-000000000a02", "stable_alias": "check.status",             "is_edge": false, "direction": "directed", "domain_type_id": "00000000-0000-0000-0000-000000000011", "range_type_id": null, "scalar_kind": "text",      "min_cardinality": 1, "max_cardinality": 1, "participates_in_identity": false, "confidentiality_class": "public",    "normalizer_version": "enum-check-status-v1"},
+    {"predicate_id": "00000000-0000-0000-0000-000000000a03", "stable_alias": "check.started_at",          "is_edge": false, "direction": "directed", "domain_type_id": "00000000-0000-0000-0000-000000000011", "range_type_id": null, "scalar_kind": "datetime",  "min_cardinality": 1, "max_cardinality": 1, "participates_in_identity": false, "confidentiality_class": "public",    "normalizer_version": null},
+    {"predicate_id": "00000000-0000-0000-0000-000000000a04", "stable_alias": "check.completed_at",        "is_edge": false, "direction": "directed", "domain_type_id": "00000000-0000-0000-0000-000000000011", "range_type_id": null, "scalar_kind": "datetime",  "min_cardinality": 0, "max_cardinality": 1, "participates_in_identity": false, "confidentiality_class": "public",    "normalizer_version": null},
+    {"predicate_id": "00000000-0000-0000-0000-000000000a05", "stable_alias": "check.connector_id",        "is_edge": false, "direction": "directed", "domain_type_id": "00000000-0000-0000-0000-000000000011", "range_type_id": null, "scalar_kind": "text",      "min_cardinality": 0, "max_cardinality": 1, "participates_in_identity": false, "confidentiality_class": "public",    "normalizer_version": null},
+    {"predicate_id": "00000000-0000-0000-0000-000000000a06", "stable_alias": "check.error",              "is_edge": false, "direction": "directed", "domain_type_id": "00000000-0000-0000-0000-000000000011", "range_type_id": null, "scalar_kind": "text",      "min_cardinality": 0, "max_cardinality": 1, "participates_in_identity": false, "confidentiality_class": "public",    "normalizer_version": null},
+    {"predicate_id": "00000000-0000-0000-0000-000000000a10", "stable_alias": "check.has_evidence",        "is_edge": true,  "direction": "directed", "domain_type_id": "00000000-0000-0000-0000-000000000011", "range_type_id": "00000000-0000-0000-0000-000000000006", "scalar_kind": null, "min_cardinality": 0, "max_cardinality": null, "participates_in_identity": false, "confidentiality_class": "restricted", "normalizer_version": null},
+
+    {"predicate_id": "00000000-0000-0000-0000-000000000b01", "stable_alias": "risk_factor.criterion_id", "is_edge": false, "direction": "directed", "domain_type_id": "00000000-0000-0000-0000-000000000012", "range_type_id": null, "scalar_kind": "text",      "min_cardinality": 1, "max_cardinality": 1, "participates_in_identity": true,  "confidentiality_class": "public",    "normalizer_version": null},
+    {"predicate_id": "00000000-0000-0000-0000-000000000b02", "stable_alias": "risk_factor.level",         "is_edge": false, "direction": "directed", "domain_type_id": "00000000-0000-0000-0000-000000000012", "range_type_id": null, "scalar_kind": "text",      "min_cardinality": 1, "max_cardinality": 1, "participates_in_identity": false, "confidentiality_class": "public",    "normalizer_version": "enum-risk-level-v1"},
+    {"predicate_id": "00000000-0000-0000-0000-000000000b03", "stable_alias": "risk_factor.detected_at",   "is_edge": false, "direction": "directed", "domain_type_id": "00000000-0000-0000-0000-000000000012", "range_type_id": null, "scalar_kind": "datetime",  "min_cardinality": 1, "max_cardinality": 1, "participates_in_identity": false, "confidentiality_class": "public",    "normalizer_version": null},
+    {"predicate_id": "00000000-0000-0000-0000-000000000b04", "stable_alias": "risk_factor.resolved_at",   "is_edge": false, "direction": "directed", "domain_type_id": "00000000-0000-0000-0000-000000000012", "range_type_id": null, "scalar_kind": "datetime",  "min_cardinality": 0, "max_cardinality": 1, "participates_in_identity": false, "confidentiality_class": "public",    "normalizer_version": null},
+    {"predicate_id": "00000000-0000-0000-0000-000000000b05", "stable_alias": "risk_factor.explanation",   "is_edge": false, "direction": "directed", "domain_type_id": "00000000-0000-0000-0000-000000000012", "range_type_id": null, "scalar_kind": "text",      "min_cardinality": 0, "max_cardinality": 1, "participates_in_identity": false, "confidentiality_class": "public",    "normalizer_version": null},
+    {"predicate_id": "00000000-0000-0000-0000-000000000b06", "stable_alias": "risk_factor.status",        "is_edge": false, "direction": "directed", "domain_type_id": "00000000-0000-0000-0000-000000000012", "range_type_id": null, "scalar_kind": "text",      "min_cardinality": 0, "max_cardinality": 1, "participates_in_identity": false, "confidentiality_class": "public",    "normalizer_version": "enum-factor-status-v1"},
+    {"predicate_id": "00000000-0000-0000-0000-000000000b10", "stable_alias": "risk_factor.has_evidence",  "is_edge": true,  "direction": "directed", "domain_type_id": "00000000-0000-0000-0000-000000000012", "range_type_id": "00000000-0000-0000-0000-000000000006", "scalar_kind": null, "min_cardinality": 0, "max_cardinality": null, "participates_in_identity": false, "confidentiality_class": "restricted", "normalizer_version": null},
+
+    {"predicate_id": "00000000-0000-0000-0000-000000000c01", "stable_alias": "assessment.target",        "is_edge": true,  "direction": "directed", "domain_type_id": "00000000-0000-0000-0000-000000000013", "range_type_id": "00000000-0000-0000-0000-000000000001", "scalar_kind": null, "min_cardinality": 1, "max_cardinality": 1, "participates_in_identity": false, "confidentiality_class": "public",    "normalizer_version": null},
+    {"predicate_id": "00000000-0000-0000-0000-000000000c02", "stable_alias": "assessment.overall_level",  "is_edge": false, "direction": "directed", "domain_type_id": "00000000-0000-0000-0000-000000000013", "range_type_id": null, "scalar_kind": "text",      "min_cardinality": 1, "max_cardinality": 1, "participates_in_identity": false, "confidentiality_class": "public",    "normalizer_version": "enum-risk-level-v1"},
+    {"predicate_id": "00000000-0000-0000-0000-000000000c03", "stable_alias": "assessment.assessed_at",    "is_edge": false, "direction": "directed", "domain_type_id": "00000000-0000-0000-0000-000000000013", "range_type_id": null, "scalar_kind": "datetime",  "min_cardinality": 1, "max_cardinality": 1, "participates_in_identity": false, "confidentiality_class": "public",    "normalizer_version": null},
+    {"predicate_id": "00000000-0000-0000-0000-000000000c04", "stable_alias": "assessment.assessor",       "is_edge": false, "direction": "directed", "domain_type_id": "00000000-0000-0000-0000-000000000013", "range_type_id": null, "scalar_kind": "text",      "min_cardinality": 0, "max_cardinality": 1, "participates_in_identity": false, "confidentiality_class": "public",    "normalizer_version": null},
+    {"predicate_id": "00000000-0000-0000-0000-000000000c05", "stable_alias": "assessment.decision",       "is_edge": false, "direction": "directed", "domain_type_id": "00000000-0000-0000-0000-000000000013", "range_type_id": null, "scalar_kind": "text",      "min_cardinality": 0, "max_cardinality": 1, "participates_in_identity": false, "confidentiality_class": "public",    "normalizer_version": "enum-risk-decision-v1"},
+    {"predicate_id": "00000000-0000-0000-0000-000000000c06", "stable_alias": "assessment.rationale",      "is_edge": false, "direction": "directed", "domain_type_id": "00000000-0000-0000-0000-000000000013", "range_type_id": null, "scalar_kind": "text",      "min_cardinality": 0, "max_cardinality": 1, "participates_in_identity": false, "confidentiality_class": "public",    "normalizer_version": null},
+    {"predicate_id": "00000000-0000-0000-0000-000000000c10", "stable_alias": "assessment.has_factor",     "is_edge": true,  "direction": "directed", "domain_type_id": "00000000-0000-0000-0000-000000000013", "range_type_id": "00000000-0000-0000-0000-000000000012", "scalar_kind": null, "min_cardinality": 0, "max_cardinality": null, "participates_in_identity": false, "confidentiality_class": "public",    "normalizer_version": null},
+
+    {"predicate_id": "00000000-0000-0000-0000-000000000d01", "stable_alias": "decision.kind",            "is_edge": false, "direction": "directed", "domain_type_id": "00000000-0000-0000-0000-000000000014", "range_type_id": null, "scalar_kind": "text",      "min_cardinality": 1, "max_cardinality": 1, "participates_in_identity": true,  "confidentiality_class": "public",    "normalizer_version": "enum-decision-kind-v1"},
+    {"predicate_id": "00000000-0000-0000-0000-000000000d02", "stable_alias": "decision.made_at",          "is_edge": false, "direction": "directed", "domain_type_id": "00000000-0000-0000-0000-000000000014", "range_type_id": null, "scalar_kind": "datetime",  "min_cardinality": 1, "max_cardinality": 1, "participates_in_identity": false, "confidentiality_class": "public",    "normalizer_version": null},
+    {"predicate_id": "00000000-0000-0000-0000-000000000d03", "stable_alias": "decision.made_by",          "is_edge": false, "direction": "directed", "domain_type_id": "00000000-0000-0000-0000-000000000014", "range_type_id": null, "scalar_kind": "text",      "min_cardinality": 0, "max_cardinality": 1, "participates_in_identity": false, "confidentiality_class": "public",    "normalizer_version": null},
+    {"predicate_id": "00000000-0000-0000-0000-000000000d04", "stable_alias": "decision.reason",           "is_edge": false, "direction": "directed", "domain_type_id": "00000000-0000-0000-0000-000000000014", "range_type_id": null, "scalar_kind": "text",      "min_cardinality": 0, "max_cardinality": 1, "participates_in_identity": false, "confidentiality_class": "public",    "normalizer_version": null},
+
+    {"predicate_id": "00000000-0000-0000-0000-000000000e01", "stable_alias": "task.title",               "is_edge": false, "direction": "directed", "domain_type_id": "00000000-0000-0000-0000-000000000015", "range_type_id": null, "scalar_kind": "text",      "min_cardinality": 1, "max_cardinality": 1, "participates_in_identity": false, "confidentiality_class": "public",    "normalizer_version": "text-trim-v1"},
+    {"predicate_id": "00000000-0000-0000-0000-000000000e02", "stable_alias": "task.status",              "is_edge": false, "direction": "directed", "domain_type_id": "00000000-0000-0000-0000-000000000015", "range_type_id": null, "scalar_kind": "text",      "min_cardinality": 1, "max_cardinality": 1, "participates_in_identity": false, "confidentiality_class": "public",    "normalizer_version": "enum-task-status-v1"},
+    {"predicate_id": "00000000-0000-0000-0000-000000000e03", "stable_alias": "task.kind",                "is_edge": false, "direction": "directed", "domain_type_id": "00000000-0000-0000-0000-000000000015", "range_type_id": null, "scalar_kind": "text",      "min_cardinality": 0, "max_cardinality": 1, "participates_in_identity": false, "confidentiality_class": "public",    "normalizer_version": "enum-task-kind-v1"},
+    {"predicate_id": "00000000-0000-0000-0000-000000000e04", "stable_alias": "task.assignee",            "is_edge": false, "direction": "directed", "domain_type_id": "00000000-0000-0000-0000-000000000015", "range_type_id": null, "scalar_kind": "text",      "min_cardinality": 0, "max_cardinality": 1, "participates_in_identity": false, "confidentiality_class": "public",    "normalizer_version": null},
+    {"predicate_id": "00000000-0000-0000-0000-000000000e05", "stable_alias": "task.due_date",            "is_edge": false, "direction": "directed", "domain_type_id": "00000000-0000-0000-0000-000000000015", "range_type_id": null, "scalar_kind": "date",      "min_cardinality": 0, "max_cardinality": 1, "participates_in_identity": false, "confidentiality_class": "public",    "normalizer_version": null},
+    {"predicate_id": "00000000-0000-0000-0000-000000000e06", "stable_alias": "task.priority",            "is_edge": false, "direction": "directed", "domain_type_id": "00000000-0000-0000-0000-000000000015", "range_type_id": null, "scalar_kind": "integer",   "min_cardinality": 0, "max_cardinality": 1, "participates_in_identity": false, "confidentiality_class": "public",    "normalizer_version": null},
+
+    {"predicate_id": "00000000-0000-0000-0000-000000000f01", "stable_alias": "contract.number",          "is_edge": false, "direction": "directed", "domain_type_id": "00000000-0000-0000-0000-000000000016", "range_type_id": null, "scalar_kind": "text",      "min_cardinality": 1, "max_cardinality": 1, "participates_in_identity": true,  "confidentiality_class": "public",    "normalizer_version": "text-trim-v1"},
+    {"predicate_id": "00000000-0000-0000-0000-000000000f02", "stable_alias": "contract.date",            "is_edge": false, "direction": "directed", "domain_type_id": "00000000-0000-0000-0000-000000000016", "range_type_id": null, "scalar_kind": "date",      "min_cardinality": 1, "max_cardinality": 1, "participates_in_identity": false, "confidentiality_class": "public",    "normalizer_version": null},
+    {"predicate_id": "00000000-0000-0000-0000-000000000f03", "stable_alias": "contract.product",         "is_edge": false, "direction": "directed", "domain_type_id": "00000000-0000-0000-0000-000000000016", "range_type_id": null, "scalar_kind": "text",      "min_cardinality": 0, "max_cardinality": 1, "participates_in_identity": false, "confidentiality_class": "public",    "normalizer_version": null},
+    {"predicate_id": "00000000-0000-0000-0000-000000000f04", "stable_alias": "contract.amount",          "is_edge": false, "direction": "directed", "domain_type_id": "00000000-0000-0000-0000-000000000016", "range_type_id": null, "scalar_kind": "money",     "min_cardinality": 0, "max_cardinality": 1, "participates_in_identity": false, "confidentiality_class": "public",    "normalizer_version": null},
+    {"predicate_id": "00000000-0000-0000-0000-000000000f05", "stable_alias": "contract.status",          "is_edge": false, "direction": "directed", "domain_type_id": "00000000-0000-0000-0000-000000000016", "range_type_id": null, "scalar_kind": "text",      "min_cardinality": 0, "max_cardinality": 1, "participates_in_identity": false, "confidentiality_class": "public",    "normalizer_version": "enum-contract-status-v1"},
+    {"predicate_id": "00000000-0000-0000-0000-000000000f10", "stable_alias": "contract.has_collateral",   "is_edge": true,  "direction": "directed", "domain_type_id": "00000000-0000-0000-0000-000000000016", "range_type_id": "00000000-0000-0000-0000-000000000017", "scalar_kind": null, "min_cardinality": 0, "max_cardinality": null, "participates_in_identity": false, "confidentiality_class": "public",    "normalizer_version": null},
+
+    {"predicate_id": "00000000-0000-0000-0000-000000001001", "stable_alias": "collateral.kind",          "is_edge": false, "direction": "directed", "domain_type_id": "00000000-0000-0000-0000-000000000017", "range_type_id": null, "scalar_kind": "text",      "min_cardinality": 1, "max_cardinality": 1, "participates_in_identity": true,  "confidentiality_class": "public",    "normalizer_version": "enum-collateral-kind-v1"},
+    {"predicate_id": "00000000-0000-0000-0000-000000001002", "stable_alias": "collateral.status",        "is_edge": false, "direction": "directed", "domain_type_id": "00000000-0000-0000-0000-000000000017", "range_type_id": null, "scalar_kind": "text",      "min_cardinality": 1, "max_cardinality": 1, "participates_in_identity": false, "confidentiality_class": "public",    "normalizer_version": "enum-collateral-status-v1"},
+    {"predicate_id": "00000000-0000-0000-0000-000000001003", "stable_alias": "collateral.value",         "is_edge": false, "direction": "directed", "domain_type_id": "00000000-0000-0000-0000-000000000017", "range_type_id": null, "scalar_kind": "money",     "min_cardinality": 0, "max_cardinality": 1, "participates_in_identity": false, "confidentiality_class": "public",    "normalizer_version": null},
+    {"predicate_id": "00000000-0000-0000-0000-000000001004", "stable_alias": "collateral.next_check_date", "is_edge": false, "direction": "directed", "domain_type_id": "00000000-0000-0000-0000-000000000017", "range_type_id": null, "scalar_kind": "date",      "min_cardinality": 0, "max_cardinality": 1, "participates_in_identity": false, "confidentiality_class": "public",    "normalizer_version": null},
+    {"predicate_id": "00000000-0000-0000-0000-000000001005", "stable_alias": "collateral.responsible",   "is_edge": false, "direction": "directed", "domain_type_id": "00000000-0000-0000-0000-000000000017", "range_type_id": null, "scalar_kind": "text",      "min_cardinality": 0, "max_cardinality": 1, "participates_in_identity": false, "confidentiality_class": "public",    "normalizer_version": null}
+  ]
+}

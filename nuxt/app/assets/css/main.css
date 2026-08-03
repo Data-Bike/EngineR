@@ -1,0 +1,26 @@
+@import "tailwindcss";
+@import "@nuxt/ui";
+
+:root {
+  --ui-radius: 0.5rem;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+/* Skip link for keyboard navigation (docs/16 §12, WCAG 2.2 AA) */
+.skip-link {
+  position: absolute;
+  top: -40px;
+  left: 0;
+  z-index: 100;
+  padding: 0.5rem 1rem;
+  background: var(--ui-bg);
+  color: var(--ui-text);
+  border-radius: 0 0 0.5rem 0;
+}
+
+.skip-link:focus {
+  top: 0;
+}

@@ -1,0 +1,31 @@
+[package]
+name = "enginer-integration"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+description = "Integration: end-to-end check flow orchestrator (docs/13 §8, docs/14 §4-12)"
+
+[dependencies]
+enginer-domain = { workspace = true }
+enginer-contracts = { workspace = true }
+enginer-connectors = { workspace = true }
+enginer-risk-engine = { workspace = true }
+enginer-workflow = { workspace = true }
+enginer-files = { workspace = true }
+enginer-reporting = { workspace = true }
+enginer-security = { workspace = true }
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+pretty_assertions.workspace = true
+
+[lints]
+workspace = true

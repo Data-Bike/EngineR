@@ -1,0 +1,281 @@
+{
+  "bundle_id": "skr-core",
+  "version": "1.0.0",
+  "description": "View definitions for SKR core types (docs/03 §9, docs/17)",
+  "views": [
+    {
+      "view_id": "00000000-0000-0000-0002-000000000001",
+      "view_type": "form",
+      "type_id": "00000000-0000-0000-0000-000000000001",
+      "stable_alias": "person_form",
+      "name_key": "views.person_form",
+      "sections": [
+        {
+          "name": "identity",
+          "label_key": "views.person_form.identity",
+          "fields": [
+            {"predicate_id": "00000000-0000-0000-0000-000000000101", "widget": "text"},
+            {"predicate_id": "00000000-0000-0000-0000-000000000102", "widget": "text"},
+            {"predicate_id": "00000000-0000-0000-0000-000000000103", "widget": "text"},
+            {"predicate_id": "00000000-0000-0000-0000-000000000104", "widget": "text"}
+          ]
+        },
+        {
+          "name": "demographics",
+          "label_key": "views.person_form.demographics",
+          "fields": [
+            {"predicate_id": "00000000-0000-0000-0000-000000000110", "widget": "date"},
+            {"predicate_id": "00000000-0000-0000-0000-000000000111", "widget": "country-select"}
+          ]
+        },
+        {
+          "name": "contact",
+          "label_key": "views.person_form.contact",
+          "fields": [
+            {"predicate_id": "00000000-0000-0000-0000-000000000120", "widget": "entity-relation", "target_type_id": "00000000-0000-0000-0000-000000000005"}
+          ]
+        },
+        {
+          "name": "documents",
+          "label_key": "views.person_form.documents",
+          "fields": [
+            {"predicate_id": "00000000-0000-0000-0000-000000000130", "widget": "entity-relation", "target_type_id": "00000000-0000-0000-0000-000000000006"}
+          ]
+        },
+        {
+          "name": "address",
+          "label_key": "views.person_form.address",
+          "fields": [
+            {"predicate_id": "00000000-0000-0000-0000-000000000140", "widget": "entity-relation", "target_type_id": "00000000-0000-0000-0000-000000000004"}
+          ]
+        }
+      ]
+    },
+    {
+      "view_id": "00000000-0000-0000-0002-000000000002",
+      "view_type": "form",
+      "type_id": "00000000-0000-0000-0000-000000000002",
+      "stable_alias": "legal_entity_form",
+      "name_key": "views.legal_entity_form",
+      "sections": [
+        {
+          "name": "identity",
+          "label_key": "views.legal_entity_form.identity",
+          "fields": [
+            {"predicate_id": "00000000-0000-0000-0000-000000000201", "widget": "text"},
+            {"predicate_id": "00000000-0000-0000-0000-000000000202", "widget": "text"},
+            {"predicate_id": "00000000-0000-0000-0000-000000000203", "widget": "text"},
+            {"predicate_id": "00000000-0000-0000-0000-000000000204", "widget": "text"},
+            {"predicate_id": "00000000-0000-0000-0000-000000000210", "widget": "text"}
+          ]
+        },
+        {
+          "name": "registration",
+          "label_key": "views.legal_entity_form.registration",
+          "fields": [
+            {"predicate_id": "00000000-0000-0000-0000-000000000211", "widget": "date"},
+            {"predicate_id": "00000000-0000-0000-0000-000000000212", "widget": "money"},
+            {"predicate_id": "00000000-0000-0000-0000-000000000213", "widget": "text"}
+          ]
+        },
+        {
+          "name": "contact",
+          "label_key": "views.legal_entity_form.contact",
+          "fields": [
+            {"predicate_id": "00000000-0000-0000-0000-000000000220", "widget": "entity-relation", "target_type_id": "00000000-0000-0000-0000-000000000005"}
+          ]
+        },
+        {
+          "name": "documents",
+          "label_key": "views.legal_entity_form.documents",
+          "fields": [
+            {"predicate_id": "00000000-0000-0000-0000-000000000230", "widget": "entity-relation", "target_type_id": "00000000-0000-0000-0000-000000000006"}
+          ]
+        },
+        {
+          "name": "address",
+          "label_key": "views.legal_entity_form.address",
+          "fields": [
+            {"predicate_id": "00000000-0000-0000-0000-000000000240", "widget": "entity-relation", "target_type_id": "00000000-0000-0000-0000-000000000004"}
+          ]
+        },
+        {
+          "name": "management",
+          "label_key": "views.legal_entity_form.management",
+          "fields": [
+            {"predicate_id": "00000000-0000-0000-0000-000000000250", "widget": "entity-relation", "target_type_id": "00000000-0000-0000-0000-000000000001"}
+          ]
+        },
+        {
+          "name": "ownership",
+          "label_key": "views.legal_entity_form.ownership",
+          "fields": [
+            {"predicate_id": "00000000-0000-0000-0000-000000000260", "widget": "entity-relation", "target_type_id": "00000000-0000-0000-0000-000000000001"}
+          ]
+        }
+      ]
+    },
+    {
+      "view_id": "00000000-0000-0000-0002-000000000003",
+      "view_type": "list",
+      "type_id": "00000000-0000-0000-0000-000000000001",
+      "stable_alias": "person_list",
+      "name_key": "views.person_list",
+      "columns": [
+        {"predicate_id": "00000000-0000-0000-0000-000000000101", "label_key": "views.person_list.last_name", "sortable": true},
+        {"predicate_id": "00000000-0000-0000-0000-000000000102", "label_key": "views.person_list.first_name", "sortable": true},
+        {"predicate_id": "00000000-0000-0000-0000-000000000104", "label_key": "views.person_list.inn", "sortable": true},
+        {"predicate_id": "00000000-0000-0000-0000-000000000110", "label_key": "views.person_list.birth_date", "sortable": true}
+      ],
+      "filters": [
+        {"predicate_id": "00000000-0000-0000-0000-000000000101", "operator": "prefix", "label_key": "views.person_list.filter_last_name"},
+        {"predicate_id": "00000000-0000-0000-0000-000000000104", "operator": "eq", "label_key": "views.person_list.filter_inn"},
+        {"predicate_id": "00000000-0000-0000-0000-000000000110", "operator": "between", "label_key": "views.person_list.filter_birth_date"}
+      ],
+      "facets": [
+        {"predicate_id": "00000000-0000-0000-0000-000000000111", "label_key": "views.person_list.facet_citizenship"}
+      ]
+    },
+    {
+      "view_id": "00000000-0000-0000-0002-000000000004",
+      "view_type": "list",
+      "type_id": "00000000-0000-0000-0000-000000000002",
+      "stable_alias": "legal_entity_list",
+      "name_key": "views.legal_entity_list",
+      "columns": [
+        {"predicate_id": "00000000-0000-0000-0000-000000000201", "label_key": "views.legal_entity_list.full_name", "sortable": true},
+        {"predicate_id": "00000000-0000-0000-0000-000000000202", "label_key": "views.legal_entity_list.inn", "sortable": true},
+        {"predicate_id": "00000000-0000-0000-0000-000000000203", "label_key": "views.legal_entity_list.ogrn", "sortable": true},
+        {"predicate_id": "00000000-0000-0000-0000-000000000210", "label_key": "views.legal_entity_list.opf", "sortable": true}
+      ],
+      "filters": [
+        {"predicate_id": "00000000-0000-0000-0000-000000000201", "operator": "prefix", "label_key": "views.legal_entity_list.filter_full_name"},
+        {"predicate_id": "00000000-0000-0000-0000-000000000202", "operator": "eq", "label_key": "views.legal_entity_list.filter_inn"},
+        {"predicate_id": "00000000-0000-0000-0000-000000000203", "operator": "eq", "label_key": "views.legal_entity_list.filter_ogrn"},
+        {"predicate_id": "00000000-0000-0000-0000-000000000210", "operator": "eq", "label_key": "views.legal_entity_list.filter_opf"}
+      ],
+      "facets": [
+        {"predicate_id": "00000000-0000-0000-0000-000000000210", "label_key": "views.legal_entity_list.facet_opf"},
+        {"predicate_id": "00000000-0000-0000-0000-000000000213", "label_key": "views.legal_entity_list.facet_okved"}
+      ]
+    },
+    {
+      "view_id": "00000000-0000-0000-0002-000000000005",
+      "view_type": "tree",
+      "type_id": "00000000-0000-0000-0000-000000000003",
+      "stable_alias": "holding_tree",
+      "name_key": "views.holding_tree",
+      "sections": [
+        {
+          "name": "root",
+          "label_key": "views.holding_tree.root",
+          "fields": [
+            {"predicate_id": "00000000-0000-0000-0000-000000000301", "widget": "text"},
+            {"predicate_id": "00000000-0000-0000-0000-000000000310", "widget": "date"}
+          ]
+        },
+        {
+          "name": "members",
+          "label_key": "views.holding_tree.members",
+          "fields": [
+            {"predicate_id": "00000000-0000-0000-0000-000000000320", "widget": "entity-relation", "target_type_id": "00000000-0000-0000-0000-000000000002"}
+          ]
+        }
+      ]
+    },
+    {
+      "view_id": "00000000-0000-0000-0002-000000000006",
+      "view_type": "graph",
+      "type_id": null,
+      "stable_alias": "entity_graph",
+      "name_key": "views.entity_graph",
+      "sections": [
+        {
+          "name": "outgoing",
+          "label_key": "views.entity_graph.outgoing",
+          "fields": []
+        },
+        {
+          "name": "incoming",
+          "label_key": "views.entity_graph.incoming",
+          "fields": []
+        }
+      ]
+    },
+    {
+      "view_id": "00000000-0000-0000-0002-000000000007",
+      "view_type": "list",
+      "type_id": "00000000-0000-0000-0000-000000000010",
+      "stable_alias": "request_list",
+      "name_key": "views.request_list",
+      "columns": [
+        {"predicate_id": "00000000-0000-0000-0000-000000000901", "label_key": "views.request_list.number", "sortable": true},
+        {"predicate_id": "00000000-0000-0000-0000-000000000902", "label_key": "views.request_list.date", "sortable": true},
+        {"predicate_id": "00000000-0000-0000-0000-000000000903", "label_key": "views.request_list.initiator", "sortable": false},
+        {"predicate_id": "00000000-0000-0000-0000-000000000904", "label_key": "views.request_list.category", "sortable": true},
+        {"predicate_id": "00000000-0000-0000-0000-000000000905", "label_key": "views.request_list.status", "sortable": true}
+      ],
+      "filters": [
+        {"predicate_id": "00000000-0000-0000-0000-000000000901", "operator": "prefix", "label_key": "views.request_list.filter_number"},
+        {"predicate_id": "00000000-0000-0000-0000-000000000904", "operator": "eq", "label_key": "views.request_list.filter_category"},
+        {"predicate_id": "00000000-0000-0000-0000-000000000905", "operator": "eq", "label_key": "views.request_list.filter_status"},
+        {"predicate_id": "00000000-0000-0000-0000-000000000902", "operator": "between", "label_key": "views.request_list.filter_date"}
+      ],
+      "facets": [
+        {"predicate_id": "00000000-0000-0000-0000-000000000904", "label_key": "views.request_list.facet_category"},
+        {"predicate_id": "00000000-0000-0000-0000-000000000905", "label_key": "views.request_list.facet_status"}
+      ]
+    },
+    {
+      "view_id": "00000000-0000-0000-0002-000000000008",
+      "view_type": "list",
+      "type_id": "00000000-0000-0000-0000-000000000011",
+      "stable_alias": "check_list",
+      "name_key": "views.check_list",
+      "columns": [
+        {"predicate_id": "00000000-0000-0000-0000-000000000a01", "label_key": "views.check_list.kind", "sortable": true},
+        {"predicate_id": "00000000-0000-0000-0000-000000000a02", "label_key": "views.check_list.status", "sortable": true},
+        {"predicate_id": "00000000-0000-0000-0000-000000000a03", "label_key": "views.check_list.started_at", "sortable": true},
+        {"predicate_id": "00000000-0000-0000-0000-000000000a04", "label_key": "views.check_list.completed_at", "sortable": true},
+        {"predicate_id": "00000000-0000-0000-0000-000000000a05", "label_key": "views.check_list.connector_id", "sortable": false}
+      ],
+      "filters": [
+        {"predicate_id": "00000000-0000-0000-0000-000000000a01", "operator": "eq", "label_key": "views.check_list.filter_kind"},
+        {"predicate_id": "00000000-0000-0000-0000-000000000a02", "operator": "eq", "label_key": "views.check_list.filter_status"},
+        {"predicate_id": "00000000-0000-0000-0000-000000000a03", "operator": "between", "label_key": "views.check_list.filter_started_at"}
+      ],
+      "facets": [
+        {"predicate_id": "00000000-0000-0000-0000-000000000a01", "label_key": "views.check_list.facet_kind"},
+        {"predicate_id": "00000000-0000-0000-0000-000000000a02", "label_key": "views.check_list.facet_status"}
+      ]
+    },
+    {
+      "view_id": "00000000-0000-0000-0002-000000000009",
+      "view_type": "card",
+      "type_id": "00000000-0000-0000-0000-000000000013",
+      "stable_alias": "assessment_card",
+      "name_key": "views.assessment_card",
+      "sections": [
+        {
+          "name": "summary",
+          "label_key": "views.assessment_card.summary",
+          "fields": [
+            {"predicate_id": "00000000-0000-0000-0000-000000000c01", "widget": "entity-ref"},
+            {"predicate_id": "00000000-0000-0000-0000-000000000c02", "widget": "risk-level-badge"},
+            {"predicate_id": "00000000-0000-0000-0000-000000000c03", "widget": "datetime"},
+            {"predicate_id": "00000000-0000-0000-0000-000000000c04", "widget": "text"},
+            {"predicate_id": "00000000-0000-0000-0000-000000000c05", "widget": "text"},
+            {"predicate_id": "00000000-0000-0000-0000-000000000c06", "widget": "textarea"}
+          ]
+        },
+        {
+          "name": "factors",
+          "label_key": "views.assessment_card.factors",
+          "fields": [
+            {"predicate_id": "00000000-0000-0000-0000-000000000c10", "widget": "entity-relation", "target_type_id": "00000000-0000-0000-0000-000000000012"}
+          ]
+        }
+      ]
+    }
+  ]
+}

@@ -1,0 +1,28 @@
+# Rust
+target/
+legacy-prototype/
+
+# Node
+node_modules/
+nuxt/.nuxt/
+nuxt/.output/
+nuxt/dist/
+web/dist/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# Git
+.git/
+
+# Docker
+docker-compose.yml
+
+# Docs (not needed in image)
+docs/
+
+# Test artifacts
+nuxt/test-results/
+nuxt/playwright-report/

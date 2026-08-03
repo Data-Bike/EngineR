@@ -1,0 +1,91 @@
+{
+  "bundle_id": "skr-core",
+  "version": "1.0.0",
+  "description": "Identity policies for SKR core types (docs/03 §10, docs/03 §8)",
+  "policies": [
+    {
+      "policy_id": "00000000-0000-0000-0001-000000000001",
+      "stable_alias": "person_inn_name_birth",
+      "target_type_id": "00000000-0000-0000-0000-000000000001",
+      "key_predicates": [
+        "00000000-0000-0000-0000-000000000104",
+        "00000000-0000-0000-0000-000000000101",
+        "00000000-0000-0000-0000-000000000102",
+        "00000000-0000-0000-0000-000000000110"
+      ],
+      "normalizer_version": "identity-person-v1",
+      "checksum_algorithm": "blake2b",
+      "match_mode": "exact"
+    },
+    {
+      "policy_id": "00000000-0000-0000-0001-000000000002",
+      "stable_alias": "legal_entity_inn_ogrn",
+      "target_type_id": "00000000-0000-0000-0000-000000000002",
+      "key_predicates": [
+        "00000000-0000-0000-0000-000000000202",
+        "00000000-0000-0000-0000-000000000203"
+      ],
+      "normalizer_version": "identity-legal-entity-v1",
+      "checksum_algorithm": "blake2b",
+      "match_mode": "exact"
+    },
+    {
+      "policy_id": "00000000-0000-0000-0001-000000000003",
+      "stable_alias": "contact_point_kind_value",
+      "target_type_id": "00000000-0000-0000-0000-000000000005",
+      "key_predicates": [
+        "00000000-0000-0000-0000-000000000501",
+        "00000000-0000-0000-0000-000000000502"
+      ],
+      "normalizer_version": "identity-contact-v1",
+      "checksum_algorithm": "blake2b",
+      "match_mode": "exact"
+    },
+    {
+      "policy_id": "00000000-0000-0000-0001-000000000004",
+      "stable_alias": "document_kind_series",
+      "target_type_id": "00000000-0000-0000-0000-000000000006",
+      "key_predicates": [
+        "00000000-0000-0000-0000-000000000601",
+        "00000000-0000-0000-0000-000000000602"
+      ],
+      "normalizer_version": "identity-document-v1",
+      "checksum_algorithm": "blake2b",
+      "match_mode": "exact"
+    },
+    {
+      "policy_id": "00000000-0000-0000-0001-000000000010",
+      "stable_alias": "request_number",
+      "target_type_id": "00000000-0000-0000-0000-000000000010",
+      "key_predicates": [
+        "00000000-0000-0000-0000-000000000901"
+      ],
+      "normalizer_version": "identity-request-v1",
+      "checksum_algorithm": "blake2b",
+      "match_mode": "exact"
+    },
+    {
+      "policy_id": "00000000-0000-0000-0001-000000000011",
+      "stable_alias": "check_kind_target",
+      "target_type_id": "00000000-0000-0000-0000-000000000011",
+      "key_predicates": [
+        "00000000-0000-0000-0000-000000000a01",
+        "00000000-0000-0000-0000-000000000a03"
+      ],
+      "normalizer_version": "identity-check-v1",
+      "checksum_algorithm": "blake2b",
+      "match_mode": "fuzzy"
+    },
+    {
+      "policy_id": "00000000-0000-0000-0001-000000000016",
+      "stable_alias": "contract_number",
+      "target_type_id": "00000000-0000-0000-0000-000000000016",
+      "key_predicates": [
+        "00000000-0000-0000-0000-000000000f01"
+      ],
+      "normalizer_version": "identity-contract-v1",
+      "checksum_algorithm": "blake2b",
+      "match_mode": "exact"
+    }
+  ]
+}

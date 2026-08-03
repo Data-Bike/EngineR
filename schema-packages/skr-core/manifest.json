@@ -1,0 +1,18 @@
+{
+  "bundle_id": "skr-core",
+  "version": "1.0.0",
+  "description": "СКР core schema bundle: types, predicates, identity policies, views, workflows, Excel mappings, translations",
+  "files": [
+    {"path": "types.json",                       "content_hash": "sha256:placeholder-types-json"},
+    {"path": "predicates.json",                  "content_hash": "sha256:placeholder-predicates-json"},
+    {"path": "domain-types.json",                "content_hash": "sha256:placeholder-domain-types-json"},
+    {"path": "identity-policies.json",           "content_hash": "sha256:placeholder-identity-policies-json"},
+    {"path": "views.json",                       "content_hash": "sha256:placeholder-views-json"},
+    {"path": "workflows.json",                   "content_hash": "sha256:placeholder-workflows-json"},
+    {"path": "excel-mapping-legal-entity.json",  "content_hash": "sha256:placeholder-excel-mapping-legal-entity-json"},
+    {"path": "translations.json",               "content_hash": "sha256:placeholder-translations-json"}
+  ],
+  "signature": null,
+  "created_at": "2025-01-01T00:00:00Z",
+  "schema_revision_dependencies": []
+}

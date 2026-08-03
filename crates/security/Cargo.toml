@@ -1,0 +1,24 @@
+[package]
+name = "enginer-security"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+description = "Security: PDP/PEP, ABAC, capabilities, audit, classification (docs/08)"
+
+[dependencies]
+enginer-domain = { workspace = true }
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+pretty_assertions.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,18 @@
+{
+  "name": "@enginer/api-client",
+  "version": "0.1.0",
+  "description": "Typed API client for EngineR Rocket JSON API (docs/06)",
+  "type": "module",
+  "main": "src/index.ts",
+  "types": "src/index.ts",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "license": "AGPL-3.0-or-later",
+  "devDependencies": {
+    "typescript": "^5.7.0",
+    "vitest": "^4.1.10"
+  }
+}

@@ -1,0 +1,19 @@
+[package]
+name = "enginer-contracts"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+description = "Stable HTTP DTO, error codes and API envelope for EngineR"
+
+[dependencies]
+enginer-domain = { workspace = true }
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+thiserror.workspace = true
+
+[lints]
+workspace = true

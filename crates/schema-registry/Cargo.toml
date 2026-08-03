@@ -1,0 +1,26 @@
+[package]
+name = "enginer-schema-registry"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+license.workspace = true
+description = "Schema registry: draft/validate/publish, revisions, compatibility"
+
+[dependencies]
+enginer-domain = { workspace = true }
+enginer-application = { workspace = true }
+serde.workspace = true
+serde_json.workspace = true
+uuid.workspace = true
+chrono.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+blake2.workspace = true
+
+[dev-dependencies]
+proptest.workspace = true
+pretty_assertions.workspace = true
+
+[lints]
+workspace = true
