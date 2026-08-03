@@ -96,6 +96,7 @@ definePageMeta({
 });
 
 const { t } = useI18n();
+const toast = useToast();
 
 const monitors = ref<MonitorSchedule[]>([]);
 const loading = ref(false);
@@ -112,8 +113,20 @@ function isOverdue(date: string): boolean {
 async function fetchMonitors() {
   loading.value = true;
   try {
-    // Would call api.monitors.list()
-    monitors.value = [];
+    const config = useRuntimeConfig();
+    const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
+    const res = await $fetch<{ data: MonitorSchedule[] }>(`${baseUrl.replace(/\/$/, '')}/monitors`, {
+      method: 'GET',
+      credentials: 'include',
+      headers: { Accept: 'application/json' },
+    });
+    monitors.value = res.data;
+  } catch (err) {
+    toast.add({
+      title: t('common.error'),
+      description: err instanceof Error ? err.message : String(err),
+      color: 'error',
+    });
   } finally {
     loading.value = false;
   }
@@ -122,8 +135,21 @@ async function fetchMonitors() {
 async function runNow(monitorId: string) {
   running.value = monitorId;
   try {
-    // Would call api.monitors.run(monitorId)
+    const config = useRuntimeConfig();
+    const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
+    await $fetch(`${baseUrl.replace(/\/$/, '')}/monitors/${monitorId}/run`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { Accept: 'application/json' },
+    });
+    toast.add({ title: t('entity.monitoring.run_now'), color: 'success' });
     await fetchMonitors();
+  } catch (err) {
+    toast.add({
+      title: t('common.error'),
+      description: err instanceof Error ? err.message : String(err),
+      color: 'error',
+    });
   } finally {
     running.value = null;
   }

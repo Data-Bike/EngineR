@@ -90,11 +90,12 @@ import { ref, onMounted } from 'vue';
 import { useI18n } from 'vue-i18n';
 import type { CheckInstance, CheckStatus } from '@enginer/api-client';
 
-defineProps<{
+const props = defineProps<{
   entityId: string;
 }>();
 
 const { t } = useI18n();
+const toast = useToast();
 
 const checks = ref<CheckInstance[]>([]);
 const running = ref(false);
@@ -138,15 +139,36 @@ function checkStatusColor(status: CheckStatus): BadgeColor {
 }
 
 async function fetchChecks() {
-  // Would call api.checks.list(props.entityId)
-  checks.value = [];
+  const config = useRuntimeConfig();
+  const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
+  try {
+    const res = await $fetch<{ data: CheckInstance[] }>(`${baseUrl.replace(/\/$/, '')}/entities/${props.entityId}/checks`, {
+      credentials: 'include',
+      headers: { Accept: 'application/json' },
+    });
+    checks.value = res.data ?? [];
+  } catch (e: unknown) {
+    toast.add({ title: t('common.error'), description: e instanceof Error ? e.message : String(e), color: 'error' });
+    checks.value = [];
+  }
 }
 
 async function runCheck() {
   running.value = true;
   try {
-    // Would call api.checks.run(props.entityId, kind)
+    const config = useRuntimeConfig();
+    const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
+    const kind = 'sanction';
+    await $fetch(`${baseUrl.replace(/\/$/, '')}/checks`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: { target_entity_id: props.entityId, check_kind: kind },
+    });
+    toast.add({ title: t('entity.checks.run'), color: 'success' });
     await fetchChecks();
+  } catch (e: unknown) {
+    toast.add({ title: t('common.error'), description: e instanceof Error ? e.message : String(e), color: 'error' });
   } finally {
     running.value = false;
   }

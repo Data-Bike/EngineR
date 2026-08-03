@@ -13,6 +13,13 @@ export default defineNuxtConfig({
 
   devtools: { enabled: true },
 
+  // Components — disable path prefix so subdirectory components
+  // (entity/FormField.vue, graph/GraphView.vue, etc.) are available
+  // by their file name without the directory prefix.
+  components: [
+    { path: '~/components', pathPrefix: false },
+  ],
+
   modules: [
     '@nuxt/ui',
     '@nuxtjs/i18n',

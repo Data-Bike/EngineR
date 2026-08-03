@@ -125,6 +125,7 @@ definePageMeta({
 });
 
 const { t } = useI18n();
+const toast = useToast();
 
 const reports = ref<ReportInstance[]>([]);
 const loading = ref(false);
@@ -179,14 +180,27 @@ function formatFileSize(bytes: number): string {
 function downloadReport(report: ReportInstance) {
   if (report.download_url) {
     window.open(report.download_url, '_blank');
+    toast.add({ title: t('entity.reports.download'), color: 'success' });
   }
 }
 
 async function fetchReports() {
   loading.value = true;
   try {
-    // Would call api.reports.list()
-    reports.value = [];
+    const config = useRuntimeConfig();
+    const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
+    const res = await $fetch<{ data: ReportInstance[] }>(`${baseUrl.replace(/\/$/, '')}/reports`, {
+      method: 'GET',
+      credentials: 'include',
+      headers: { Accept: 'application/json' },
+    });
+    reports.value = res.data;
+  } catch (err) {
+    toast.add({
+      title: t('common.error'),
+      description: err instanceof Error ? err.message : String(err),
+      color: 'error',
+    });
   } finally {
     loading.value = false;
   }
@@ -195,10 +209,28 @@ async function fetchReports() {
 async function generateReport() {
   generating.value = true;
   try {
-    // Would call api.reports.generate({...})
+    const config = useRuntimeConfig();
+    const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
+    await $fetch(`${baseUrl.replace(/\/$/, '')}/reports`, {
+      method: 'POST',
+      body: {
+        entity_id: newEntityId.value,
+        template: newTemplate.value,
+        format: newFormat.value,
+      },
+      credentials: 'include',
+      headers: { Accept: 'application/json' },
+    });
     showGenerate.value = false;
     newEntityId.value = '';
+    toast.add({ title: t('entity.reports.generate'), color: 'success' });
     await fetchReports();
+  } catch (err) {
+    toast.add({
+      title: t('common.error'),
+      description: err instanceof Error ? err.message : String(err),
+      color: 'error',
+    });
   } finally {
     generating.value = false;
   }

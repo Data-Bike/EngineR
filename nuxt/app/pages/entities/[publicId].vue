@@ -45,29 +45,15 @@
       <!-- Tabs (docs/17 §4) -->
       <UTabs :items="tabItems" v-model="activeTab">
         <template #content="{ item }">
-          <div v-if="item.key === 'overview'" class="py-4">
-            <EntityOverview :entity="entity" />
-          </div>
-          <div v-else-if="item.key === 'relations'" class="py-4">
-            <RelationsTab :entity-id="entity.public_id" :type-id="entity.type_id" />
-          </div>
-          <div v-else-if="item.key === 'graph'" class="py-4">
-            <GraphView :root-entity-id="entity.public_id" :root-type-id="entity.type_id" />
-          </div>
-          <div v-else-if="item.key === 'checks'" class="py-4">
-            <ChecksTab :entity-id="entity.public_id" />
-          </div>
-          <div v-else-if="item.key === 'risks'" class="py-4">
-            <RisksTab :entity-id="entity.public_id" />
-          </div>
-          <div v-else-if="item.key === 'tasks'" class="py-4">
-            <TasksTab :entity-id="entity.public_id" />
-          </div>
-          <div v-else-if="item.key === 'documents'" class="py-4">
-            <DocumentsTab :entity-id="entity.public_id" />
-          </div>
-          <div v-else-if="item.key === 'history'" class="py-4">
-            <HistoryTab :entity-id="entity.public_id" :current-revision="entity.revision" />
+          <div class="py-4">
+                        <EntityOverview v-if="item.value === 'overview'" :entity="entity" />
+            <RelationsTab v-else-if="item.value === 'relations'" :entity-id="entity.public_id" :type-id="entity.type_id" />
+            <GraphView v-else-if="item.value === 'graph'" :root-entity-id="entity.public_id" :root-type-id="entity.type_id" />
+            <ChecksTab v-else-if="item.value === 'checks'" :entity-id="entity.public_id" />
+            <RisksTab v-else-if="item.value === 'risks'" :entity-id="entity.public_id" />
+            <TasksTab v-else-if="item.value === 'tasks'" :entity-id="entity.public_id" />
+            <DocumentsTab v-else-if="item.value === 'documents'" :entity-id="entity.public_id" />
+            <HistoryTab v-else-if="item.value === 'history'" :entity-id="entity.public_id" :current-revision="entity.revision" />
           </div>
         </template>
       </UTabs>
@@ -108,33 +94,38 @@ definePageMeta({
 
 const { t } = useI18n();
 const route = useRoute();
-const api = useApi();
+const toast = useToast();
 
 const publicId = computed(() => route.params.publicId as string);
 const entity = ref<Entity | null>(null);
 const loading = ref(false);
 const error = ref<string | null>(null);
-const activeTab = ref(0);
+const activeTab = ref('overview');
 const showRetire = ref(false);
 const retireReason = ref('');
 const retiring = ref(false);
 
 const tabItems = computed(() => [
-  { key: 'overview', label: t('entity.tabs.overview') },
-  { key: 'relations', label: t('entity.tabs.relations') },
-  { key: 'graph', label: t('entity.tabs.graph') },
-  { key: 'checks', label: t('entity.tabs.checks') },
-  { key: 'risks', label: t('entity.tabs.risks') },
-  { key: 'tasks', label: t('entity.tabs.tasks') },
-  { key: 'documents', label: t('entity.tabs.documents') },
-  { key: 'history', label: t('entity.tabs.history') },
+  { value: 'overview', label: t('entity.tabs.overview') },
+  { value: 'relations', label: t('entity.tabs.relations') },
+  { value: 'graph', label: t('entity.tabs.graph') },
+  { value: 'checks', label: t('entity.tabs.checks') },
+  { value: 'risks', label: t('entity.tabs.risks') },
+  { value: 'tasks', label: t('entity.tabs.tasks') },
+  { value: 'documents', label: t('entity.tabs.documents') },
+  { value: 'history', label: t('entity.tabs.history') },
 ]);
 
 async function fetchEntity() {
   loading.value = true;
   error.value = null;
   try {
-    const res = await api.entities.get(publicId.value);
+    const config = useRuntimeConfig();
+    const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
+    const res = await $fetch<{ data: Entity }>(`${baseUrl.replace(/\/$/, '')}/entities/${publicId.value}`, {
+      credentials: 'include',
+      headers: { Accept: 'application/json' },
+    });
     entity.value = res.data;
   } catch (e: unknown) {
     error.value = e instanceof Error ? e.message : t('entity.error');
@@ -147,12 +138,20 @@ async function doRetire() {
   if (!entity.value) return;
   retiring.value = true;
   try {
-    await api.entities.retire(publicId.value, { reason: retireReason.value });
+    const config = useRuntimeConfig();
+    const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
+    await $fetch(`${baseUrl.replace(/\/$/, '')}/entities/${publicId.value}/retire`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json' },
+      body: { reason: retireReason.value },
+    });
     showRetire.value = false;
     retireReason.value = '';
+    toast.add({ title: t('entity.retired_success'), color: 'success' });
     await fetchEntity();
   } catch (e: unknown) {
-    error.value = e instanceof Error ? e.message : t('entity.error');
+    toast.add({ title: t('common.error'), description: e instanceof Error ? e.message : String(e), color: 'error' });
   } finally {
     retiring.value = false;
   }

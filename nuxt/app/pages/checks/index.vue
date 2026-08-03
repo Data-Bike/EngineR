@@ -283,11 +283,18 @@ async function fetchChecks() {
 async function submitNewCheck() {
   submitting.value = true;
   try {
-    await api.checks.requestCheck({
-      target_entity_id: newCheck.target_entity_id,
-      check_kind: newCheck.check_kind,
-      connector_instance_id: newCheck.connector_instance_id || undefined,
-      parameters: {},
+    const config = useRuntimeConfig();
+    const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
+    await $fetch(`${baseUrl.replace(/\/$/, '')}/checks`, {
+      method: 'POST',
+      body: {
+        target_entity_id: newCheck.target_entity_id,
+        check_kind: newCheck.check_kind,
+        connector_instance_id: newCheck.connector_instance_id || undefined,
+        parameters: {},
+      },
+      credentials: 'include',
+      headers: { Accept: 'application/json' },
     });
     showNewCheckDialog.value = false;
     toast.add({ title: t('checks.new_success'), color: 'success' });

@@ -423,13 +423,19 @@ function resetFilters() {
 async function fetchAudit() {
   loading.value = true;
   try {
-    const res = await api.audit.query({
-      kind: filters.kind || undefined,
-      actor: filters.actor || undefined,
-      action: filters.action || undefined,
-      from: filters.from ? new Date(filters.from).toISOString() : undefined,
-      to: filters.to ? new Date(filters.to).toISOString() : undefined,
-      limit: 100,
+    const config = useRuntimeConfig();
+    const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
+    const params: Record<string, string> = { limit: '100' };
+    if (filters.kind && filters.kind !== 'all') params.kind = filters.kind;
+    if (filters.actor) params.actor = filters.actor;
+    if (filters.action) params.action = filters.action;
+    if (filters.from) params.from = new Date(filters.from).toISOString();
+    if (filters.to) params.to = new Date(filters.to).toISOString();
+    const res = await $fetch<{ data: AuditRecord[] }>(`${baseUrl.replace(/\/$/, '')}/audit`, {
+      method: 'GET',
+      query: params,
+      credentials: 'include',
+      headers: { Accept: 'application/json' },
     });
     entries.value = res.data;
   } catch (err) {
@@ -448,12 +454,17 @@ async function loadMore() {
   if (lastSeq === undefined) return;
   loadingMore.value = true;
   try {
-    const res = await api.audit.query({
-      kind: filters.kind || undefined,
-      actor: filters.actor || undefined,
-      action: filters.action || undefined,
-      cursor: lastSeq,
-      limit: 100,
+    const config = useRuntimeConfig();
+    const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
+    const params: Record<string, string> = { limit: '100', cursor: String(lastSeq) };
+    if (filters.kind && filters.kind !== 'all') params.kind = filters.kind;
+    if (filters.actor) params.actor = filters.actor;
+    if (filters.action) params.action = filters.action;
+    const res = await $fetch<{ data: AuditRecord[] }>(`${baseUrl.replace(/\/$/, '')}/audit`, {
+      method: 'GET',
+      query: params,
+      credentials: 'include',
+      headers: { Accept: 'application/json' },
     });
     entries.value.push(...res.data);
   } catch (err) {
@@ -470,7 +481,13 @@ async function loadMore() {
 async function verifyChain() {
   verifying.value = true;
   try {
-    const res = await api.audit.verifyChain();
+    const config = useRuntimeConfig();
+    const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
+    const res = await $fetch<{ data: ChainVerificationResult }>(`${baseUrl.replace(/\/$/, '')}/audit/verify`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { Accept: 'application/json' },
+    });
     chainVerification.value = res.data;
     toast.add({
       title: res.data.valid ? t('audit.chain_valid') : t('audit.chain_broken'),
@@ -490,9 +507,14 @@ async function verifyChain() {
 async function createCheckpoint() {
   checkpointing.value = true;
   try {
-    await api.audit.createCheckpoint();
-    const cpRes = await api.audit.latestCheckpoint();
-    latestCheckpoint.value = cpRes.data;
+    const config = useRuntimeConfig();
+    const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
+    await $fetch(`${baseUrl.replace(/\/$/, '')}/audit/checkpoint`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { Accept: 'application/json' },
+    });
+    await fetchCheckpoint();
     toast.add({
       title: t('audit.checkpoint_created'),
       color: 'success',
@@ -510,7 +532,13 @@ async function createCheckpoint() {
 
 async function fetchCheckpoint() {
   try {
-    const res = await api.audit.latestCheckpoint();
+    const config = useRuntimeConfig();
+    const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
+    const res = await $fetch<{ data: ChainCheckpoint }>(`${baseUrl.replace(/\/$/, '')}/audit/checkpoint`, {
+      method: 'GET',
+      credentials: 'include',
+      headers: { Accept: 'application/json' },
+    });
     latestCheckpoint.value = res.data;
   } catch {
     // Non-fatal — checkpoint may not exist yet
@@ -519,7 +547,13 @@ async function fetchCheckpoint() {
 
 async function fetchRetention() {
   try {
-    const res = await api.audit.getRetentionPolicy();
+    const config = useRuntimeConfig();
+    const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
+    const res = await $fetch<{ data: RetentionPolicy }>(`${baseUrl.replace(/\/$/, '')}/audit/retention`, {
+      method: 'GET',
+      credentials: 'include',
+      headers: { Accept: 'application/json' },
+    });
     retentionPolicy.value = res.data;
     retentionForm.retention_days = res.data.retention_days;
     retentionForm.legal_hold = res.data.legal_hold;
@@ -533,12 +567,19 @@ async function fetchRetention() {
 async function saveRetention() {
   savingRetention.value = true;
   try {
-    const res = await api.audit.setRetentionPolicy({
-      tenant_id: retentionPolicy.value?.tenant_id ?? '',
-      retention_days: retentionForm.retention_days,
-      legal_hold: retentionForm.legal_hold,
-      archive_before_delete: retentionForm.archive_before_delete,
-      archive_url: retentionForm.archive_url || null,
+    const config = useRuntimeConfig();
+    const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
+    const res = await $fetch<{ data: RetentionPolicy }>(`${baseUrl.replace(/\/$/, '')}/audit/retention`, {
+      method: 'PUT',
+      body: {
+        tenant_id: retentionPolicy.value?.tenant_id ?? '',
+        retention_days: retentionForm.retention_days,
+        legal_hold: retentionForm.legal_hold,
+        archive_before_delete: retentionForm.archive_before_delete,
+        archive_url: retentionForm.archive_url || null,
+      },
+      credentials: 'include',
+      headers: { Accept: 'application/json' },
     });
     retentionPolicy.value = res.data;
     showRetentionDialog.value = false;

@@ -117,12 +117,13 @@
 import { ref } from 'vue';
 import { useI18n } from 'vue-i18n';
 
-defineProps<{
+const props = defineProps<{
   entityId: string;
   currentRevision: number;
 }>();
 
 const { t } = useI18n();
+const toast = useToast();
 
 interface FieldChange {
   predicate_id: string;
@@ -160,10 +161,28 @@ function selectForCompare(rev: number) {
   }
 }
 
+interface ApiRevision {
+  revision: number;
+  timestamp: string;
+  actor: string;
+  operation: 'create' | 'update' | 'retire' | 'merge' | 'relation';
+  changes?: FieldChange[];
+  reason?: string;
+}
+
 async function fetchHistory() {
-  // Would call api.entities.getHistory(props.entityId)
-  // Placeholder: empty
-  revisions.value = [];
+  const config = useRuntimeConfig();
+  const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
+  try {
+    const res = await $fetch<{ data: ApiRevision[] }>(`${baseUrl.replace(/\/$/, '')}/entities/${props.entityId}/history`, {
+      credentials: 'include',
+      headers: { Accept: 'application/json' },
+    });
+    revisions.value = res.data ?? [];
+  } catch (e: unknown) {
+    toast.add({ title: t('common.error'), description: e instanceof Error ? e.message : String(e), color: 'error' });
+    revisions.value = [];
+  }
 }
 
 onMounted(fetchHistory);

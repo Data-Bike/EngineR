@@ -61,7 +61,7 @@ definePageMeta({
 
 const { t } = useI18n();
 const route = useRoute();
-const api = useApi();
+const toast = useToast();
 
 const typeAlias = computed(() => route.params.typeAlias as string);
 const view = ref<ViewDefinition | null>(null);
@@ -88,45 +88,20 @@ async function fetchView() {
   loadingView.value = true;
   viewError.value = null;
   try {
-    // Fetch view definition for this type (docs/16 §6)
-    // API endpoint TBD — using placeholder
-    // const res = await api.schemas.getView(typeAlias.value, 'form');
-    // view.value = res.data;
-    // Placeholder: construct minimal view
-    view.value = {
-      view_id: 'placeholder',
-      view_type: 'form',
-      type_id: typeAlias.value,
-      schema_revision: 1,
-      name_key: 'entity.create',
-      sections: [{
-        label_key: 'entity.tabs.overview',
-        order: 0,
-        fields: [{
-          predicate_id: 'name',
-          alias: 'name',
-          label_key: 'entity.search',
-          kind: 'text' as const,
-          required: true,
-          read_only: false,
-          identity: true,
-          hidden: false,
-          min_cardinality: 0,
-          order: 0,
-        }],
-        collapsible: false,
-        default_collapsed: false,
-      }],
-      columns: [],
-      default_sort: [],
-      filters: [],
-      facets: [],
-      row_actions: [],
-      bulk_actions: [],
-      export_allowed: false,
-    };
+    const config = useRuntimeConfig();
+    const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
+    const res = await $fetch<{ data: ViewDefinition }>(
+      `${baseUrl.replace(/\/$/, '')}/schemas/types/${typeAlias.value}/view`,
+      {
+        query: { view_type: 'form' },
+        credentials: 'include',
+        headers: { Accept: 'application/json' },
+      },
+    );
+    view.value = res.data;
   } catch (e: unknown) {
     viewError.value = e instanceof Error ? e.message : t('entity.error');
+    toast.add({ title: t('common.error'), description: viewError.value!, color: 'error' });
   } finally {
     loadingView.value = false;
   }
@@ -168,7 +143,6 @@ async function checkDuplicates(_body: FormSubmission): Promise<DuplicateMatch[]>
 
 async function createEntity(body: FormSubmission) {
   // Convert form fields to statements (docs/06 §6)
-  // FormField values are raw strings/booleans; wrap in StatementValueInput
   const statements = body.fields.map((f) => {
     const v = f.value;
     let statementValue: { kind: 'text'; value: string } | { kind: 'boolean'; value: boolean };
@@ -182,12 +156,23 @@ async function createEntity(body: FormSubmission) {
       value: statementValue,
     };
   });
-  const res = await api.entities.create({
-    type_id: body.type_id,
-    schema_revision: body.schema_revision,
-    identity_mode: body.identity_mode,
-    statements,
-  });
+  const config = useRuntimeConfig();
+  const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
+  const res = await $fetch<{ data: { public_id: string } }>(
+    `${baseUrl.replace(/\/$/, '')}/entities`,
+    {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: {
+        type_id: body.type_id,
+        schema_revision: body.schema_revision,
+        identity_mode: body.identity_mode,
+        statements,
+      },
+    },
+  );
+  toast.add({ title: t('entity.create_success'), color: 'success' });
   // Navigate to the created entity card
   navigateTo(`/entities/${res.data.public_id}`);
 }

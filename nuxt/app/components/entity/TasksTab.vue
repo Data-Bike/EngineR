@@ -110,12 +110,13 @@ import { ref, computed, onMounted } from 'vue';
 import { useI18n } from 'vue-i18n';
 import type { WorkflowTask, TaskStatus, TaskKind } from '@enginer/api-client';
 
-defineProps<{
+const props = defineProps<{
   entityId?: string;
   requestId?: string;
 }>();
 
 const { t } = useI18n();
+const toast = useToast();
 
 const tasks = ref<WorkflowTask[]>([]);
 const showCreate = ref(false);
@@ -186,31 +187,97 @@ function canCancel(status: TaskStatus): boolean {
 }
 
 async function fetchTasks() {
-  // Would call api.tasks.list({ entityId: props.entityId, requestId: props.requestId })
-  tasks.value = [];
+  if (!props.entityId) {
+    tasks.value = [];
+    return;
+  }
+  const config = useRuntimeConfig();
+  const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
+  try {
+    const res = await $fetch<{ data: WorkflowTask[] }>(`${baseUrl.replace(/\/$/, '')}/entities/${props.entityId}/tasks`, {
+      credentials: 'include',
+      headers: { Accept: 'application/json' },
+    });
+    tasks.value = res.data ?? [];
+  } catch (e: unknown) {
+    toast.add({ title: t('common.error'), description: e instanceof Error ? e.message : String(e), color: 'error' });
+    tasks.value = [];
+  }
 }
 
-async function startTask(_taskId: string) {
-  await fetchTasks();
+async function startTask(taskId: string) {
+  const config = useRuntimeConfig();
+  const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
+  try {
+    await $fetch(`${baseUrl.replace(/\/$/, '')}/tasks/${taskId}/start`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { Accept: 'application/json' },
+    });
+    toast.add({ title: t('entity.tasks.start'), color: 'success' });
+    await fetchTasks();
+  } catch (e: unknown) {
+    toast.add({ title: t('common.error'), description: e instanceof Error ? e.message : String(e), color: 'error' });
+  }
 }
 
-async function completeTask(_taskId: string) {
-  await fetchTasks();
+async function completeTask(taskId: string) {
+  const config = useRuntimeConfig();
+  const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
+  try {
+    await $fetch(`${baseUrl.replace(/\/$/, '')}/tasks/${taskId}/complete`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { Accept: 'application/json' },
+    });
+    toast.add({ title: t('entity.tasks.complete'), color: 'success' });
+    await fetchTasks();
+  } catch (e: unknown) {
+    toast.add({ title: t('common.error'), description: e instanceof Error ? e.message : String(e), color: 'error' });
+  }
 }
 
-async function cancelTask(_taskId: string) {
-  await fetchTasks();
+async function cancelTask(taskId: string) {
+  const config = useRuntimeConfig();
+  const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
+  try {
+    await $fetch(`${baseUrl.replace(/\/$/, '')}/tasks/${taskId}/cancel`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { Accept: 'application/json' },
+    });
+    toast.add({ title: t('common.cancel'), color: 'success' });
+    await fetchTasks();
+  } catch (e: unknown) {
+    toast.add({ title: t('common.error'), description: e instanceof Error ? e.message : String(e), color: 'error' });
+  }
 }
 
 async function createTask() {
+  if (!props.entityId) return;
   creating.value = true;
   try {
-    // Would call api.tasks.create({...})
+    const config = useRuntimeConfig();
+    const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
+    await $fetch(`${baseUrl.replace(/\/$/, '')}/entities/${props.entityId}/tasks`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: {
+        title: newTitle.value,
+        kind: newKind.value,
+        due_date: newDueDate.value || undefined,
+        description: newDescription.value || undefined,
+      },
+    });
+    toast.add({ title: t('entity.tasks.create'), color: 'success' });
     showCreate.value = false;
     newTitle.value = '';
     newDescription.value = '';
     newDueDate.value = '';
     await fetchTasks();
+  } catch (e: unknown) {
+    toast.add({ title: t('common.error'), description: e instanceof Error ? e.message : String(e), color: 'error' });
   } finally {
     creating.value = false;
   }

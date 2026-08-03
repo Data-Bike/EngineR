@@ -1,83 +1,60 @@
 <template>
   <div class="space-y-6">
-    <!-- Sections by relation predicate (docs/17 §6) -->
-    <div v-for="section in relationSections" :key="section.predicateId" class="space-y-3">
-      <!-- Section header with direction label -->
+    <!-- Top-level add button -->
+    <div class="flex justify-end gap-2">
+      <UButton size="sm" variant="outline" icon="i-lucide-plus" @click="openAddDialog">
+        {{ t('entity.relations.add') }}
+      </UButton>
+      <UButton size="sm" variant="ghost" icon="i-lucide-link" @click="openLinkDialog">
+        {{ t('entity.relations.link_existing') }}
+      </UButton>
+    </div>
+
+    <!-- Sections by relation predicate -->
+    <div v-for="section in relationSections" :key="section.key" class="space-y-3">
       <div class="flex items-center justify-between">
         <div class="flex items-center gap-2">
-          <h3 class="font-medium">{{ t(section.labelKey) }}</h3>
+          <h3 class="font-medium">{{ section.label }}</h3>
           <UBadge variant="subtle" size="sm">
             {{ section.direction === 'outgoing' ? t('entity.graph.direction_outgoing') : t('entity.graph.direction_incoming') }}
           </UBadge>
           <span class="text-sm text-[var(--ui-text-muted)]">({{ section.items.length }})</span>
         </div>
-        <div class="flex gap-2">
-          <!-- Effective/historical switch (docs/17 §6) -->
-          <UTabs
-            v-model="section.viewMode"
-            :items="viewModeOptions"
-            size="xs"
-          />
-          <!-- Add/link existing (docs/17 §6) -->
-          <UButton size="sm" variant="outline" icon="i-lucide-plus" @click="addRelation(section)">
-            {{ t('entity.relations.add') }}
-          </UButton>
-          <UButton size="sm" variant="ghost" icon="i-lucide-link" @click="linkExisting(section)">
-            {{ t('entity.relations.link_existing') }}
-          </UButton>
-        </div>
       </div>
 
-      <!-- Relation items -->
       <div v-if="section.items.length === 0" class="text-sm text-[var(--ui-text-muted)] py-2">
         {{ t('entity.empty') }}
       </div>
       <div v-else class="space-y-2">
         <div
-          v-for="item in filteredItems(section)"
+          v-for="item in section.items"
           :key="item.id"
           class="rounded-md border border-[var(--ui-border)] p-3 hover:border-[var(--ui-border-muted)]"
         >
           <div class="flex items-start justify-between">
             <div class="flex-1">
-              <!-- Title -->
               <NuxtLink :to="`/entities/${item.targetPublicId}`" class="font-medium hover:underline">
                 {{ item.title }}
               </NuxtLink>
-              <!-- Qualifiers (docs/17 §6) -->
-              <div v-if="item.qualifiers && item.qualifiers.length > 0" class="flex flex-wrap gap-1 mt-1">
-                <UBadge
-                  v-for="qual in item.qualifiers"
-                  :key="qual.label"
-                  variant="subtle"
-                  size="sm"
-                >
-                  {{ qual.label }}: {{ qual.value }}
-                </UBadge>
-              </div>
-              <!-- Validity period (docs/17 §6) -->
-              <p v-if="item.validFrom || item.validTo" class="text-xs text-[var(--ui-text-muted)] mt-1">
-                {{ t('entity.relations.valid_from') }}: {{ item.validFrom ?? '—' }}
-                {{ t('entity.relations.valid_to') }}: {{ item.validTo ?? '—' }}
+              <p v-if="item.targetType" class="text-xs text-[var(--ui-text-muted)] mt-0.5">
+                {{ t(`types.${item.targetType}`, item.targetType) }}
               </p>
-              <!-- Source (docs/17 §6) -->
+              <p v-if="item.validFrom" class="text-xs text-[var(--ui-text-muted)] mt-1">
+                {{ t('entity.relations.valid_from') }}: {{ item.validFrom }}
+                <span v-if="item.validTo"> · {{ t('entity.relations.valid_to') }}: {{ item.validTo }}</span>
+              </p>
               <p v-if="item.source" class="text-xs text-[var(--ui-text-muted)] mt-1">
                 {{ t('entity.relations.source') }}: {{ item.source }}
               </p>
             </div>
-            <!-- Inline edit for simple safe relations only (docs/17 §6) -->
-            <div v-if="item.inlineEditable" class="flex gap-1">
-              <UButton size="xs" variant="ghost" icon="i-lucide-pencil" @click="editRelation(section, item)" />
-              <UButton size="xs" variant="ghost" color="error" icon="i-lucide-trash" @click="removeRelation(section, item)" />
-            </div>
+            <UButton
+              size="xs"
+              variant="ghost"
+              color="error"
+              icon="i-lucide-trash"
+              @click="removeRelation(item)"
+            />
           </div>
-        </div>
-
-        <!-- Cursor pagination for high-degree nodes (docs/17 §6) -->
-        <div v-if="section.cursor" class="flex justify-center pt-2">
-          <UButton size="sm" variant="outline" @click="loadMore(section)">
-            {{ t('entity.load_more') }}
-          </UButton>
         </div>
       </div>
     </div>
@@ -86,6 +63,89 @@
     <div v-if="relationSections.length === 0" class="text-center py-8 text-[var(--ui-text-muted)]">
       {{ t('entity.empty') }}
     </div>
+
+    <!-- Add Relation Dialog -->
+    <UModal v-model:open="showAddDialog">
+      <template #content>
+        <div class="p-6 space-y-4">
+          <h2 class="text-lg font-bold">{{ t('entity.relations.add') }}</h2>
+          <UFormField :label="t('entity.relations.predicate_label')">
+            <USelect
+              v-model="newRelation.predicate"
+              :items="predicateOptions"
+              class="w-full"
+            />
+          </UFormField>
+          <UFormField :label="t('entity.relations.target_type')">
+            <USelect
+              v-model="newRelation.targetType"
+              :items="typeOptions"
+              class="w-full"
+            />
+          </UFormField>
+          <UFormField :label="t('entity.relations.target_name')">
+            <UInput v-model="newRelation.targetName" class="w-full" />
+          </UFormField>
+          <UFormField :label="t('entity.relations.valid_from')">
+            <UInput v-model="newRelation.validFrom" type="date" class="w-full" />
+          </UFormField>
+          <div class="flex justify-end gap-2">
+            <UButton variant="outline" @click="showAddDialog = false">
+              {{ t('common.cancel') }}
+            </UButton>
+            <UButton @click="submitAddRelation" :loading="submitting">
+              {{ t('common.save') }}
+            </UButton>
+          </div>
+        </div>
+      </template>
+    </UModal>
+
+    <!-- Link Existing Dialog -->
+    <UModal v-model:open="showLinkDialog">
+      <template #content>
+        <div class="p-6 space-y-4">
+          <h2 class="text-lg font-bold">{{ t('entity.relations.link_existing') }}</h2>
+          <UFormField :label="t('entity.relations.predicate_label')">
+            <USelect
+              v-model="newRelation.predicate"
+              :items="predicateOptions"
+              class="w-full"
+            />
+          </UFormField>
+          <UFormField :label="t('entity.relations.search_entity')">
+            <UInput
+              v-model="entitySearch"
+              :placeholder="t('entity.relations.search_placeholder')"
+              class="w-full"
+              @input="searchEntities"
+            />
+          </UFormField>
+          <div v-if="searchResults.length > 0" class="max-h-48 overflow-auto border border-[var(--ui-border)] rounded-md">
+            <div
+              v-for="result in searchResults"
+              :key="result.public_id"
+              class="p-2 hover:bg-[var(--ui-bg-muted)] cursor-pointer border-b border-[var(--ui-border)] last:border-0"
+              @click="selectEntity(result)"
+            >
+              <p class="font-medium text-sm">{{ result.display_name }}</p>
+              <p class="text-xs text-[var(--ui-text-muted)]">{{ result.type_id }} · {{ result.public_id }}</p>
+            </div>
+          </div>
+          <div v-if="selectedEntity" class="p-2 bg-[var(--ui-bg-muted)] rounded-md">
+            <p class="text-sm">{{ t('entity.relations.selected') }}: <strong>{{ selectedEntity.display_name }}</strong></p>
+          </div>
+          <div class="flex justify-end gap-2">
+            <UButton variant="outline" @click="showLinkDialog = false">
+              {{ t('common.cancel') }}
+            </UButton>
+            <UButton @click="submitLinkRelation" :loading="submitting" :disabled="!selectedEntity">
+              {{ t('common.save') }}
+            </UButton>
+          </div>
+        </div>
+      </template>
+    </UModal>
   </div>
 </template>
 
@@ -93,78 +153,253 @@
 import { ref, computed } from 'vue';
 import { useI18n } from 'vue-i18n';
 
-defineProps<{
+const props = defineProps<{
   entityId: string;
   typeId: string;
 }>();
 
 const { t } = useI18n();
-
-interface RelationQualifier {
-  label: string;
-  value: string;
-}
+const toast = useToast();
 
 interface RelationItem {
   id: string;
+  predicateId: string;
+  direction: 'outgoing' | 'incoming';
   targetPublicId: string;
   title: string;
-  qualifiers: RelationQualifier[];
+  targetType: string;
   validFrom?: string;
   validTo?: string;
   source?: string;
-  inlineEditable: boolean;
-  isHistorical: boolean;
 }
 
 interface RelationSection {
+  key: string;
   predicateId: string;
-  labelKey: string;
+  label: string;
   direction: 'outgoing' | 'incoming';
   items: RelationItem[];
-  cursor?: string;
-  viewMode: 'effective' | 'historical';
 }
 
-const viewModeOptions = computed(() => [
-  { key: 'effective', label: t('entity.relations.effective') },
-  { key: 'historical', label: t('entity.relations.historical') },
-]);
-
-// Placeholder sections — would be fetched from API
 const relationSections = ref<RelationSection[]>([]);
 
-function filteredItems(section: RelationSection): RelationItem[] {
-  if (section.viewMode === 'effective') {
-    return section.items.filter((i) => !i.isHistorical);
+// Available predicates for this entity type
+const predicateOptions = computed(() => [
+  { label: t('entity.relations.predicate.managed_by'), value: 'managed_by' },
+  { label: t('entity.relations.predicate.owned_by'), value: 'owned_by' },
+  { label: t('entity.relations.predicate.has_address'), value: 'has_address' },
+  { label: t('entity.relations.predicate.has_contact'), value: 'has_contact' },
+  { label: t('entity.relations.predicate.has_document'), value: 'has_document' },
+  { label: t('entity.relations.predicate.member_of'), value: 'member_of' },
+  { label: t('entity.relations.predicate.subsidiary_of'), value: 'subsidiary_of' },
+  { label: t('entity.relations.predicate.beneficiary_of'), value: 'beneficiary_of' },
+]);
+
+const typeOptions = computed(() => [
+  { label: t('types.person', 'Физическое лицо'), value: 'person' },
+  { label: t('types.legal_entity', 'Юридическое лицо'), value: 'legal_entity' },
+  { label: t('types.address', 'Адрес'), value: 'address' },
+  { label: t('types.contact_point', 'Контактные данные'), value: 'contact_point' },
+  { label: t('types.document', 'Документ'), value: 'document' },
+]);
+
+// Dialog state
+const showAddDialog = ref(false);
+const showLinkDialog = ref(false);
+const submitting = ref(false);
+const entitySearch = ref('');
+const searchResults = ref<any[]>([]);
+const selectedEntity = ref<any | null>(null);
+
+const newRelation = ref({
+  predicate: 'managed_by',
+  targetType: 'person',
+  targetName: '',
+  validFrom: new Date().toISOString().split('T')[0],
+});
+
+function openAddDialog() {
+  newRelation.value = {
+    predicate: 'managed_by',
+    targetType: 'person',
+    targetName: '',
+    validFrom: new Date().toISOString().split('T')[0],
+  };
+  showAddDialog.value = true;
+}
+
+function openLinkDialog() {
+  newRelation.value = {
+    predicate: 'managed_by',
+    targetType: 'person',
+    targetName: '',
+    validFrom: new Date().toISOString().split('T')[0],
+  };
+  selectedEntity.value = null;
+  entitySearch.value = '';
+  searchResults.value = [];
+  showLinkDialog.value = true;
+}
+
+async function searchEntities() {
+  if (entitySearch.value.length < 2) {
+    searchResults.value = [];
+    return;
   }
-  return section.items;
+  try {
+    const config = useRuntimeConfig();
+    const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
+    const res = await $fetch<{ data: { rows: any[] } }>(`${baseUrl.replace(/\/$/, '')}/entities/query`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: {
+        from: { type_id: newRelation.value.targetType },
+        search: entitySearch.value,
+      },
+    });
+    searchResults.value = res.data?.rows ?? [];
+  } catch {
+    searchResults.value = [];
+  }
+}
+
+function selectEntity(entity: any) {
+  selectedEntity.value = entity;
+  searchResults.value = [];
+  entitySearch.value = entity.display_name ?? entity.public_id;
+}
+
+async function submitAddRelation() {
+  submitting.value = true;
+  try {
+    const config = useRuntimeConfig();
+    const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
+    await $fetch(`${baseUrl.replace(/\/$/, '')}/entities/${props.entityId}/relations`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: {
+        predicate: newRelation.value.predicate,
+        direction: 'outgoing',
+        target_display_name: newRelation.value.targetName,
+        target_type: newRelation.value.targetType,
+        valid_from: newRelation.value.validFrom,
+        source: 'manual',
+      },
+    });
+    showAddDialog.value = false;
+    toast.add({ title: t('entity.relations.added'), color: 'success' });
+    await fetchRelations();
+  } catch (e: unknown) {
+    toast.add({ title: t('common.error'), description: e instanceof Error ? e.message : String(e), color: 'error' });
+  } finally {
+    submitting.value = false;
+  }
+}
+
+async function submitLinkRelation() {
+  if (!selectedEntity.value) return;
+  submitting.value = true;
+  try {
+    const config = useRuntimeConfig();
+    const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
+    await $fetch(`${baseUrl.replace(/\/$/, '')}/entities/${props.entityId}/relations`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: {
+        predicate: newRelation.value.predicate,
+        direction: 'outgoing',
+        target_entity_id: selectedEntity.value.public_id,
+        target_display_name: selectedEntity.value.display_name,
+        target_type: selectedEntity.value.type_id,
+        valid_from: newRelation.value.validFrom,
+        source: 'manual',
+      },
+    });
+    showLinkDialog.value = false;
+    toast.add({ title: t('entity.relations.linked'), color: 'success' });
+    await fetchRelations();
+  } catch (e: unknown) {
+    toast.add({ title: t('common.error'), description: e instanceof Error ? e.message : String(e), color: 'error' });
+  } finally {
+    submitting.value = false;
+  }
+}
+
+async function removeRelation(item: RelationItem) {
+  try {
+    const config = useRuntimeConfig();
+    const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
+    await $fetch(`${baseUrl.replace(/\/$/, '')}/entities/${props.entityId}/relations/${item.id}`, {
+      method: 'DELETE',
+      credentials: 'include',
+      headers: { Accept: 'application/json' },
+    });
+    toast.add({ title: t('entity.relations.removed'), color: 'success' });
+    await fetchRelations();
+  } catch (e: unknown) {
+    toast.add({ title: t('common.error'), description: e instanceof Error ? e.message : String(e), color: 'error' });
+  }
+}
+
+interface ApiRelation {
+  relation_id?: string;
+  predicate?: string;
+  predicate_id?: string;
+  direction: string;
+  target_entity_id?: string;
+  target_public_id?: string;
+  target_display_name?: string;
+  target_title?: string;
+  target_type?: string;
+  valid_from?: string;
+  valid_to?: string | null;
+  source?: string;
 }
 
 async function fetchRelations() {
-  // Would call api.entities.query with relation filters
-  // Placeholder: empty
-  relationSections.value = [];
-}
-
-function addRelation(_section: RelationSection) {
-  // Open relation editor dialog
-}
-
-function linkExisting(_section: RelationSection) {
-  // Open entity autocomplete to link existing entity
-}
-
-function editRelation(_section: RelationSection, _item: RelationItem) {
-  // Inline edit for simple safe relations only (docs/17 §6)
-}
-
-function removeRelation(_section: RelationSection, _item: RelationItem) {
-  // Remove relation
-}
-
-async function loadMore(_section: RelationSection) {
-  // Cursor pagination
+  const config = useRuntimeConfig();
+  const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
+  try {
+    const res = await $fetch<{ data: ApiRelation[] }>(`${baseUrl.replace(/\/$/, '')}/entities/${props.entityId}/relations`, {
+      credentials: 'include',
+      headers: { Accept: 'application/json' },
+    });
+    const relations = res.data ?? [];
+    const sectionMap = new Map<string, RelationSection>();
+    for (const rel of relations) {
+      const predicateId = rel.predicate_id ?? rel.predicate ?? 'unknown';
+      const direction = (rel.direction === 'outbound' || rel.direction === 'outgoing') ? 'outgoing' : 'incoming';
+      const key = `${predicateId}:${direction}`;
+      if (!sectionMap.has(key)) {
+        sectionMap.set(key, {
+          key,
+          predicateId,
+          label: t(`entity.relations.predicate.${predicateId}`, predicateId),
+          direction,
+          items: [],
+        });
+      }
+      const section = sectionMap.get(key)!;
+      section.items.push({
+        id: rel.relation_id ?? `${Date.now()}-${Math.random()}`,
+        predicateId,
+        direction,
+        targetPublicId: rel.target_public_id ?? rel.target_entity_id ?? '',
+        title: rel.target_title ?? rel.target_display_name ?? '',
+        targetType: rel.target_type ?? '',
+        validFrom: rel.valid_from,
+        validTo: rel.valid_to ?? undefined,
+        source: rel.source,
+      });
+    }
+    relationSections.value = Array.from(sectionMap.values());
+  } catch (e: unknown) {
+    toast.add({ title: t('common.error'), description: e instanceof Error ? e.message : String(e), color: 'error' });
+    relationSections.value = [];
+  }
 }
 
 onMounted(fetchRelations);

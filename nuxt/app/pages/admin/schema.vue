@@ -15,7 +15,7 @@
     <UTabs v-model="activeTab" :items="tabs">
       <template #content="{ item }">
         <!-- Drafts -->
-        <div v-if="item.key === 'drafts'" class="py-4">
+        <div v-if="item.value === 'drafts'" class="py-4">
           <div v-if="draftsLoading" class="text-center py-8 text-[var(--ui-text-muted)]">
             {{ t('common.loading') }}
           </div>
@@ -63,7 +63,7 @@
         </div>
 
         <!-- Published -->
-        <div v-else-if="item.key === 'published'" class="py-4">
+        <div v-else-if="item.value === 'published'" class="py-4">
           <div v-if="publishedLoading" class="text-center py-8 text-[var(--ui-text-muted)]">
             {{ t('common.loading') }}
           </div>
@@ -130,11 +130,12 @@ const { t } = useI18n();
 const { requireCapability } = useCapability();
 requireCapability('admin.view');
 const api = useApi();
+const toast = useToast();
 
-const activeTab = ref(0);
+const activeTab = ref('drafts');
 const tabs = computed(() => [
-  { key: 'drafts', label: t('schema.drafts') },
-  { key: 'published', label: t('schema.published') },
+  { value: 'drafts', label: t('schema.drafts') },
+  { value: 'published', label: t('schema.published') },
 ]);
 
 // Drafts
@@ -154,9 +155,25 @@ const creating = ref(false);
 async function fetchDrafts() {
   draftsLoading.value = true;
   try {
-    await api.schemas.listTypes();
-    // Placeholder: API not fully implemented yet
-    drafts.value = [];
+    const config = useRuntimeConfig();
+    const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
+    const res = await $fetch<{ data: any[] }>(`${baseUrl.replace(/\/$/, '')}/schemas/drafts`, {
+      method: 'GET',
+      credentials: 'include',
+      headers: { Accept: 'application/json' },
+    });
+    drafts.value = (res.data ?? []).map((d: any) => ({
+      id: d.revision_id ?? d.id ?? '',
+      name: d.display_name ?? d.name ?? 'Без названия',
+      revision: d.version ?? d.revision ?? 1,
+      state: d.status ?? d.state ?? 'draft',
+    }));
+  } catch (err) {
+    toast.add({
+      title: t('common.error'),
+      description: err instanceof Error ? err.message : String(err),
+      color: 'error',
+    });
   } finally {
     draftsLoading.value = false;
   }
@@ -165,28 +182,86 @@ async function fetchDrafts() {
 async function createDraft() {
   creating.value = true;
   try {
-    await api.schemas.createDraft({ name: newDraftName.value });
+    const config = useRuntimeConfig();
+    const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
+    await $fetch(`${baseUrl.replace(/\/$/, '')}/schemas/drafts`, {
+      method: 'POST',
+      body: { name: newDraftName.value },
+      credentials: 'include',
+      headers: { Accept: 'application/json' },
+    });
     showCreateDraft.value = false;
     newDraftName.value = '';
+    toast.add({ title: t('schema.create_draft'), color: 'success' });
     await fetchDrafts();
+  } catch (err) {
+    toast.add({
+      title: t('common.error'),
+      description: err instanceof Error ? err.message : String(err),
+      color: 'error',
+    });
   } finally {
     creating.value = false;
   }
 }
 
 async function validateDraft(id: string) {
-  await api.schemas.validateDraft(id);
+  try {
+    const config = useRuntimeConfig();
+    const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
+    await $fetch(`${baseUrl.replace(/\/$/, '')}/schemas/drafts/${id}/validate`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { Accept: 'application/json' },
+    });
+    toast.add({ title: t('schema.validate'), color: 'success' });
+  } catch (err) {
+    toast.add({
+      title: t('common.error'),
+      description: err instanceof Error ? err.message : String(err),
+      color: 'error',
+    });
+  }
 }
 
 async function impactDraft(id: string) {
-  await api.schemas.impactDraft(id);
+  try {
+    const config = useRuntimeConfig();
+    const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
+    await $fetch(`${baseUrl.replace(/\/$/, '')}/schemas/drafts/${id}/impact`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { Accept: 'application/json' },
+    });
+    toast.add({ title: t('schema.impact'), color: 'success' });
+  } catch (err) {
+    toast.add({
+      title: t('common.error'),
+      description: err instanceof Error ? err.message : String(err),
+      color: 'error',
+    });
+  }
 }
 
 async function publishDraft(id: string) {
-  // Requires If-Match — in real UI, fetch the draft first to get its ETag
-  await api.schemas.publishDraft(id, 'draft:' + id, 'publish from UI');
-  await fetchDrafts();
-  await fetchPublished();
+  try {
+    const config = useRuntimeConfig();
+    const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
+    await $fetch(`${baseUrl.replace(/\/$/, '')}/schemas/drafts/${id}/publish`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { Accept: 'application/json' },
+    });
+    toast.add({ title: t('schema.publish'), color: 'success' });
+    await fetchDrafts();
+    await fetchPublished();
+  } catch (err) {
+    toast.add({
+      title: t('common.error'),
+      description: err instanceof Error ? err.message : String(err),
+      color: 'error',
+    });
+  }
 }
 
 // Published
@@ -196,16 +271,51 @@ const publishedLoading = ref(false);
 async function fetchPublished() {
   publishedLoading.value = true;
   try {
-    // API not fully implemented yet
-    published.value = [];
+    const config = useRuntimeConfig();
+    const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
+    const res = await $fetch<{ data: any[] }>(`${baseUrl.replace(/\/$/, '')}/schemas/published`, {
+      method: 'GET',
+      credentials: 'include',
+      headers: { Accept: 'application/json' },
+    });
+    published.value = (res.data ?? []).map((r: any) => ({
+      revision_id: Number(r.revision_id) || 0,
+      tenant_id: r.tenant_id ?? 'default',
+      state: r.status ?? r.state ?? 'published',
+      semantic_version: String(r.version ?? '1.0.0'),
+      content_hash: r.content_hash ?? '',
+      types: [],
+      predicates: [],
+    }));
+  } catch (err) {
+    toast.add({
+      title: t('common.error'),
+      description: err instanceof Error ? err.message : String(err),
+      color: 'error',
+    });
   } finally {
     publishedLoading.value = false;
   }
 }
 
 async function retireRevision(id: string) {
-  await api.schemas.retireRevision(id, 'retired from UI');
-  await fetchPublished();
+  try {
+    const config = useRuntimeConfig();
+    const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
+    await $fetch(`${baseUrl.replace(/\/$/, '')}/schemas/drafts/${id}/retire`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { Accept: 'application/json' },
+    });
+    toast.add({ title: t('schema.retire'), color: 'success' });
+    await fetchPublished();
+  } catch (err) {
+    toast.add({
+      title: t('common.error'),
+      description: err instanceof Error ? err.message : String(err),
+      color: 'error',
+    });
+  }
 }
 
 onMounted(() => {

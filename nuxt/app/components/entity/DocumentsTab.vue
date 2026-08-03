@@ -87,14 +87,15 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue';
+import { ref, computed, onMounted } from 'vue';
 import { useI18n } from 'vue-i18n';
 
-defineProps<{
+const props = defineProps<{
   entityId: string;
 }>();
 
 const { t } = useI18n();
+const toast = useToast();
 
 interface DocQualifier {
   label: string;
@@ -150,37 +151,104 @@ function onFileSelect(event: Event) {
   newFile.value = target.files?.[0] ?? null;
 }
 
+interface ApiDocument {
+  id: string;
+  title: string;
+  kind: string;
+  file_name: string;
+  size_bytes: number;
+  qualifiers?: Array<{ label: string; value: string }>;
+  valid_from?: string;
+  valid_to?: string;
+  source?: string;
+}
+
+async function fetchDocuments() {
+  const config = useRuntimeConfig();
+  const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
+  try {
+    const res = await $fetch<{ data: ApiDocument[] }>(`${baseUrl.replace(/\/$/, '')}/entities/${props.entityId}/documents`, {
+      credentials: 'include',
+      headers: { Accept: 'application/json' },
+    });
+    documents.value = (res.data ?? []).map((doc) => ({
+      id: doc.id,
+      title: doc.title,
+      kind: doc.kind,
+      fileName: doc.file_name,
+      sizeBytes: doc.size_bytes,
+      qualifiers: doc.qualifiers ?? [],
+      validFrom: doc.valid_from,
+      validTo: doc.valid_to,
+      source: doc.source,
+    }));
+  } catch (e: unknown) {
+    toast.add({ title: t('common.error'), description: e instanceof Error ? e.message : String(e), color: 'error' });
+    documents.value = [];
+  }
+}
+
 async function uploadDoc() {
   if (!newFile.value) return;
   uploading.value = true;
   try {
-    // Would call api.entities.uploadDocument(...)
-    documents.value.push({
-      id: crypto.randomUUID(),
-      title: newDocTitle.value,
-      kind: newDocKind.value,
-      fileName: newFile.value.name,
-      sizeBytes: newFile.value.size,
-      qualifiers: [],
-      source: 'manual',
+    const config = useRuntimeConfig();
+    const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
+    const formData = new FormData();
+    formData.append('file', newFile.value);
+    formData.append('title', newDocTitle.value);
+    formData.append('kind', newDocKind.value);
+    await $fetch(`${baseUrl.replace(/\/$/, '')}/entities/${props.entityId}/documents`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { Accept: 'application/json' },
+      body: formData,
     });
+    toast.add({ title: t('entity.documents.upload'), color: 'success' });
     showUpload.value = false;
     newDocTitle.value = '';
     newFile.value = null;
+    await fetchDocuments();
+  } catch (e: unknown) {
+    toast.add({ title: t('common.error'), description: e instanceof Error ? e.message : String(e), color: 'error' });
   } finally {
     uploading.value = false;
   }
 }
 
-function downloadDoc(_doc: DocumentItem) {
-  // Would trigger file download
+async function downloadDoc(doc: DocumentItem) {
+  const config = useRuntimeConfig();
+  const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
+  try {
+    await $fetch(`${baseUrl.replace(/\/$/, '')}/entities/${props.entityId}/documents/${doc.id}/download`, {
+      credentials: 'include',
+      headers: { Accept: 'application/json' },
+    });
+    toast.add({ title: t('entity.documents.download', 'Download'), color: 'success' });
+  } catch (e: unknown) {
+    toast.add({ title: t('common.error'), description: e instanceof Error ? e.message : String(e), color: 'error' });
+  }
 }
 
 function previewDoc(_doc: DocumentItem) {
   // Would open preview modal
 }
 
-function removeDoc(doc: DocumentItem) {
-  documents.value = documents.value.filter((d) => d.id !== doc.id);
+async function removeDoc(doc: DocumentItem) {
+  const config = useRuntimeConfig();
+  const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
+  try {
+    await $fetch(`${baseUrl.replace(/\/$/, '')}/entities/${props.entityId}/documents/${doc.id}`, {
+      method: 'DELETE',
+      credentials: 'include',
+      headers: { Accept: 'application/json' },
+    });
+    toast.add({ title: t('entity.documents.removed', 'Removed'), color: 'success' });
+    await fetchDocuments();
+  } catch (e: unknown) {
+    toast.add({ title: t('common.error'), description: e instanceof Error ? e.message : String(e), color: 'error' });
+  }
 }
+
+onMounted(fetchDocuments);
 </script>

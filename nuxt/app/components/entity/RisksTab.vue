@@ -118,13 +118,15 @@
 import { ref, computed, onMounted } from 'vue';
 import { useI18n } from 'vue-i18n';
 import type { RiskFactor, RiskAssessment, RiskLevel, RiskDecision } from '@enginer/api-client';
+import RiskLevelBadge from './RiskLevelBadge.vue';
 
-defineProps<{
+const props = defineProps<{
   entityId: string;
 }>();
 
 const { t } = useI18n();
 const { hasCapability } = useCapability();
+const toast = useToast();
 
 const factors = ref<RiskFactor[]>([]);
 const currentAssessment = ref<RiskAssessment | null>(null);
@@ -162,24 +164,87 @@ function decisionColor(decision: RiskDecision): BadgeColor {
   return colors[decision];
 }
 
-async function fetchRisks() {
-  // Would call api.risks.list(props.entityId)
-  factors.value = [];
-  currentAssessment.value = null;
+interface AssessmentResponse {
+  factors: RiskFactor[];
+  score?: number;
+  risk_level?: string;
+  decision?: string;
+  status?: string;
+  assessor?: string;
+  assessed_at?: string;
+  rationale?: string;
+  approval_pending?: boolean;
 }
 
-async function resolveFactor(_factorId: string) {
-  // Would call api.risks.resolve(factorId)
-  await fetchRisks();
+async function fetchRisks() {
+  const config = useRuntimeConfig();
+  const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
+  try {
+    const res = await $fetch<{ data: AssessmentResponse | null }>(`${baseUrl.replace(/\/$/, '')}/entities/${props.entityId}/assessment`, {
+      credentials: 'include',
+      headers: { Accept: 'application/json' },
+    });
+    if (res.data) {
+      factors.value = res.data.factors ?? [];
+      currentAssessment.value = {
+        assessment_id: '',
+        entity_public_id: props.entityId,
+        overall_level: (res.data.risk_level ?? 'low') as RiskAssessment['overall_level'],
+        factors: res.data.factors ?? [],
+        assessor: res.data.assessor ?? '',
+        assessed_at: res.data.assessed_at ?? '',
+        decision: (res.data.decision ?? 'review') as RiskAssessment['decision'],
+        rationale: res.data.rationale,
+        approval_pending: res.data.approval_pending ?? false,
+      };
+    } else {
+      factors.value = [];
+      currentAssessment.value = null;
+    }
+  } catch (e: unknown) {
+    toast.add({ title: t('common.error'), description: e instanceof Error ? e.message : String(e), color: 'error' });
+    factors.value = [];
+    currentAssessment.value = null;
+  }
+}
+
+async function resolveFactor(factorId: string) {
+  const config = useRuntimeConfig();
+  const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
+  try {
+    await $fetch(`${baseUrl.replace(/\/$/, '')}/entities/${props.entityId}/factors/${factorId}/resolve`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { Accept: 'application/json' },
+    });
+    toast.add({ title: t('entity.risks.resolved'), color: 'success' });
+    await fetchRisks();
+  } catch (e: unknown) {
+    toast.add({ title: t('common.error'), description: e instanceof Error ? e.message : String(e), color: 'error' });
+  }
 }
 
 async function submitAssessment() {
   submitting.value = true;
   try {
-    // Would call api.risks.assess(props.entityId, {...})
+    const config = useRuntimeConfig();
+    const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
+    await $fetch(`${baseUrl.replace(/\/$/, '')}/entities/${props.entityId}/assessment`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: {
+        overall_level: newLevel.value,
+        decision: newDecision.value,
+        rationale: newRationale.value,
+      },
+    });
+    toast.add({ title: t('entity.risks.new_assessment'), color: 'success' });
     showAssessment.value = false;
     newRationale.value = '';
     await fetchRisks();
+  } catch (e: unknown) {
+    toast.add({ title: t('common.error'), description: e instanceof Error ? e.message : String(e), color: 'error' });
   } finally {
     submitting.value = false;
   }

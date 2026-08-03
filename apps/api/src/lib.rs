@@ -51,6 +51,7 @@ pub fn rocket_build(state: AppState) -> Rocket<Build> {
     // ROCKET_SECRET_KEY env var.
     let mut rocket = rocket::build()
         .manage(state)
+        .manage(mock_routes::MockDb::new())
         .attach(cors::CorsFairing)
         .mount("/health", routes![health::live, health::ready])
         .mount("/health", routes![options_preflight])

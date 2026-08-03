@@ -152,6 +152,7 @@
 </template>
 
 <script setup lang="ts">
+import GraphTreeNode from './GraphTreeNode.vue';
 const props = defineProps<{
   rootEntityId: string;
   rootTypeId: string;
@@ -159,7 +160,7 @@ const props = defineProps<{
 }>();
 
 const { t } = useI18n();
-const api = useApi();
+const toast = useToast();
 
 // --- State ---
 const asOf = ref<string>('');
@@ -270,29 +271,65 @@ function navigateToEntity(id: string) {
   navigateTo(`/entities/${id}`);
 }
 
+interface ApiGraphNode {
+  id: string;
+  label: string;
+  type_label: string;
+  type_id: string;
+  has_children?: boolean;
+  cycle?: boolean;
+}
+
+interface ApiGraphEdge {
+  source: string;
+  target: string;
+  label?: string;
+  cycle?: boolean;
+}
+
 async function expandNode(nodeId: string) {
   if (visited.value.has(nodeId)) return;
   visited.value.add(nodeId);
 
   // Fetch relations for this node (progressive traversal, docs/17 §7)
   try {
-    await api.entities.query({
-      query: {
-        from: { type_id: props.rootTypeId, alias: 'e' },
-        select: [{ field: { system: 'public_id' }, alias: 'public_id' }],
-        where: {
-          relation: {
-            predicate_id: '*',
-            direction: direction.value as 'outgoing' | 'incoming' | 'both',
-            target_type_id: undefined,
-          },
-        },
-        sort: [],
-        page: { size: 20 },
-      },
+    const config = useRuntimeConfig();
+    const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
+    const res = await $fetch<{ data: { nodes: ApiGraphNode[]; edges: ApiGraphEdge[] } }>(`${baseUrl.replace(/\/$/, '')}/entities/${nodeId}/graph`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: { max_depth: 3, direction: direction.value },
     });
-    // Add new nodes and edges from response
-    // (Real implementation would parse the relation data)
+    const apiNodes = res.data?.nodes ?? [];
+    const apiEdges = res.data?.edges ?? [];
+    // Add new nodes (skip duplicates)
+    for (const n of apiNodes) {
+      if (!nodes.value.some((existing) => existing.id === n.id)) {
+        nodes.value.push({
+          id: n.id,
+          label: n.label,
+          typeLabel: n.type_label,
+          typeId: n.type_id,
+          expanded: false,
+          hasChildren: n.has_children ?? false,
+          cycle: n.cycle ?? false,
+          x: 0,
+          y: 0,
+        });
+      }
+    }
+    // Add new edges (skip duplicates)
+    for (const e of apiEdges) {
+      if (!edges.value.some((existing) => existing.source === e.source && existing.target === e.target)) {
+        edges.value.push({
+          source: e.source,
+          target: e.target,
+          label: e.label,
+          cycle: e.cycle ?? false,
+        });
+      }
+    }
     const node = nodes.value.find((n) => n.id === nodeId);
     if (node) {
       node.expanded = true;
@@ -306,20 +343,43 @@ async function reload() {
   nodes.value = [];
   edges.value = [];
   visited.value.clear();
-  // Initial load: root node + depth-1 neighbors
-  nodes.value.push({
-    id: props.rootEntityId,
-    label: props.rootEntityId.slice(0, 8),
-    typeLabel: props.rootTypeId.slice(0, 8),
-    typeId: props.rootTypeId,
-    expanded: false,
-    hasChildren: true,
-    cycle: false,
-    x: 0,
-    y: 0,
-  });
-  if (depth.value > 0) {
-    await expandNode(props.rootEntityId);
+  // Initial load: fetch graph data from API
+  try {
+    const config = useRuntimeConfig();
+    const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
+    const res = await $fetch<{ data: { nodes: ApiGraphNode[]; edges: ApiGraphEdge[] } }>(`${baseUrl.replace(/\/$/, '')}/entities/${props.rootEntityId}/graph`, {
+      method: 'POST',
+      credentials: 'include',
+      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+      body: { max_depth: 3, direction: 'both' },
+    });
+    const apiNodes = res.data?.nodes ?? [];
+    const apiEdges = res.data?.edges ?? [];
+    nodes.value = apiNodes.map((n) => ({
+      id: n.id,
+      label: n.label,
+      typeLabel: n.type_label,
+      typeId: n.type_id,
+      expanded: false,
+      hasChildren: n.has_children ?? false,
+      cycle: n.cycle ?? false,
+      x: 0,
+      y: 0,
+    }));
+    edges.value = apiEdges.map((e) => ({
+      source: e.source,
+      target: e.target,
+      label: e.label,
+      cycle: e.cycle ?? false,
+    }));
+    // Mark root as visited so we don't re-fetch it
+    visited.value.add(props.rootEntityId);
+    const rootNode = nodes.value.find((n) => n.id === props.rootEntityId);
+    if (rootNode) {
+      rootNode.expanded = true;
+    }
+  } catch (e: unknown) {
+    toast.add({ title: t('common.error'), description: e instanceof Error ? e.message : String(e), color: 'error' });
   }
 }
 
