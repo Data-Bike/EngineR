@@ -22,11 +22,11 @@ use crate::ports::{
 use enginer_connectors::{MappingResult, SourceObservation};
 use enginer_security::{AuditEntry, AuditKind};
 use enginer_risk_engine::{
-    Assessment, AssessmentStatus, Criterion, CriterionSeverity, Decision, DecisionKind,
-    EvaluationContext, Factor, FactorStatus, ObservationContext, RiskLevel, ScoreConfig,
+    Assessment, Criterion, CriterionSeverity, Decision, DecisionKind,
+    EvaluationContext, Factor, ObservationContext, RiskLevel, ScoreConfig,
     ScoreResult, Uncertainty, WeightedAggregator,
 };
-use enginer_workflow::{AssignmentStrategy, Task, TaskPriority, TaskStatus};
+use enginer_workflow::{Task, TaskPriority};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;

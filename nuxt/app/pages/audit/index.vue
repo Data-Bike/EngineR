@@ -1,5 +1,5 @@
 <template>
-  <div class="p-6 space-y-6">
+  <div class="p-4 sm:p-6 space-y-6 max-w-full overflow-x-hidden">
     <!-- Page header -->
     <div class="flex items-center justify-between">
       <div>
@@ -43,21 +43,21 @@
             v-model="filters.kind"
             :items="kindOptions"
             value-key="value"
-            option-label="label"
-            class="w-48"
+           
+            class="w-full sm:w-48"
           />
         </UFormField>
         <UFormField :label="t('audit.filter.actor')">
-          <UInput v-model="filters.actor" class="w-48" />
+          <UInput v-model="filters.actor" class="w-full sm:w-48" />
         </UFormField>
         <UFormField :label="t('audit.filter.action')">
-          <UInput v-model="filters.action" class="w-48" />
+          <UInput v-model="filters.action" class="w-full sm:w-48" />
         </UFormField>
         <UFormField :label="t('audit.filter.from')">
-          <UInput v-model="filters.from" type="datetime-local" class="w-48" />
+          <UInput v-model="filters.from" type="datetime-local" class="w-full sm:w-48" />
         </UFormField>
         <UFormField :label="t('audit.filter.to')">
-          <UInput v-model="filters.to" type="datetime-local" class="w-48" />
+          <UInput v-model="filters.to" type="datetime-local" class="w-full sm:w-48" />
         </UFormField>
         <UButton @click="fetchAudit" icon="i-lucide-search">
           {{ t('common.search') }}
@@ -76,7 +76,7 @@
       <div v-else-if="entries.length === 0" class="py-8 text-center text-[var(--ui-text-muted)]">
         {{ t('entity.empty') }}
       </div>
-      <table v-else class="w-full text-sm">
+      <div v-else class="overflow-x-auto"><table class="w-full text-sm">
         <thead>
           <tr class="border-b border-[var(--ui-border)] text-left">
             <th class="py-2 px-3 font-medium text-[var(--ui-text-muted)]">#</th>
@@ -199,7 +199,7 @@
             </tr>
           </template>
         </tbody>
-      </table>
+      </table></div>
 
       <!-- Pagination -->
       <div v-if="entries.length > 0" class="flex justify-between items-center mt-4 pt-4 border-t border-[var(--ui-border)]">
@@ -412,7 +412,7 @@ function toggleExpand(id: number) {
 }
 
 function resetFilters() {
-  filters.kind = '';
+  filters.kind = 'all';
   filters.actor = '';
   filters.action = '';
   filters.from = '';
@@ -423,19 +423,13 @@ function resetFilters() {
 async function fetchAudit() {
   loading.value = true;
   try {
-    const config = useRuntimeConfig();
-    const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
-    const params: Record<string, string> = { limit: '100' };
-    if (filters.kind && filters.kind !== 'all') params.kind = filters.kind;
-    if (filters.actor) params.actor = filters.actor;
-    if (filters.action) params.action = filters.action;
-    if (filters.from) params.from = new Date(filters.from).toISOString();
-    if (filters.to) params.to = new Date(filters.to).toISOString();
-    const res = await $fetch<{ data: AuditRecord[] }>(`${baseUrl.replace(/\/$/, '')}/audit`, {
-      method: 'GET',
-      query: params,
-      credentials: 'include',
-      headers: { Accept: 'application/json' },
+    const res = await api.audit.query({
+      limit: 100,
+      kind: filters.kind && filters.kind !== 'all' ? filters.kind : undefined,
+      actor: filters.actor || undefined,
+      action: filters.action || undefined,
+      from: filters.from ? new Date(filters.from).toISOString() : undefined,
+      to: filters.to ? new Date(filters.to).toISOString() : undefined,
     });
     entries.value = res.data;
   } catch (err) {
@@ -454,17 +448,14 @@ async function loadMore() {
   if (lastSeq === undefined) return;
   loadingMore.value = true;
   try {
-    const config = useRuntimeConfig();
-    const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
-    const params: Record<string, string> = { limit: '100', cursor: String(lastSeq) };
-    if (filters.kind && filters.kind !== 'all') params.kind = filters.kind;
-    if (filters.actor) params.actor = filters.actor;
-    if (filters.action) params.action = filters.action;
-    const res = await $fetch<{ data: AuditRecord[] }>(`${baseUrl.replace(/\/$/, '')}/audit`, {
-      method: 'GET',
-      query: params,
-      credentials: 'include',
-      headers: { Accept: 'application/json' },
+    const res = await api.audit.query({
+      limit: 100,
+      cursor: String(lastSeq),
+      kind: filters.kind && filters.kind !== 'all' ? filters.kind : undefined,
+      actor: filters.actor || undefined,
+      action: filters.action || undefined,
+      from: filters.from ? new Date(filters.from).toISOString() : undefined,
+      to: filters.to ? new Date(filters.to).toISOString() : undefined,
     });
     entries.value.push(...res.data);
   } catch (err) {
@@ -481,13 +472,7 @@ async function loadMore() {
 async function verifyChain() {
   verifying.value = true;
   try {
-    const config = useRuntimeConfig();
-    const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
-    const res = await $fetch<{ data: ChainVerificationResult }>(`${baseUrl.replace(/\/$/, '')}/audit/verify`, {
-      method: 'POST',
-      credentials: 'include',
-      headers: { Accept: 'application/json' },
-    });
+    const res = await api.audit.verifyChain();
     chainVerification.value = res.data;
     toast.add({
       title: res.data.valid ? t('audit.chain_valid') : t('audit.chain_broken'),
@@ -507,13 +492,7 @@ async function verifyChain() {
 async function createCheckpoint() {
   checkpointing.value = true;
   try {
-    const config = useRuntimeConfig();
-    const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
-    await $fetch(`${baseUrl.replace(/\/$/, '')}/audit/checkpoint`, {
-      method: 'POST',
-      credentials: 'include',
-      headers: { Accept: 'application/json' },
-    });
+    await api.audit.createCheckpoint();
     await fetchCheckpoint();
     toast.add({
       title: t('audit.checkpoint_created'),
@@ -532,13 +511,7 @@ async function createCheckpoint() {
 
 async function fetchCheckpoint() {
   try {
-    const config = useRuntimeConfig();
-    const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
-    const res = await $fetch<{ data: ChainCheckpoint }>(`${baseUrl.replace(/\/$/, '')}/audit/checkpoint`, {
-      method: 'GET',
-      credentials: 'include',
-      headers: { Accept: 'application/json' },
-    });
+    const res = await api.audit.latestCheckpoint();
     latestCheckpoint.value = res.data;
   } catch {
     // Non-fatal — checkpoint may not exist yet
@@ -547,13 +520,7 @@ async function fetchCheckpoint() {
 
 async function fetchRetention() {
   try {
-    const config = useRuntimeConfig();
-    const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
-    const res = await $fetch<{ data: RetentionPolicy }>(`${baseUrl.replace(/\/$/, '')}/audit/retention`, {
-      method: 'GET',
-      credentials: 'include',
-      headers: { Accept: 'application/json' },
-    });
+    const res = await api.audit.getRetentionPolicy();
     retentionPolicy.value = res.data;
     retentionForm.retention_days = res.data.retention_days;
     retentionForm.legal_hold = res.data.legal_hold;
@@ -567,19 +534,12 @@ async function fetchRetention() {
 async function saveRetention() {
   savingRetention.value = true;
   try {
-    const config = useRuntimeConfig();
-    const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
-    const res = await $fetch<{ data: RetentionPolicy }>(`${baseUrl.replace(/\/$/, '')}/audit/retention`, {
-      method: 'PUT',
-      body: {
-        tenant_id: retentionPolicy.value?.tenant_id ?? '',
-        retention_days: retentionForm.retention_days,
-        legal_hold: retentionForm.legal_hold,
-        archive_before_delete: retentionForm.archive_before_delete,
-        archive_url: retentionForm.archive_url || null,
-      },
-      credentials: 'include',
-      headers: { Accept: 'application/json' },
+    const res = await api.audit.setRetentionPolicy({
+      tenant_id: retentionPolicy.value?.tenant_id ?? '',
+      retention_days: retentionForm.retention_days,
+      legal_hold: retentionForm.legal_hold,
+      archive_before_delete: retentionForm.archive_before_delete,
+      archive_url: retentionForm.archive_url || null,
     });
     retentionPolicy.value = res.data;
     showRetentionDialog.value = false;

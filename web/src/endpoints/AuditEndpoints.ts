@@ -43,9 +43,9 @@ export class AuditEndpoints {
     return this.client.post<ChainCheckpoint>('/audit/checkpoint');
   }
 
-  /** GET /audit/verify — verify chain integrity. */
+  /** POST /audit/verify — verify chain integrity. */
   async verifyChain(): Promise<ParsedResponse<ChainVerificationResult>> {
-    return this.client.get<ChainVerificationResult>('/audit/verify');
+    return this.client.post<ChainVerificationResult>('/audit/verify');
   }
 
   /** GET /audit/retention — get retention policy. */

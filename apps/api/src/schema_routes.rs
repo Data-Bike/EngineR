@@ -13,7 +13,6 @@
 //! for publish (step-up required), `schema.publish` for retire.
 
 use crate::state::AppState;
-use enginer_security_api::client::SecurityClient;
 use enginer_security_api::contract::{
     ActionDecisionRequest, DecisionEffectDto, SecurityContextDto,
 };
@@ -111,7 +110,7 @@ fn check_capability(
     Ok(())
 }
 
-#[get("/schema/drafts")]
+#[get("/schemas/drafts")]
 pub async fn list_drafts(
     _state: &State<AppState>,
 ) -> Result<Json<Vec<DraftResponse>>, rocket::http::Status> {
@@ -119,7 +118,7 @@ pub async fn list_drafts(
     Err(rocket::http::Status::NotImplemented)
 }
 
-#[get("/schema/drafts/<id>")]
+#[get("/schemas/drafts/<id>")]
 pub async fn get_draft(
     id: &str,
     _state: &State<AppState>,
@@ -128,7 +127,7 @@ pub async fn get_draft(
     Err(rocket::http::Status::NotImplemented)
 }
 
-#[post("/schema/drafts", data = "<body>")]
+#[post("/schemas/drafts", data = "<body>")]
 pub async fn create_draft(
     body: Json<CreateDraftBody>,
     state: &State<AppState>,
@@ -138,7 +137,7 @@ pub async fn create_draft(
     Err(rocket::http::Status::NotImplemented)
 }
 
-#[post("/schema/drafts/<id>/validate")]
+#[post("/schemas/drafts/<id>/validate")]
 pub async fn validate_draft(
     id: &str,
     state: &State<AppState>,
@@ -148,7 +147,7 @@ pub async fn validate_draft(
     Err(rocket::http::Status::NotImplemented)
 }
 
-#[post("/schema/drafts/<id>/impact")]
+#[post("/schemas/drafts/<id>/impact")]
 pub async fn impact_draft(
     id: &str,
     state: &State<AppState>,
@@ -158,7 +157,7 @@ pub async fn impact_draft(
     Err(rocket::http::Status::NotImplemented)
 }
 
-#[post("/schema/drafts/<id>/publish")]
+#[post("/schemas/drafts/<id>/publish")]
 pub async fn publish_draft(
     id: &str,
     state: &State<AppState>,
@@ -169,7 +168,7 @@ pub async fn publish_draft(
     Err(rocket::http::Status::NotImplemented)
 }
 
-#[post("/schema/published/<id>/retire", data = "<body>")]
+#[post("/schemas/revisions/<id>/retire", data = "<body>")]
 pub async fn retire_published(
     id: &str,
     body: Json<RetireSchemaBody>,

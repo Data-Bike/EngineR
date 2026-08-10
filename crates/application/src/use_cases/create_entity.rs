@@ -18,10 +18,12 @@ use crate::ports::{
     Outbox, SchemaRepository, StatementRepository,
 };
 use enginer_domain::{
-    compute_identity_key, CanonicalScalar, Entity, EntityClass, EntityId, IdentityKey,
-    IdentityKeyStatus, IdentityMode, PublicEntityId, Statement, StatementObject, StatementStatus,
+    compute_identity_key, CanonicalScalar, Entity, EntityClass, IdentityKey,
+    IdentityKeyStatus, IdentityMode, Statement, StatementObject, StatementStatus,
     TenantId, TypeId,
 };
+#[cfg(test)]
+use enginer_domain::{EntityId, PublicEntityId};
 use std::sync::Arc;
 
 /// Command to create an entity with initial statements.

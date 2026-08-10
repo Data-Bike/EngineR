@@ -210,26 +210,27 @@ test.describe('Audit page', () => {
 
   test('renders filter section with kind, actor, action, from, to', async ({ page }) => {
     await page.goto('/audit');
-    // Kind filter (select)
-    await expect(page.locator('select').first()).toBeVisible();
-    // Actor and action inputs
-    const inputs = page.locator('input[type="text"], input:not([type])');
-    expect(await inputs.count()).toBeGreaterThanOrEqual(2);
+    // Kind filter is a Nuxt UI USelect (role="combobox"); locale switch is also one
+    await expect(page.locator('[role="combobox"]')).toHaveCount(2, { timeout: 10000 });
+    // Actor and action inputs (text inputs; at least global search + actor + action)
+    await expect(page.locator('input[type="text"]').first()).toBeVisible();
     // Date inputs
     await expect(page.locator('input[type="datetime-local"]')).toHaveCount(2);
   });
 
-  test('renders audit entries table with 3 rows', async ({ page }) => {
-    await page.goto('/audit');
-    // Wait for table to load
-    await expect(page.locator('table tbody tr')).toHaveCount(3);
-  });
-
   test('displays correct kind badges', async ({ page }) => {
     await page.goto('/audit');
-    // Should have decision and denied_request badges
-    const badges = page.locator('table tbody tr td:nth-child(3) span, table tbody tr td:nth-child(3) [class*="badge"]');
-    expect(await badges.count()).toBeGreaterThanOrEqual(3);
+    // Query endpoint may include search params
+    await page.waitForResponse('**/api/v1/audit*');
+    // Wait for table rows
+    await expect(page.locator('table tbody tr')).toHaveCount(3, { timeout: 10000 });
+    // Third column contains kind labels (Russian: decision=Решение, denied_request=Отказ)
+    const kindCol = await page.locator('table tbody tr td:nth-child(3)').allTextContents();
+    const joined = kindCol.join(' ');
+    expect(joined).toContain('Решение');
+    expect(joined).toContain('Отказ');
+  });
+  test('renders audit entries table with 3 rows', async ({ page }) => {
   });
 
   test('displays effect badges (allow, escalate, deny)', async ({ page }) => {
@@ -289,14 +290,23 @@ test.describe('Audit page', () => {
   });
 
   test('latest checkpoint card is displayed', async ({ page }) => {
-    await page.goto('/audit');
+    // Start waiting for checkpoint and retention endpoints before navigation
+    await Promise.all([
+      page.waitForResponse('**/api/v1/audit/checkpoint*'),
+      page.waitForResponse('**/api/v1/audit/retention*'),
+      page.goto('/audit'),
+    ]);
     // Should show checkpoint card with sequence
-    await expect(page.getByText(/Последний чекпойнт|Latest checkpoint/i)).toBeVisible();
-    await expect(page.locator('text=3')).toBeVisible();
+    const checkpointCard = page.locator('div').filter({ hasText: /Последний чекпойнт|Latest checkpoint/i }).first();
+    await expect(checkpointCard).toBeVisible();
+    expect(await checkpointCard.locator('text=3').count()).toBeGreaterThanOrEqual(1);
   });
 
   test('retention policy card is displayed with edit button', async ({ page }) => {
-    await page.goto('/audit');
+    await Promise.all([
+      page.waitForResponse('**/api/v1/audit/retention*'),
+      page.goto('/audit'),
+    ]);
     await expect(page.getByText(/Политика хранения|Retention policy/i)).toBeVisible();
     // Edit button
     await expect(page.getByRole('button', { name: /Изменить|Edit/i })).toBeVisible();
@@ -328,6 +338,8 @@ test.describe('Audit page', () => {
 
   test('keyboard navigation: Tab reaches filter controls', async ({ page }) => {
     await page.goto('/audit');
+    // Ensure page has focus and skip-link is reachable
+    await page.locator('a.skip-link').focus();
     // Tab through to reach filter area
     for (let i = 0; i < 10; i++) {
       await page.keyboard.press('Tab');

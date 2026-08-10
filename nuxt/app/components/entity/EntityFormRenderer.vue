@@ -92,6 +92,7 @@ const { t } = useI18n();
 // --- State ---
 const values = ref<Record<string, unknown>>({ ...props.initialValues ?? {} });
 const collapsedSections = ref<Set<string>>(new Set());
+const submitted = ref(false);
 
 // --- Computed ---
 const visibleSections = computed(() =>
@@ -101,6 +102,7 @@ const visibleSections = computed(() =>
 );
 
 const hasUnsavedChanges = computed(() => {
+  if (submitted.value) return false;
   if (!props.initialValues) return Object.keys(values.value).length > 0;
   return JSON.stringify(values.value) !== JSON.stringify(props.initialValues);
 });
@@ -133,6 +135,7 @@ function onSubmit() {
     predicate_id: predicateId,
     value,
   }));
+  submitted.value = true;
   emit('submit', {
     type_id: props.view.type_id,
     schema_revision: props.view.schema_revision,

@@ -1,5 +1,5 @@
 <template>
-  <div class="p-6 space-y-6">
+  <div class="p-4 sm:p-6 space-y-6 max-w-full overflow-x-hidden">
     <!-- Page header -->
     <div>
       <h1 class="text-2xl font-bold">{{ t('nav.monitoring') }}</h1>
@@ -33,7 +33,7 @@
       <div v-else-if="monitors.length === 0" class="py-8 text-center text-[var(--ui-text-muted)]">
         {{ t('entity.empty') }}
       </div>
-      <table v-else class="w-full text-sm">
+      <div v-else class="overflow-x-auto"><table class="w-full text-sm">
         <thead>
           <tr class="border-b border-[var(--ui-border)] text-left">
             <th class="py-2 px-3 font-medium text-[var(--ui-text-muted)]">{{ t('entity.monitoring.entity') }}</th>
@@ -81,7 +81,7 @@
             </td>
           </tr>
         </tbody>
-      </table>
+      </table></div>
     </UCard>
   </div>
 </template>
@@ -97,6 +97,7 @@ definePageMeta({
 
 const { t } = useI18n();
 const toast = useToast();
+const api = useApi();
 
 const monitors = ref<MonitorSchedule[]>([]);
 const loading = ref(false);
@@ -113,13 +114,7 @@ function isOverdue(date: string): boolean {
 async function fetchMonitors() {
   loading.value = true;
   try {
-    const config = useRuntimeConfig();
-    const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
-    const res = await $fetch<{ data: MonitorSchedule[] }>(`${baseUrl.replace(/\/$/, '')}/monitors`, {
-      method: 'GET',
-      credentials: 'include',
-      headers: { Accept: 'application/json' },
-    });
+    const res = await api.monitors.list();
     monitors.value = res.data;
   } catch (err) {
     toast.add({
@@ -135,13 +130,7 @@ async function fetchMonitors() {
 async function runNow(monitorId: string) {
   running.value = monitorId;
   try {
-    const config = useRuntimeConfig();
-    const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
-    await $fetch(`${baseUrl.replace(/\/$/, '')}/monitors/${monitorId}/run`, {
-      method: 'POST',
-      credentials: 'include',
-      headers: { Accept: 'application/json' },
-    });
+    await api.monitors.run(monitorId);
     toast.add({ title: t('entity.monitoring.run_now'), color: 'success' });
     await fetchMonitors();
   } catch (err) {

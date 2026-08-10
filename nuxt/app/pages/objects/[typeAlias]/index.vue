@@ -67,7 +67,7 @@
       <div v-else-if="rows.length === 0" class="py-8 text-center text-[var(--ui-text-muted)]">
         {{ t('entity.empty') }}
       </div>
-      <table v-else class="w-full text-sm">
+      <div v-else class="overflow-x-auto"><table class="w-full text-sm">
         <thead>
           <tr class="border-b border-[var(--ui-border)] text-left">
             <th
@@ -95,7 +95,7 @@
             </td>
           </tr>
         </tbody>
-      </table>
+      </table></div>
 
       <!-- Cursor pagination -->
       <div v-if="cursor" class="mt-4 flex justify-center">
@@ -115,6 +115,7 @@ definePageMeta({
 const { t } = useI18n();
 const route = useRoute();
 const toast = useToast();
+const api = useApi();
 
 const typeAlias = computed(() => route.params.typeAlias as string | undefined);
 const searchQuery = ref('');
@@ -147,18 +148,10 @@ function clearAdvanced() {
 
 async function fetchViewColumns() {
   try {
-    const config = useRuntimeConfig();
-    const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
-    const res = await $fetch<{ data: { columns?: Array<{ alias: string; label_key?: string }> } }>(
-      `${baseUrl.replace(/\/$/, '')}/schemas/types/${typeAlias.value}/view`,
-      {
-        query: { view_type: 'list' },
-        credentials: 'include',
-        headers: { Accept: 'application/json' },
-      },
-    );
-    if (res.data?.columns && res.data.columns.length > 0) {
-      columns.value = res.data.columns.map((c) => ({ alias: c.alias, label_key: c.label_key }));
+    const res = await api.schemas.getTypeView(typeAlias.value ?? 'unknown', 'list');
+    const data = res.data as { columns?: Array<{ alias: string; label_key?: string }> } | undefined;
+    if (data?.columns && data.columns.length > 0) {
+      columns.value = data.columns.map((c) => ({ alias: c.alias, label_key: c.label_key }));
     }
   } catch {
     // Keep default columns
@@ -168,22 +161,20 @@ async function fetchViewColumns() {
 async function doSearch() {
   loading.value = true;
   error.value = null;
+  cursor.value = undefined; // Reset cursor on new search
+  rows.value = []; // Clear previous results
   try {
-    const config = useRuntimeConfig();
-    const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
     const filters: Record<string, string> = {};
     for (const [k, v] of Object.entries(advancedFilters.value)) {
       if (v.trim()) filters[k] = v.trim();
     }
-    const res = await $fetch<{ data: { rows: ResultRow[]; cursor?: string } }>(`${baseUrl.replace(/\/$/, '')}/entities/query`, {
-      method: 'POST',
-      credentials: 'include',
-      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: {
-        from: { type_id: typeAlias.value ?? 'unknown' },
-        search: searchQuery.value || undefined,
-        filters: Object.keys(filters).length > 0 ? filters : undefined,
-      },
+    const res = await api.entities.query({
+      from: { type_id: typeAlias.value ?? 'unknown', alias: 'e' },
+      select: columns.value.map((col) => ({ field: { system: col.alias }, alias: col.alias })),
+      search: searchQuery.value || undefined,
+      filters: Object.keys(filters).length > 0 ? filters : undefined,
+      sort: [{ field: { system: 'display_name' }, direction: 'asc' }],
+      page: { size: 10 },
     });
     rows.value = res.data.rows || [];
     cursor.value = res.data.cursor;
@@ -198,17 +189,19 @@ async function doSearch() {
 async function loadMore() {
   if (!cursor.value) return;
   loadingMore.value = true;
+  error.value = null;
   try {
-    const config = useRuntimeConfig();
-    const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
-    const res = await $fetch<{ data: { rows: ResultRow[]; cursor?: string } }>(`${baseUrl.replace(/\/$/, '')}/entities/query`, {
-      method: 'POST',
-      credentials: 'include',
-      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: { from: { type_id: typeAlias.value ?? 'unknown' }, page: { after: cursor.value } },
+    const res = await api.entities.query({
+      from: { type_id: typeAlias.value ?? 'unknown', alias: 'e' },
+      select: columns.value.map((col) => ({ field: { system: col.alias }, alias: col.alias })),
+      sort: [{ field: { system: 'display_name' }, direction: 'asc' }],
+      page: { size: 10, after: cursor.value },
     });
     rows.value.push(...(res.data.rows || []));
     cursor.value = res.data.cursor;
+  } catch (e: unknown) {
+    error.value = e instanceof Error ? e.message : t('entity.error');
+    toast.add({ title: t('common.error'), description: error.value!, color: 'error' });
   } finally {
     loadingMore.value = false;
   }

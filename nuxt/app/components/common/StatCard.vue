@@ -2,7 +2,7 @@
   <NuxtLink
     v-if="to"
     :to="to"
-    class="block rounded-lg border border-[var(--ui-border)] p-4 hover:border-[var(--ui-border-muted)] transition-colors"
+    class="stat-card block rounded-lg border border-[var(--ui-border)] p-4 hover:border-[var(--ui-border-muted)] transition-colors"
   >
     <div class="flex items-center gap-3">
       <UIcon :name="icon" class="text-2xl text-[var(--ui-text-muted)]" />
@@ -14,7 +14,7 @@
   </NuxtLink>
   <div
     v-else
-    class="rounded-lg border border-[var(--ui-border)] p-4"
+    class="stat-card rounded-lg border border-[var(--ui-border)] p-4"
   >
     <div class="flex items-center gap-3">
       <UIcon :name="icon" class="text-2xl text-[var(--ui-text-muted)]" />

@@ -102,71 +102,81 @@ test.describe('Checks page', () => {
 
   test('renders summary cards (pending, running, completed, failed)', async ({ page }) => {
     await page.goto('/checks');
-    // Summary cards should be visible
-    const cards = page.locator('[class*="card"], .stat-card, [class*="StatCard"]');
-    expect(await cards.count()).toBeGreaterThanOrEqual(1);
+    await page.waitForResponse('**/api/v1/checks');
+    // Summary cards should be visible after data load
+    await expect(page.locator('.stat-card')).toHaveCount(4);
   });
 
   test('renders filter section with kind and status selects', async ({ page }) => {
     await page.goto('/checks');
-    // Kind filter
-    const selects = page.locator('select');
-    expect(await selects.count()).toBeGreaterThanOrEqual(2);
+    // Nuxt UI USelect renders role="combobox"; locale switch + kind + status
+    await expect(page.locator('[role="combobox"]')).toHaveCount(3, { timeout: 10000 });
   });
 
   test('new check dialog opens on button click', async ({ page }) => {
     await page.goto('/checks');
     await page.getByRole('button', { name: /Новая проверка|New check/i }).click();
+    await expect(page.locator('[role="dialog"]')).toBeVisible();
     // Should show dialog with form fields
-    await expect(page.locator('input').first()).toBeVisible();
+    await expect(page.locator('[role="dialog"] input').first()).toBeVisible();
     // Check kind select
-    await expect(page.locator('select').first()).toBeVisible();
+    await expect(page.locator('[role="dialog"] [role="combobox"]').first()).toBeVisible();
   });
 
   test('new check dialog has entity, kind, and connector fields', async ({ page }) => {
     await page.goto('/checks');
     await page.getByRole('button', { name: /Новая проверка|New check/i }).click();
+    await expect(page.locator('[role="dialog"]')).toBeVisible();
     // Entity ID input
-    await expect(page.locator('input').first()).toBeVisible();
+    await expect(page.locator('[role="dialog"] input').first()).toBeVisible();
     // Check kind select
-    await expect(page.locator('select').first()).toBeVisible();
+    await expect(page.locator('[role="dialog"] [role="combobox"]').first()).toBeVisible();
     // Connector input (optional)
-    const connectorInput = page.locator('input').nth(1);
+    const connectorInput = page.locator('[role="dialog"] input').nth(1);
     await expect(connectorInput).toBeVisible();
   });
 
   test('new check dialog submit button is present', async ({ page }) => {
     await page.goto('/checks');
     await page.getByRole('button', { name: /Новая проверка|New check/i }).click();
-    // Submit button
-    await expect(page.getByRole('button', { name: /Создать|Create|Запустить|Start/i })).toBeVisible();
+    await expect(page.locator('[role="dialog"]')).toBeVisible();
+    // Submit button (common.submit = "Отправить" in ru)
+    await expect(page.locator('[role="dialog"]').getByRole('button', { name: /Создать|Create|Запустить|Start|Отправить|Submit/i })).toBeVisible();
   });
 
   test('check kind options include kyc, sanctions, financial_health', async ({ page }) => {
     await page.goto('/checks');
     await page.getByRole('button', { name: /Новая проверка|New check/i }).click();
-    // Open kind select
-    const kindSelect = page.locator('select').first();
-    const options = await kindSelect.locator('option').allTextContents();
-    const joined = options.join(' ');
+    await expect(page.locator('[role="dialog"]')).toBeVisible();
+    // Open kind select inside the dialog
+    const kindSelect = page.locator('[role="dialog"] [role="combobox"]').first();
+    await kindSelect.click();
+    await expect(page.locator('[role="option"]').first()).toBeVisible();
+    const optionTexts = await page.locator('[role="option"]').allTextContents();
+    const joined = optionTexts.join(' ');
     expect(joined).toContain('KYC');
-    expect(joined).toContain('Sanctions');
+    expect(joined).toMatch(/Санкции|Sanctions/);
   });
 
   test('status badges show correct colors', async ({ page }) => {
     await page.goto('/checks');
-    // The table should contain status text
-    const tableText = await page.locator('table').textContent();
+    await page.waitForResponse('**/api/v1/checks');
+    // The table should contain status text (Russian locale)
+    const table = page.locator('table');
+    await expect(table).toBeVisible();
+    const tableText = await table.textContent();
     if (tableText) {
       // Should contain at least one status
-      const statuses = ['completed', 'running', 'failed', 'pending', 'cancelled'];
-      const hasStatus = statuses.some((s) => tableText.toLowerCase().includes(s));
+      const statuses = ['Завершена', 'Выполняется', 'Ошибка', 'Ожидает', 'Отменена'];
+      const hasStatus = statuses.some((s) => tableText.toLowerCase().includes(s.toLowerCase()));
       expect(hasStatus).toBe(true);
     }
   });
 
   test('keyboard navigation reaches filter controls', async ({ page }) => {
     await page.goto('/checks');
+    // Ensure page has focus and skip-link is reachable
+    await page.locator('a.skip-link').focus();
     for (let i = 0; i < 10; i++) {
       await page.keyboard.press('Tab');
       const focused = await page.evaluate(() => document.activeElement?.tagName);

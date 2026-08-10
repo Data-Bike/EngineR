@@ -1,5 +1,5 @@
 <template>
-  <div class="p-6 space-y-6">
+  <div class="p-4 sm:p-6 space-y-6 max-w-full overflow-x-hidden">
     <!-- Page header -->
     <div class="flex items-center justify-between">
       <div>
@@ -38,57 +38,48 @@
       <div v-else-if="reports.length === 0" class="py-8 text-center text-[var(--ui-text-muted)]">
         {{ t('entity.empty') }}
       </div>
-      <table v-else class="w-full text-sm">
-        <thead>
-          <tr class="border-b border-[var(--ui-border)] text-left">
-            <th class="py-2 px-3 font-medium text-[var(--ui-text-muted)]">{{ t('entity.reports.title') }}</th>
-            <th class="py-2 px-3 font-medium text-[var(--ui-text-muted)]">{{ t('entity.reports.entity') }}</th>
-            <th class="py-2 px-3 font-medium text-[var(--ui-text-muted)]">{{ t('entity.reports.format') }}</th>
-            <th class="py-2 px-3 font-medium text-[var(--ui-text-muted)]">{{ t('entity.reports.status_label') }}</th>
-            <th class="py-2 px-3 font-medium text-[var(--ui-text-muted)]">{{ t('entity.reports.generated') }}</th>
-            <th class="py-2 px-3 font-medium text-[var(--ui-text-muted)]">{{ t('entity.reports.size') }}</th>
-            <th class="py-2 px-3 font-medium text-[var(--ui-text-muted)]">{{ t('entity.actions') }}</th>
-          </tr>
-        </thead>
-        <tbody>
-          <tr
-            v-for="report in reports"
-            :key="report.report_id"
-            class="border-b border-[var(--ui-border)] hover:bg-[var(--ui-bg-muted)]"
-          >
-            <td class="py-2 px-3 font-medium">{{ report.title }}</td>
-            <td class="py-2 px-3">
-              <NuxtLink :to="`/entities/${report.entity_public_id}`" class="hover:underline">
-                {{ report.entity_public_id }}
-              </NuxtLink>
-            </td>
-            <td class="py-2 px-3">
-              <UBadge variant="subtle" size="sm">{{ report.format.toUpperCase() }}</UBadge>
-            </td>
-            <td class="py-2 px-3">
-              <UBadge :color="reportStatusColor(report.status)" size="sm">
-                {{ t(`entity.reports.status.${report.status}`) }}
-              </UBadge>
-            </td>
-            <td class="py-2 px-3">{{ report.generated_at ?? '—' }}</td>
-            <td class="py-2 px-3">{{ report.size_bytes ? formatFileSize(report.size_bytes) : '—' }}</td>
-            <td class="py-2 px-3">
-              <UButton
-                v-if="report.status === 'ready' && report.download_url && !isExpired(report)"
-                size="xs"
-                variant="outline"
-                icon="i-lucide-download"
-                @click="downloadReport(report)"
-              >
-                {{ t('entity.reports.download') }}
-              </UButton>
-              <span v-else-if="isExpired(report)" class="text-xs text-[var(--ui-text-muted)]">
-                {{ t('entity.reports.expired_label') }}
-              </span>
-            </td>
-          </tr>
-        </tbody>
-      </table>
+      <div v-else class="overflow-x-auto">
+        <table class="w-full text-sm">
+          <thead>
+            <tr class="border-b border-[var(--ui-border)] text-left">
+              <th class="py-2 px-3 font-medium text-[var(--ui-text-muted)]">Title</th>
+              <th class="py-2 px-3 font-medium text-[var(--ui-text-muted)]">Entity</th>
+              <th class="py-2 px-3 font-medium text-[var(--ui-text-muted)]">Format</th>
+              <th class="py-2 px-3 font-medium text-[var(--ui-text-muted)]">Status</th>
+              <th class="py-2 px-3 font-medium text-[var(--ui-text-muted)]">Generated</th>
+              <th class="py-2 px-3 font-medium text-[var(--ui-text-muted)]">Size</th>
+              <th class="py-2 px-3 font-medium text-[var(--ui-text-muted)]">Actions</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr v-for="report in reports" :key="report.report_id" class="border-b border-[var(--ui-border)] hover:bg-[var(--ui-bg-muted)]">
+              <td class="py-2 px-3 font-medium">{{ report.title ?? report.report_id }}</td>
+              <td class="py-2 px-3">
+                <span v-if="report.entity_public_id">{{ report.entity_public_id }}</span>
+                <span v-else class="text-[var(--ui-text-muted)]">—</span>
+              </td>
+              <td class="py-2 px-3"><UBadge variant="subtle" size="sm">{{ String(report.format ?? '').toUpperCase() }}</UBadge></td>
+              <td class="py-2 px-3"><UBadge variant="subtle" size="sm">{{ t(`entity.reports.status.${report.status}`, report.status) }}</UBadge></td>
+              <td class="py-2 px-3">{{ report.generated_at ?? '—' }}</td>
+              <td class="py-2 px-3">{{ report.size_bytes ? formatFileSize(report.size_bytes as number) : '—' }}</td>
+              <td class="py-2 px-3">
+                <UButton
+                  v-if="report.status === 'ready' && report.download_url && !isExpired(report)"
+                  size="xs"
+                  variant="outline"
+                  icon="i-lucide-download"
+                  @click="downloadReport(report)"
+                >
+                  {{ t('entity.reports.download') }}
+                </UButton>
+                <span v-else-if="isExpired(report)" class="text-xs text-[var(--ui-text-muted)]">
+                  {{ t('entity.reports.expired_label') }}
+                </span>
+              </td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
     </UCard>
 
     <!-- Generate dialog -->
@@ -126,6 +117,7 @@ definePageMeta({
 
 const { t } = useI18n();
 const toast = useToast();
+const api = useApi();
 
 const reports = ref<ReportInstance[]>([]);
 const loading = ref(false);
@@ -156,14 +148,17 @@ const formatOptions = computed(() => [
 type BadgeColor = 'primary' | 'secondary' | 'success' | 'info' | 'warning' | 'error' | 'neutral';
 
 function reportStatusColor(status: ReportStatus): BadgeColor {
-  const colors: Record<ReportStatus, BadgeColor> = {
+  const colors: Partial<Record<string, BadgeColor>> = {
     draft: 'neutral',
     generating: 'primary',
     ready: 'success',
     failed: 'error',
     expired: 'neutral',
+    completed: 'success',
+    pending: 'primary',
+    rendering: 'primary',
   };
-  return colors[status];
+  return colors[status] ?? 'neutral';
 }
 
 function isExpired(report: ReportInstance): boolean {
@@ -177,6 +172,12 @@ function formatFileSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+function formatSize(report: any): string {
+  const bytes = report?.size_bytes;
+  if (!bytes) return '—';
+  return formatFileSize(Number(bytes));
+}
+
 function downloadReport(report: ReportInstance) {
   if (report.download_url) {
     window.open(report.download_url, '_blank');
@@ -187,14 +188,8 @@ function downloadReport(report: ReportInstance) {
 async function fetchReports() {
   loading.value = true;
   try {
-    const config = useRuntimeConfig();
-    const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
-    const res = await $fetch<{ data: ReportInstance[] }>(`${baseUrl.replace(/\/$/, '')}/reports`, {
-      method: 'GET',
-      credentials: 'include',
-      headers: { Accept: 'application/json' },
-    });
-    reports.value = res.data;
+    const res = await api.reports.list();
+    reports.value = res.data as ReportInstance[];
   } catch (err) {
     toast.add({
       title: t('common.error'),
@@ -209,17 +204,10 @@ async function fetchReports() {
 async function generateReport() {
   generating.value = true;
   try {
-    const config = useRuntimeConfig();
-    const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
-    await $fetch(`${baseUrl.replace(/\/$/, '')}/reports`, {
-      method: 'POST',
-      body: {
-        entity_id: newEntityId.value,
-        template: newTemplate.value,
-        format: newFormat.value,
-      },
-      credentials: 'include',
-      headers: { Accept: 'application/json' },
+    await api.reports.create({
+      entity_id: newEntityId.value,
+      template: newTemplate.value,
+      format: newFormat.value,
     });
     showGenerate.value = false;
     newEntityId.value = '';

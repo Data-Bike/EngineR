@@ -17,6 +17,7 @@
             :placeholder="t('auth.username')"
             autocomplete="username"
             required
+            autofocus
             class="w-full"
           />
         </UFormField>

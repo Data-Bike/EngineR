@@ -20,6 +20,7 @@ export interface UserProfile {
   capabilities: string[];
   workspaces: string[];
   policy_revision: number;
+  csrf_token: string;
 }
 
 /** Auth store — holds session state. */
@@ -60,8 +61,23 @@ export const useAuthStore = defineStore('auth', {
       }
     },
 
-    /** Clear session (logout). */
-    clear() {
+    /** Clear session (logout). Calls server logout endpoint to invalidate cookie. */
+    async clear() {
+      try {
+        const config = useRuntimeConfig();
+        const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
+        const headers: Record<string, string> = { Accept: 'application/json' };
+        if (this.user?.csrf_token) {
+          headers['X-CSRF-Token'] = this.user.csrf_token;
+        }
+        await $fetch(`${baseUrl.replace(/\/$/, '')}/auth/logout`, {
+          method: 'POST',
+          credentials: 'include',
+          headers,
+        });
+      } catch {
+        // Ignore network errors on logout — still clear local state
+      }
       this.user = null;
       this.error = null;
     },

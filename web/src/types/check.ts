@@ -43,6 +43,7 @@ export const CheckStatus = {
   Running: 'running',
   Completed: 'completed',
   Failed: 'failed',
+  Skipped: 'skipped',
   Cancelled: 'cancelled',
 } as const;
 

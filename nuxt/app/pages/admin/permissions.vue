@@ -1,5 +1,5 @@
 <template>
-  <div class="p-6 space-y-6">
+  <div class="p-4 sm:p-6 space-y-6 max-w-full overflow-x-hidden">
     <!-- Header -->
     <div class="flex items-center justify-between">
       <div>
@@ -45,7 +45,7 @@
               <div v-for="(rule, idx) in group.rules" :key="idx" class="border border-[var(--ui-border)] rounded p-2 text-sm">
                 <div class="flex items-center gap-2 flex-wrap">
                   <UBadge :color="ruleColor(rule.effect)" variant="soft" size="sm">{{ rule.effect }}</UBadge>
-                  <span v-if="rule.resource_type" class="text-[var(--ui-text-muted)]">{{ t('admin.resource_type') }}: <strong>{{ rule.resource_type }}</strong></span>
+                  <span v-if="rule.resource_type && rule.resource_type !== 'all'" class="text-[var(--ui-text-muted)]">{{ t('admin.resource_type') }}: <strong>{{ rule.resource_type }}</strong></span>
                   <span v-if="rule.predicate" class="text-[var(--ui-text-muted)]">{{ t('admin.predicate') }}: <strong>{{ rule.predicate }}</strong></span>
                   <span v-if="rule.direction" class="text-[var(--ui-text-muted)]">{{ t('admin.direction') }}: <strong>{{ rule.direction }}</strong></span>
                   <span v-if="rule.field" class="text-[var(--ui-text-muted)]">{{ t('admin.field') }}: <strong>{{ rule.field }}</strong></span>
@@ -108,7 +108,7 @@
               <UFormField :label="t('admin.resource_type')">
                 <USelect v-model="rule.resource_type" :items="resourceTypeOptions" class="w-full" />
               </UFormField>
-              <div v-if="rule.resource_type === 'predicate'" class="grid grid-cols-2 gap-2">
+              <div v-if="rule.resource_type === 'predicate'" class="grid grid-cols-1 sm:grid-cols-2 gap-2">
                 <UFormField :label="t('admin.predicate')">
                   <UInput v-model="rule.predicate" class="w-full" placeholder="managed_by" />
                 </UFormField>
@@ -116,7 +116,7 @@
                   <USelect v-model="rule.direction" :items="ruleDirectionOptions" class="w-full" />
                 </UFormField>
               </div>
-              <div v-if="rule.resource_type === 'field'" class="grid grid-cols-2 gap-2">
+              <div v-if="rule.resource_type === 'field'" class="grid grid-cols-1 sm:grid-cols-2 gap-2">
                 <UFormField :label="t('admin.field')">
                   <UInput v-model="rule.field" class="w-full" placeholder="inn" />
                 </UFormField>
@@ -145,17 +145,15 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue';
-import { useI18n } from 'vue-i18n';
+import { capability } from '~/middleware/capability';
 
 definePageMeta({
-  middleware: ['auth'],
+  middleware: ['auth', capability('admin.view')],
 });
 
 const { t } = useI18n();
-const { requireCapability } = useCapability();
-requireCapability('admin.view');
 const toast = useToast();
+const api = useApi();
 
 interface PermissionRule {
   effect: string;
@@ -176,31 +174,33 @@ interface PermissionGroup {
 }
 
 const loading = ref(false);
-const permissionGroups = ref<PermissionGroup[]>([
-  {
-    id: 'pg-001',
-    name: t('admin.default_compliance_officers', 'Риск-менеджеры'),
-    description: t('admin.default_compliance_desc', 'Доступ к проверкам, рискам и решениям'),
-    principals: ['risk_analyst', 'compliance_officer'],
-    rules: [
-      { effect: 'allow', resource_type: 'type', predicate: '', direction: '', field: '', action: 'read', mask: '' },
-      { effect: 'allow', resource_type: 'predicate', predicate: '*', direction: 'both', field: '', action: 'read', mask: '' },
-      { effect: 'allow', resource_type: 'type', predicate: '', direction: '', field: '', action: 'create', mask: '' },
-      { effect: 'allow', resource_type: 'field', predicate: '', direction: '', field: 'inn', action: 'read', mask: 'allow' },
-    ],
-  },
-  {
-    id: 'pg-002',
-    name: t('admin.default_managers', 'Менеджеры'),
-    description: t('admin.default_managers_desc', 'Создание заявок и просмотр объектов'),
-    principals: ['manager'],
-    rules: [
-      { effect: 'allow', resource_type: 'type', predicate: '', direction: '', field: '', action: 'read', mask: '' },
-      { effect: 'allow', resource_type: 'type', predicate: '', direction: '', field: '', action: 'create', mask: '' },
-      { effect: 'deny', resource_type: 'field', predicate: '', direction: '', field: 'passport', action: 'read', mask: 'omit' },
-    ],
-  },
-]);
+const permissionGroups = ref<PermissionGroup[]>([]);
+
+async function fetchPermissionGroups() {
+  loading.value = true;
+  try {
+    const res = await api.security.listGroups();
+    permissionGroups.value = (res.data ?? []).map((g: any) => ({
+      id: g.id ?? '',
+      name: g.name ?? '',
+      description: g.description ?? '',
+      principals: g.principals ?? [],
+      rules: (g.rules ?? []).map((r: any) => ({
+        effect: r.effect ?? 'allow',
+        resource_type: r.resource_type ?? 'type',
+        predicate: r.predicate ?? '',
+        direction: r.direction ?? '',
+        field: r.field ?? '',
+        action: r.action ?? 'read',
+        mask: r.mask ?? '',
+      })),
+    }));
+  } catch (e: unknown) {
+    toast.add({ title: t('common.error'), description: e instanceof Error ? e.message : String(e), color: 'error' });
+  } finally {
+    loading.value = false;
+  }
+}
 
 const showDialog = ref(false);
 const editing = ref(false);
@@ -213,7 +213,7 @@ const effectOptions = [
 ];
 
 const resourceTypeOptions = [
-  { label: t('admin.resource_type', 'Тип ресурса'), value: '' },
+  { label: t('admin.resource_type', 'Тип ресурса'), value: 'all' },
   { label: t('admin.res_type', 'Тип объекта'), value: 'type' },
   { label: t('admin.res_predicate', 'Связь (предикат)'), value: 'predicate' },
   { label: t('admin.res_field', 'Поле'), value: 'field' },
@@ -293,25 +293,36 @@ function removeRule(idx: number) {
 async function saveGroup() {
   saving.value = true;
   try {
+    const payload = {
+      name: formData.value.name,
+      description: formData.value.description,
+      principals: formData.value.principals,
+      rules: formData.value.rules,
+    };
     if (editing.value) {
-      const idx = permissionGroups.value.findIndex(g => g.id === formData.value.id);
-      if (idx >= 0) permissionGroups.value[idx] = { ...formData.value };
+      await api.security.updateGroup(formData.value.id, payload);
     } else {
-      formData.value.id = `pg-${Date.now()}`;
-      permissionGroups.value.push({ ...formData.value });
+      await api.security.createGroup(payload);
     }
     showDialog.value = false;
     toast.add({ title: t('admin.permission_saved'), color: 'success' });
+    await fetchPermissionGroups();
+  } catch (e: unknown) {
+    toast.add({ title: t('common.error'), description: e instanceof Error ? e.message : String(e), color: 'error' });
   } finally {
     saving.value = false;
   }
 }
 
 async function deleteGroup(group: PermissionGroup) {
-  const idx = permissionGroups.value.findIndex(g => g.id === group.id);
-  if (idx >= 0) {
-    permissionGroups.value.splice(idx, 1);
+  try {
+    await api.security.deleteGroup(group.id);
     toast.add({ title: t('admin.permission_deleted'), color: 'success' });
+    await fetchPermissionGroups();
+  } catch (e: unknown) {
+    toast.add({ title: t('common.error'), description: e instanceof Error ? e.message : String(e), color: 'error' });
   }
 }
+
+onMounted(fetchPermissionGroups);
 </script>

@@ -32,6 +32,7 @@ const props = defineProps<{ entity: Entity }>();
 
 const { t } = useI18n();
 const toast = useToast();
+const api = useApi();
 
 const viewFields = ref<Record<string, string>>({});
 
@@ -53,19 +54,11 @@ const entityDataFields = computed<Record<string, unknown>>(() => {
 // Fetch view definition to get field labels
 async function fetchViewFields() {
   try {
-    const config = useRuntimeConfig();
-    const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
-    const res = await $fetch<{ data: { sections?: Array<{ fields?: Array<{ predicate_id: string; label_key: string }> }> } }>(
-      `${baseUrl.replace(/\/$/, '')}/schemas/types/${props.entity.type_id}/view`,
-      {
-        query: { view_type: 'form' },
-        credentials: 'include',
-        headers: { Accept: 'application/json' },
-      },
-    );
+    const res = await api.schemas.getTypeView(props.entity.type_id, 'form');
+    const data = res.data as { sections?: Array<{ fields?: Array<{ predicate_id: string; label_key: string }> }> } | undefined;
     const fields: Record<string, string> = {};
-    if (res.data?.sections) {
-      for (const section of res.data.sections) {
+    if (data?.sections) {
+      for (const section of data.sections) {
         if (section.fields) {
           for (const field of section.fields) {
             fields[field.predicate_id] = field.label_key;
@@ -84,9 +77,25 @@ const dataFields = computed(() => {
   return Object.entries(data).map(([key, value]) => ({
     key,
     label: viewFields.value[key] ? t(viewFields.value[key]) : key,
-    value: String(value ?? ''),
+    value: formatValue(value),
   }));
 });
+
+function formatValue(value: unknown): string {
+  if (value === null || value === undefined) return '—';
+  if (typeof value === 'string') return value;
+  if (typeof value === 'boolean') return value ? t('common.yes') : t('common.no');
+  if (typeof value === 'number') return String(value);
+  // Object with nested value (e.g. { kind: 'text', value: 'Иван' })
+  if (typeof value === 'object' && value !== null) {
+    const obj = value as Record<string, unknown>;
+    if ('value' in obj) return formatValue(obj.value);
+    if ('text' in obj) return String(obj.text);
+    // Fallback: stringify but avoid [object Object]
+    try { return JSON.stringify(obj); } catch { return '—'; }
+  }
+  return String(value ?? '');
+}
 
 onMounted(fetchViewFields);
 watch(() => props.entity.type_id, fetchViewFields);

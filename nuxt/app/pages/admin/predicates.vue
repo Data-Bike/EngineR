@@ -1,5 +1,5 @@
 <template>
-  <div class="p-6 space-y-6">
+  <div class="p-4 sm:p-6 space-y-6 max-w-full overflow-x-hidden">
     <!-- Header -->
     <div class="flex items-center justify-between">
       <div>
@@ -18,14 +18,17 @@
     </div>
 
     <!-- Filters -->
-    <div class="flex gap-2">
-      <USelect v-model="filterType" :items="filterTypeOptions" class="w-48" />
-      <USelect v-model="filterDirection" :items="directionOptions" class="w-48" />
+    <div class="flex flex-wrap gap-2">
+      <USelect v-model="filterType" :items="filterTypeOptions" class="w-full sm:w-48" />
+      <USelect v-model="filterDirection" :items="directionOptions" class="w-full sm:w-48" />
     </div>
 
     <!-- Predicates list -->
     <div v-if="loading" class="text-center py-8 text-[var(--ui-text-muted)]">
       {{ t('common.loading') }}
+    </div>
+    <div v-else-if="filteredPredicates.length === 0" class="text-center py-8 text-[var(--ui-text-muted)]">
+      {{ t('entity.empty') }}
     </div>
     <div v-else class="space-y-2">
       <UCard v-for="pred in filteredPredicates" :key="pred.alias">
@@ -76,7 +79,7 @@
     <!-- Create/Edit Dialog -->
     <UModal v-model:open="showDialog">
       <template #content>
-        <div class="p-6 space-y-4 max-h-[80vh] overflow-auto">
+        <div class="p-6 space-y-4 max-h-[80vh] overflow-y-auto">
           <h2 class="text-lg font-bold">{{ editing ? t('common.edit') : t('admin.create_predicate') }}</h2>
 
           <UFormField :label="t('admin.predicate_alias')" :hint="t('admin.predicate_alias_hint')">
@@ -88,16 +91,7 @@
           </UFormField>
 
           <UFormField :label="t('admin.predicate_type')">
-            <div class="flex gap-4">
-              <label class="flex items-center gap-2 cursor-pointer">
-                <input type="radio" v-model="formData.is_edge" :value="false" />
-                <span>{{ t('admin.scalar_predicate') }}</span>
-              </label>
-              <label class="flex items-center gap-2 cursor-pointer">
-                <input type="radio" v-model="formData.is_edge" :value="true" />
-                <span>{{ t('admin.edge_predicate') }}</span>
-              </label>
-            </div>
+            <USelect :model-value="formData.is_edge ? 'edge' : 'scalar'" :items="predicateTypeOptions" class="w-full" @update:model-value="(v: string) => formData.is_edge = v === 'edge'" />
           </UFormField>
 
           <UFormField :label="t('admin.domain_type')">
@@ -130,7 +124,7 @@
           </div>
 
           <!-- Cardinality -->
-          <div class="grid grid-cols-2 gap-2">
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
             <UFormField :label="t('admin.min_cardinality')">
               <UInput v-model.number="formData.min_cardinality" type="number" min="0" class="w-full" />
             </UFormField>
@@ -139,7 +133,7 @@
             </UFormField>
           </div>
 
-          <div class="grid grid-cols-2 gap-2">
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
             <UFormField :label="t('admin.confidentiality')">
               <USelect v-model="formData.confidentiality_class" :items="confidentialityOptions" class="w-full" />
             </UFormField>
@@ -163,17 +157,15 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed } from 'vue';
-import { useI18n } from 'vue-i18n';
+import { capability } from '~/middleware/capability';
 
 definePageMeta({
-  middleware: ['auth'],
+  middleware: ['auth', capability('admin.view')],
 });
 
 const { t } = useI18n();
-const { requireCapability } = useCapability();
-requireCapability('admin.view');
 const toast = useToast();
+const api = useApi();
 
 interface Predicate {
   alias: string;
@@ -195,8 +187,8 @@ const predicates = ref<Predicate[]>([]);
 const showDialog = ref(false);
 const editing = ref(false);
 const saving = ref(false);
-const filterType = ref('');
-const filterDirection = ref('');
+const filterType = ref('all');
+const filterDirection = ref('all');
 
 const typeOptions = computed(() => [
   { label: t('types.person', 'Физическое лицо'), value: 'person' },
@@ -208,12 +200,12 @@ const typeOptions = computed(() => [
 ]);
 
 const filterTypeOptions = computed(() => [
-  { label: t('admin.all_types', 'Все типы'), value: '' },
+  { label: t('admin.all_types', 'Все типы'), value: 'all' },
   ...typeOptions.value,
 ]);
 
 const directionOptions = [
-  { label: t('admin.all_directions', 'Все направления'), value: '' },
+  { label: t('admin.all_directions', 'Все направления'), value: 'all' },
   { label: t('admin.direction_directed', 'Направленная'), value: 'directed' },
   { label: t('admin.direction_symmetric', 'Симметричная'), value: 'symmetric' },
 ];
@@ -240,6 +232,11 @@ const confidentialityOptions = [
   { label: t('admin.conf_confidential', 'Конфиденциальные'), value: 'confidential' },
 ];
 
+const predicateTypeOptions = [
+  { label: t('admin.edge_predicate'), value: 'edge' },
+  { label: t('admin.scalar_predicate'), value: 'scalar' },
+];
+
 const formData = ref<Predicate>({
   alias: '',
   label: '',
@@ -255,10 +252,15 @@ const formData = ref<Predicate>({
   inverse_label: '',
 });
 
+const predicateTypeSelect = computed({
+  get: () => formData.value.is_edge ? 'edge' : 'scalar',
+  set: (val: string) => { formData.value.is_edge = val === 'edge'; },
+});
+
 const filteredPredicates = computed(() => {
   return predicates.value.filter(p => {
-    if (filterType.value && p.domain_type !== filterType.value) return false;
-    if (filterDirection.value && p.direction !== filterDirection.value) return false;
+    if (filterType.value && filterType.value !== 'all' && p.domain_type !== filterType.value) return false;
+    if (filterDirection.value && filterDirection.value !== 'all' && p.direction !== filterDirection.value) return false;
     return true;
   });
 });
@@ -277,26 +279,28 @@ function directionColor(dir: string): string {
 async function fetchPredicates() {
   loading.value = true;
   try {
-    const config = useRuntimeConfig();
-    const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
-    const res = await $fetch<{ data: any[] }>(`${baseUrl.replace(/\/$/, '')}/schemas/predicates`, {
-      credentials: 'include',
-      headers: { Accept: 'application/json' },
+    const res = await api.schemas.listPredicates();
+
+    const SCALAR_KINDS = new Set(['text', 'date', 'integer', 'decimal', 'boolean', 'money', 'uuid', 'uri', 'string', 'number']);
+
+    predicates.value = (res.data ?? []).map((p: any) => {
+      const range = p.range_type_id ?? p.range_type ?? p.range ?? '';
+      const isEdge = p.is_edge ?? (range !== '' && !SCALAR_KINDS.has(range));
+      return {
+        alias: p.alias ?? p.predicate_id ?? '',
+        label: p.label ?? p.display_name ?? p.alias ?? '',
+        is_edge: isEdge,
+        direction: p.direction ?? 'directed',
+        domain_type: p.domain_type_id ?? p.domain_type ?? p.domain ?? '',
+        range_type: isEdge ? range : '',
+        scalar_kind: isEdge ? 'text' : range,
+        min_cardinality: p.min_cardinality ?? p.cardinality_min ?? 0,
+        max_cardinality: p.max_cardinality ?? p.cardinality_max ?? 1,
+        participates_in_identity: p.participates_in_identity ?? p.identity ?? false,
+        confidentiality_class: p.confidentiality_class ?? 'public',
+        inverse_label: p.inverse_label ?? '',
+      };
     });
-    predicates.value = (res.data ?? []).map((p: any) => ({
-      alias: p.alias ?? p.predicate_id ?? '',
-      label: p.label ?? p.display_name ?? p.alias,
-      is_edge: p.is_edge ?? false,
-      direction: p.direction ?? 'directed',
-      domain_type: p.domain_type_id ?? p.domain_type ?? '',
-      range_type: p.range_type_id ?? p.range_type ?? '',
-      scalar_kind: p.scalar_kind ?? 'text',
-      min_cardinality: p.min_cardinality ?? 0,
-      max_cardinality: p.max_cardinality ?? 1,
-      participates_in_identity: p.participates_in_identity ?? false,
-      confidentiality_class: p.confidentiality_class ?? 'public',
-      inverse_label: p.inverse_label ?? '',
-    }));
   } catch (e: unknown) {
     toast.add({ title: t('common.error'), description: e instanceof Error ? e.message : String(e), color: 'error' });
   } finally {
@@ -332,24 +336,42 @@ function editPredicate(pred: Predicate) {
 async function savePredicate() {
   saving.value = true;
   try {
+    const payload = {
+      alias: formData.value.alias,
+      label: formData.value.label,
+      is_edge: formData.value.is_edge,
+      direction: formData.value.direction,
+      domain_type: formData.value.domain_type,
+      range_type: formData.value.range_type,
+      scalar_kind: formData.value.scalar_kind,
+      min_cardinality: formData.value.min_cardinality,
+      max_cardinality: formData.value.max_cardinality,
+      participates_in_identity: formData.value.participates_in_identity,
+      confidentiality_class: formData.value.confidentiality_class,
+      inverse_label: formData.value.inverse_label,
+    };
     if (editing.value) {
-      const idx = predicates.value.findIndex(p => p.alias === formData.value.alias);
-      if (idx >= 0) predicates.value[idx] = { ...formData.value };
+      await api.schemas.updatePredicate(formData.value.alias, payload);
     } else {
-      predicates.value.push({ ...formData.value });
+      await api.schemas.createPredicate(payload);
     }
     showDialog.value = false;
     toast.add({ title: t('admin.predicate_saved'), color: 'success' });
+    await fetchPredicates();
+  } catch (e: unknown) {
+    toast.add({ title: t('common.error'), description: e instanceof Error ? e.message : String(e), color: 'error' });
   } finally {
     saving.value = false;
   }
 }
 
 async function deletePredicate(pred: Predicate) {
-  const idx = predicates.value.findIndex(p => p.alias === pred.alias);
-  if (idx >= 0) {
-    predicates.value.splice(idx, 1);
+  try {
+    await api.schemas.deletePredicate(pred.alias);
     toast.add({ title: t('admin.predicate_deleted'), color: 'success' });
+    await fetchPredicates();
+  } catch (e: unknown) {
+    toast.add({ title: t('common.error'), description: e instanceof Error ? e.message : String(e), color: 'error' });
   }
 }
 

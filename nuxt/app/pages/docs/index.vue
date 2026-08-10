@@ -1,5 +1,5 @@
 <template>
-  <div class="p-6 space-y-6">
+  <div class="p-4 sm:p-6 space-y-6 max-w-full overflow-x-hidden">
     <div>
       <h1 class="text-2xl font-bold">{{ t('nav.docs') }}</h1>
       <p class="text-[var(--ui-text-muted)] mt-1">{{ t('docs.subtitle') }}</p>

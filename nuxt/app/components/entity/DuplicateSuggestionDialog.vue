@@ -58,7 +58,7 @@
             </div>
           </div>
           <p class="text-xs text-[var(--ui-text-muted)]">
-            {{ t('entity.duzzy.no_auto_merge') }}
+            {{ t('entity.duplicate.no_auto_merge') }}
           </p>
         </div>
 

@@ -53,6 +53,27 @@ export interface FileMetadataResponse {
   classification: string;
 }
 
+/** Document qualifier attached to an entity document. */
+export interface DocumentQualifier {
+  label: string;
+  value: string;
+}
+
+/** Entity document returned by GET /entities/{entityId}/documents. */
+export interface ApiDocument {
+  id: string;
+  title: string;
+  kind: string;
+  file_name: string;
+  size_bytes: number;
+  content_type: string;
+  uploaded_at: string;
+  qualifiers: DocumentQualifier[];
+  valid_from?: string;
+  valid_to?: string;
+  source?: string;
+}
+
 /** Upload status (docs/15 §3). */
 export const UploadStatus = {
   Initiated: 'initiated',

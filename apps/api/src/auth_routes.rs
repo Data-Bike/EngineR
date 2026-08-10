@@ -7,6 +7,7 @@
 //!
 //! In production these are handled by a real auth provider (docs/08).
 
+use rocket::http::{Cookie, CookieJar, Status};
 use rocket::serde::json::Json;
 use rocket::{get, post, routes};
 use serde::{Deserialize, Serialize};
@@ -39,6 +40,7 @@ pub struct UserContext {
     pub capabilities: Vec<String>,
     pub workspaces: Vec<String>,
     pub policy_revision: i64,
+    pub csrf_token: String,
 }
 
 /// API envelope wrapper.
@@ -72,12 +74,14 @@ fn default_context(username: &str) -> UserContext {
         ],
         workspaces: vec!["default".to_string()],
         policy_revision: 1,
+        csrf_token: "mock-csrf-token".to_string(),
     }
 }
 
 #[post("/auth/login", data = "<body>")]
-pub async fn login(body: Json<LoginBody>) -> Json<ApiEnvelope<LoginResponse>> {
+pub async fn login(body: Json<LoginBody>, cookies: &CookieJar<'_>) -> Json<ApiEnvelope<LoginResponse>> {
     let body = body.into_inner();
+    cookies.add(Cookie::new("session", "mock-session"));
     Json(ApiEnvelope {
         data: LoginResponse {
             principal_id: "00000000-0000-0000-0000-000000000001".to_string(),
@@ -89,16 +93,20 @@ pub async fn login(body: Json<LoginBody>) -> Json<ApiEnvelope<LoginResponse>> {
 }
 
 #[post("/auth/logout")]
-pub async fn logout() -> Json<serde_json::Value> {
+pub async fn logout(cookies: &CookieJar<'_>) -> Json<serde_json::Value> {
+    cookies.remove(Cookie::new("session", "mock-session"));
     Json(serde_json::json!({ "ok": true }))
 }
 
 #[get("/me/context")]
-pub async fn me_context() -> Json<ApiEnvelope<UserContext>> {
-    Json(ApiEnvelope {
+pub async fn me_context(cookies: &CookieJar<'_>) -> Result<Json<ApiEnvelope<UserContext>>, Status> {
+    if cookies.get("session").is_none() {
+        return Err(Status::Unauthorized);
+    }
+    Ok(Json(ApiEnvelope {
         data: default_context("admin"),
         meta: serde_json::json!({ "request_id": "mock" }),
-    })
+    }))
 }
 
 /// Route group.

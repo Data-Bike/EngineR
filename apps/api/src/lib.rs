@@ -18,8 +18,11 @@
 //!   workflow, complete/cancel task;
 //! - File routes (`file_routes`): staged upload init/chunk/complete/abort,
 //!   download, delete;
-//! - Audit routes (`audit_routes`): query entries, chain checkpoint, verify
-//!   chain, retention policy.
+//! Phase 2/5 route modules (`entity_routes`, `schema_routes`, etc.) are
+//! currently scaffolding (NotImplemented 501). The mock surface below is the
+//! active implementation for local/Docker demo. Production wiring will mount
+//! the real modules once persistence and PEP are integrated.
+
 
 #![forbid(unsafe_code)]
 

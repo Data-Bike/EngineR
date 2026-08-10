@@ -5,7 +5,7 @@
 
 use rocket::fairing::{Fairing, Info, Kind};
 use rocket::http::{Header, Method, Status};
-use rocket::{Data, Request, Response};
+use rocket::{Request, Response};
 
 pub struct CorsFairing;
 

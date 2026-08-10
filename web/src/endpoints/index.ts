@@ -6,4 +6,8 @@ export { HealthEndpoints, type HealthResponse } from './HealthEndpoints.js';
 export { ConnectorEndpoints } from './ConnectorEndpoints.js';
 export { CheckEndpoints } from './CheckEndpoints.js';
 export { FileEndpoints } from './FileEndpoints.js';
+export { ReportEndpoints } from './ReportEndpoints.js';
+export { DashboardEndpoints } from './DashboardEndpoints.js';
+export { RequestEndpoints } from './RequestEndpoints.js';
+export { MonitorEndpoints } from './MonitorEndpoints.js';
 export { AuditEndpoints } from './AuditEndpoints.js';

@@ -14,14 +14,15 @@ test.describe('Authentication', () => {
   test('login page renders correctly', async ({ page }) => {
     await page.goto('/login');
     await expect(page.locator('h1')).toContainText(/Вход|Sign in/i);
-    await expect(page.locator('input[name="username"], input')).toBeVisible();
+    await expect(page.locator('input[name="username"]')).toBeVisible();
     await expect(page.locator('input[type="password"]')).toBeVisible();
     await expect(page.locator('button[type="submit"]')).toBeVisible();
   });
 
   test('login page is keyboard accessible', async ({ page }) => {
     await page.goto('/login');
-    // Tab through form elements
+    // Ensure the first input is focused, then Tab through form elements
+    await page.locator('input[name="username"]').focus();
     await page.keyboard.press('Tab');
     const focused = await page.evaluate(() => document.activeElement?.tagName);
     expect(['INPUT', 'BUTTON']).toContain(focused);

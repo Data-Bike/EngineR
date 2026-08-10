@@ -135,6 +135,8 @@ test.describe('Accessibility — Phase 5 pages', () => {
 
     test(`${pagePath} is keyboard navigable`, async ({ page }) => {
       await page.goto(pagePath);
+      // Ensure the page has focus and skip-link is in the tab order
+      await page.locator('a.skip-link').focus();
       // Tab through and verify focus moves to interactive elements
       let interactiveReached = false;
       for (let i = 0; i < 15; i++) {

@@ -15,7 +15,6 @@ use enginer_audit_persistence::{
     AuditRepoQuery, AuditRecord, AuditRepository, ChainCheckpoint,
     ChainVerificationResult, RetentionPolicyRecord,
 };
-use enginer_security_api::client::SecurityClient;
 use enginer_security_api::contract::{
     ActionDecisionRequest, DecisionEffectDto, SecurityContextDto,
 };

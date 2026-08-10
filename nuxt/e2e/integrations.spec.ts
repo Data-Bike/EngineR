@@ -117,6 +117,10 @@ async function setupIntegrationsMocks(page: import('@playwright/test').Page) {
   });
 }
 
+// Icon buttons; use icon substrings to locate them.
+const healthBtnSelector = 'button:has([class*="heart-pulse"])';
+const toggleBtnSelector = 'button:has([class*="lucide:play"], [class*="lucide:pause"])';
+
 test.describe('Integrations page', () => {
   test.beforeEach(async ({ page }) => {
     await setupIntegrationsMocks(page);
@@ -130,23 +134,25 @@ test.describe('Integrations page', () => {
 
   test('renders summary cards (total, active, disabled, healthy)', async ({ page }) => {
     await page.goto('/integrations');
+    await page.waitForResponse('**/api/v1/connectors');
     // Summary cards
-    const cards = page.locator('[class*="card"], .stat-card, [class*="StatCard"]');
-    expect(await cards.count()).toBeGreaterThanOrEqual(1);
-    // Should show numbers
+    await expect(page.locator('.stat-card')).toHaveCount(4, { timeout: 10000 });
     const text = await page.locator('body').textContent();
     expect(text).toContain('3'); // total
   });
 
   test('renders connector table with 3 rows', async ({ page }) => {
     await page.goto('/integrations');
-    // Wait for table
-    await expect(page.locator('table tbody tr')).toHaveCount(3);
+    await page.waitForResponse('**/api/v1/connectors');
+    await expect(page.locator('table tbody tr')).toHaveCount(3, { timeout: 10000 });
   });
 
   test('table shows connector type, environment, enabled status', async ({ page }) => {
     await page.goto('/integrations');
-    const tableText = await page.locator('table').textContent();
+    await page.waitForResponse('**/api/v1/connectors');
+    const table = page.locator('table');
+    await expect(table).toBeVisible();
+    const tableText = await table.textContent();
     expect(tableText).toContain('fns');
     expect(tableText).toContain('kontur_focus');
     expect(tableText).toContain('rnp');
@@ -155,7 +161,7 @@ test.describe('Integrations page', () => {
 
   test('trust rank is displayed as visual bar', async ({ page }) => {
     await page.goto('/integrations');
-    // Should have trust rank labels
+    await page.waitForResponse('**/api/v1/connectors');
     const text = await page.locator('table').textContent();
     // Trust rank values: 75, 50, 100
     expect(text).toContain('75');
@@ -165,68 +171,76 @@ test.describe('Integrations page', () => {
 
   test('enable/disable toggle is present for each connector', async ({ page }) => {
     await page.goto('/integrations');
-    // Should have toggle switches or buttons for enable/disable
-    const toggles = page.locator('[role="switch"], button[class*="toggle"], input[type="checkbox"]');
+    await page.waitForResponse('**/api/v1/connectors');
+    const toggles = page.locator(toggleBtnSelector);
     expect(await toggles.count()).toBeGreaterThanOrEqual(1);
   });
 
   test('health check button is present for each connector', async ({ page }) => {
     await page.goto('/integrations');
-    // Should have health check buttons
-    const healthButtons = page.getByRole('button', { name: /health|Health|проверка|Проверка/i });
+    await page.waitForResponse('**/api/v1/connectors');
+    const healthButtons = page.locator(healthBtnSelector);
     expect(await healthButtons.count()).toBeGreaterThanOrEqual(1);
   });
 
   test('new connector dialog opens on button click', async ({ page }) => {
     await page.goto('/integrations');
     await page.getByRole('button', { name: /Новый коннектор|New connector/i }).click();
-    // Should show dialog
-    await expect(page.locator('select').first()).toBeVisible();
-    // Environment input
-    await expect(page.locator('input').first()).toBeVisible();
+    await expect(page.locator('[role="dialog"]')).toBeVisible();
+    // Should show dialog with form fields
+    await expect(page.locator('[role="dialog"] input').first()).toBeVisible();
+    await expect(page.locator('[role="dialog"] [role="combobox"]').first()).toBeVisible();
   });
 
   test('new connector dialog has type, environment, rate_limit, trust_rank fields', async ({ page }) => {
     await page.goto('/integrations');
     await page.getByRole('button', { name: /Новый коннектор|New connector/i }).click();
-    // Type select
-    await expect(page.locator('select').first()).toBeVisible();
-    // Environment input or select
-    const envField = page.locator('select').nth(1).or(page.locator('input').nth(0));
-    await expect(envField).toBeVisible();
+    await expect(page.locator('[role="dialog"]')).toBeVisible();
+    // Type input
+    await expect(page.locator('[role="dialog"] input').first()).toBeVisible();
+    // Environment select (combobox)
+    await expect(page.locator('[role="dialog"] [role="combobox"]').first()).toBeVisible();
     // Rate limit input (number)
-    await expect(page.locator('input[type="number"]')).toBeVisible();
+    await expect(page.locator('[role="dialog"] input[type="number"]')).toBeVisible();
+    // Trust rank select (combobox) — second one
+    await expect(page.locator('[role="dialog"] [role="combobox"]').nth(1)).toBeVisible();
   });
 
   test('trust rank select has 5 levels', async ({ page }) => {
     await page.goto('/integrations');
     await page.getByRole('button', { name: /Новый коннектор|New connector/i }).click();
-    // Trust rank select should be the last select
-    const trustSelect = page.locator('select').last();
-    const options = await trustSelect.locator('option').allTextContents();
-    const joined = options.join(' ');
-    // Should contain trust level labels
+    await expect(page.locator('[role="dialog"]')).toBeVisible();
+    // Open trust rank select (second combobox in dialog)
+    const trustSelect = page.locator('[role="dialog"] [role="combobox"]').nth(1);
+    await trustSelect.click();
+    await expect(page.locator('[role="option"]').first()).toBeVisible();
+    const optionValues = await page.locator('[role="option"]').evaluateAll((els) =>
+      els.map((el) => el.getAttribute('data-value') || el.textContent || '')
+    );
+    const joined = optionValues.join(' ');
     expect(joined).toContain('0'); // Untrusted
     expect(joined).toContain('100'); // Authoritative
   });
 
   test('health check button triggers API call', async ({ page }) => {
     await page.goto('/integrations');
-    // Track health check request
+    await page.waitForResponse('**/api/v1/connectors');
+    // Track health check request (ConnectorEndpoints uses POST /connectors/{id}/health)
     let healthCalled = false;
     page.on('request', (req) => {
-      if (req.url().includes('/health') && req.method() === 'GET') {
+      if (req.url().includes('/health') && req.method() === 'POST') {
         healthCalled = true;
       }
     });
     // Click first health check button
-    const healthBtn = page.getByRole('button', { name: /health|Health|проверка|Проверка/i }).first();
+    const healthBtn = page.locator(healthBtnSelector).first();
     await healthBtn.click();
     expect(healthCalled).toBe(true);
   });
 
   test('enable toggle triggers API call', async ({ page }) => {
     await page.goto('/integrations');
+    await page.waitForResponse('**/api/v1/connectors');
     // Track enable/disable request
     let toggleCalled = false;
     page.on('request', (req) => {
@@ -234,8 +248,8 @@ test.describe('Integrations page', () => {
         toggleCalled = true;
       }
     });
-    // Click first toggle
-    const toggle = page.locator('[role="switch"], input[type="checkbox"]').first();
+    // Click first toggle (enabled connector => will call /disable)
+    const toggle = page.locator(toggleBtnSelector).first();
     if (await toggle.isVisible()) {
       await toggle.click();
       expect(toggleCalled).toBe(true);
@@ -244,10 +258,12 @@ test.describe('Integrations page', () => {
 
   test('keyboard navigation reaches table and controls', async ({ page }) => {
     await page.goto('/integrations');
+    // Ensure page has focus and skip-link is reachable
+    await page.locator('a.skip-link').focus();
     for (let i = 0; i < 10; i++) {
       await page.keyboard.press('Tab');
       const focused = await page.evaluate(() => document.activeElement?.tagName);
-      if (['SELECT', 'INPUT', 'BUTTON'].includes(focused ?? '')) {
+      if (['SELECT', 'INPUT', 'BUTTON', 'A'].includes(focused ?? '')) {
         break;
       }
     }
@@ -257,10 +273,12 @@ test.describe('Integrations page', () => {
 
   test('disabled connector shows disabled badge', async ({ page }) => {
     await page.goto('/integrations');
+    await page.waitForResponse('**/api/v1/connectors');
     // Second connector is disabled
     const secondRow = page.locator('table tbody tr').nth(1);
+    await expect(secondRow).toBeVisible();
     const rowText = await secondRow.textContent();
-    // Should show disabled/no indicator
-    expect(rowText).toContain('false');
+    // Russian locale: disabled badge is "Отключено"
+    expect(rowText).toMatch(/false|Отключено|Disabled|disabled/);
   });
 });

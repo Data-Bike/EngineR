@@ -1,5 +1,5 @@
 <template>
-  <div class="p-6 space-y-6">
+  <div class="p-4 sm:p-6 space-y-6 max-w-full overflow-x-hidden">
     <!-- Page header -->
     <div class="flex items-center justify-between">
       <div>
@@ -46,8 +46,8 @@
             v-model="filters.kind"
             :items="kindOptions"
             value-key="value"
-            option-label="label"
-            class="w-48"
+           
+            class="w-full sm:w-48"
           />
         </UFormField>
         <UFormField :label="t('checks.filter.status')">
@@ -55,8 +55,8 @@
             v-model="filters.status"
             :items="statusOptions"
             value-key="value"
-            option-label="label"
-            class="w-48"
+           
+            class="w-full sm:w-48"
           />
         </UFormField>
         <UFormField :label="t('checks.filter.entity')">
@@ -80,7 +80,7 @@
       <div v-else-if="filteredChecks.length === 0" class="py-8 text-center text-[var(--ui-text-muted)]">
         {{ t('entity.empty') }}
       </div>
-      <table v-else class="w-full text-sm">
+      <div v-else class="overflow-x-auto"><table class="w-full text-sm">
         <thead>
           <tr class="border-b border-[var(--ui-border)] text-left">
             <th class="py-2 px-3 font-medium text-[var(--ui-text-muted)]">{{ t('checks.col.id') }}</th>
@@ -126,7 +126,7 @@
             </td>
           </tr>
         </tbody>
-      </table>
+      </table></div>
     </UCard>
 
     <!-- New check dialog -->
@@ -145,7 +145,7 @@
                 v-model="newCheck.check_kind"
                 :items="kindOptions"
                 value-key="value"
-                option-label="label"
+               
                 class="w-full"
               />
             </UFormField>
@@ -253,21 +253,16 @@ function formatDate(iso: string): string {
 async function fetchChecks() {
   loading.value = true;
   try {
-    const config = useRuntimeConfig();
-    const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
-    const res = await $fetch<{ data: any[]; meta: unknown }>(`${baseUrl.replace(/\/$/, '')}/checks`, {
-      credentials: 'include',
-      headers: { Accept: 'application/json' },
-    });
+    const res = await api.checks.listChecks();
     checks.value = (res.data || []).map((c: any) => ({
       ...c,
       check_id: c.check_id,
       target_entity_id: c.target_entity_id,
-      check_kind: c.kind,
-      final_score: undefined,
+      check_kind: c.kind ?? c.check_kind,
+      final_score: c.final_score ?? c.score ?? null,
       risk_level: c.risk_level,
       status: c.status,
-      created_at: c.started_at,
+      created_at: c.started_at ?? c.created_at,
     }));
   } catch (err) {
     toast.add({
@@ -283,18 +278,11 @@ async function fetchChecks() {
 async function submitNewCheck() {
   submitting.value = true;
   try {
-    const config = useRuntimeConfig();
-    const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
-    await $fetch(`${baseUrl.replace(/\/$/, '')}/checks`, {
-      method: 'POST',
-      body: {
-        target_entity_id: newCheck.target_entity_id,
-        check_kind: newCheck.check_kind,
-        connector_instance_id: newCheck.connector_instance_id || undefined,
-        parameters: {},
-      },
-      credentials: 'include',
-      headers: { Accept: 'application/json' },
+    await api.checks.requestCheck({
+      target_entity_id: newCheck.target_entity_id,
+      check_kind: newCheck.check_kind,
+      connector_instance_id: newCheck.connector_instance_id || undefined,
+      parameters: {},
     });
     showNewCheckDialog.value = false;
     toast.add({ title: t('checks.new_success'), color: 'success' });

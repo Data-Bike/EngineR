@@ -51,11 +51,11 @@
 </template>
 
 <script setup lang="ts">
+import { capability } from '~/middleware/capability';
+
 definePageMeta({
-  middleware: ['auth'],
+  middleware: ['auth', capability('admin.view')],
 });
 
 const { t } = useI18n();
-const { requireCapability } = useCapability();
-requireCapability('admin.view');
 </script>

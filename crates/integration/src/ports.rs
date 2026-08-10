@@ -5,9 +5,9 @@
 //! how data is stored or how connectors are called.
 
 use enginer_connectors::{MappingResult, SourceObservation};
-use enginer_risk_engine::{Assessment, Criterion, Decision, Factor, ScoreResult};
-use enginer_security::{AuditEntry, AuditKind};
-use enginer_workflow::{StateMachine, Task};
+use enginer_risk_engine::{Assessment, Criterion, Decision, Factor};
+use enginer_security::AuditEntry;
+use enginer_workflow::Task;
 use std::collections::HashMap;
 
 /// Port for loading criteria (docs/14 §8).

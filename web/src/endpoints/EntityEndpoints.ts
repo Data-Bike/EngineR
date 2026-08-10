@@ -35,6 +35,31 @@ export class EntityEndpoints {
     return this.client.post<QueryResponse>('/entities/query', body);
   }
 
+  /** GET /entities/{publicId}/relations — list entity relations. */
+  async getRelations(publicId: string): Promise<ParsedResponse<unknown[]>> {
+    return this.client.get<unknown[]>(`/entities/${publicId}/relations`);
+  }
+
+  /** POST /entities/{publicId}/relations — add a relation. */
+  async addRelation(publicId: string, body: unknown): Promise<ParsedResponse<unknown>> {
+    return this.client.post<unknown>(`/entities/${publicId}/relations`, body);
+  }
+
+  /** DELETE /entities/{publicId}/relations/{relationId} — remove a relation. */
+  async deleteRelation(publicId: string, relationId: string): Promise<ParsedResponse<unknown>> {
+    return this.client.delete<unknown>(`/entities/${publicId}/relations/${relationId}`);
+  }
+
+  /** PUT /entities/{publicId} — update entity statements. */
+  async update(publicId: string, body: unknown): Promise<ParsedResponse<Entity>> {
+    return this.client.put<Entity>(`/entities/${publicId}`, body);
+  }
+
+  /** GET /entities/{publicId}/history — get entity history. */
+  async getHistory(publicId: string): Promise<ParsedResponse<unknown[]>> {
+    return this.client.get<unknown[]>(`/entities/${publicId}/history`);
+  }
+
   /** POST /entities/{publicId}/retire — retire entity. */
   async retire(publicId: string, body: RetireEntityBody): Promise<ParsedResponse<RetireEntityResponse>> {
     return this.client.post<RetireEntityResponse>(`/entities/${publicId}/retire`, body);
@@ -43,5 +68,10 @@ export class EntityEndpoints {
   /** POST /entities/{publicId}/merge — merge entities (docs/04 §11). */
   async merge(publicId: string, body: MergeEntityBody): Promise<ParsedResponse<MergeEntityResponse>> {
     return this.client.post<MergeEntityResponse>(`/entities/${publicId}/merge`, body);
+  }
+
+  /** POST /entities/{publicId}/graph — expand entity graph (docs/17 §7). */
+  async getGraph(publicId: string, body: { max_depth: number; direction: string }): Promise<ParsedResponse<{ nodes: unknown[]; edges: unknown[] }>> {
+    return this.client.post<{ nodes: unknown[]; edges: unknown[] }>(`/entities/${publicId}/graph`, body);
   }
 }

@@ -108,6 +108,11 @@ export class ApiClient {
     return this.request<T>(path, { ...options, method: 'POST', body });
   }
 
+  /** POST request with a FormData body (multipart upload). */
+  async postMultipart<T>(path: string, body: FormData, options?: Omit<RequestOptions, 'method' | 'body'>): Promise<ParsedResponse<T>> {
+    return this.request<T>(path, { ...options, method: 'POST', body });
+  }
+
   /** PUT request. */
   async put<T>(path: string, body?: unknown, options?: Omit<RequestOptions, 'method' | 'body'>): Promise<ParsedResponse<T>> {
     return this.request<T>(path, { ...options, method: 'PUT', body });
@@ -121,6 +126,37 @@ export class ApiClient {
   /** DELETE request. */
   async delete<T>(path: string, options?: Omit<RequestOptions, 'method' | 'body'>): Promise<ParsedResponse<T>> {
     return this.request<T>(path, { ...options, method: 'DELETE' });
+  }
+
+  /** GET a binary blob (e.g. file download). Returns the raw Blob. */
+  async downloadBlob(path: string, options?: Omit<RequestOptions, 'method' | 'body'>): Promise<Blob> {
+    const url = this.buildUrl(path, options?.query);
+    const headers = this.buildHeaders({ ...options, method: 'GET' });
+    headers['Accept'] = options?.headers?.Accept ?? 'application/octet-stream';
+    const signal = this.mergeSignals(options?.signal, this.config.timeoutMs);
+
+    let response = await this.doFetch(url, headers, { method: 'GET' }, signal);
+
+    if (response.status === 401 && this.config.onRefresh) {
+      await this.refreshSingleflight();
+      const retryHeaders = this.buildHeaders({ ...options, method: 'GET' });
+      retryHeaders['Accept'] = options?.headers?.Accept ?? 'application/octet-stream';
+      response = await this.doFetch(url, retryHeaders, { method: 'GET' }, signal);
+    }
+
+    if (!response.ok) {
+      const text = await response.text().catch(() => '');
+      throw new ApiClientError(
+        {
+          code: 'download_failed',
+          message_key: 'errors.download_failed',
+          request_id: response.headers.get('X-Request-Id') ?? '',
+          message: text || `HTTP ${response.status}`,
+        },
+        response.status,
+      );
+    }
+    return response.blob();
   }
 
   /** PUT request with raw body (ArrayBuffer/Blob, for file uploads). */
@@ -157,11 +193,16 @@ export class ApiClient {
 
   private buildHeaders(options: RequestOptions): Record<string, string> {
     const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
       'Accept': 'application/json',
       'X-Request-Id': crypto.randomUUID(),
       ...options.headers,
     };
+    // Only set JSON Content-Type when body is not FormData/Blob/ArrayBuffer.
+    const body = options.body;
+    const isBinaryBody = body instanceof FormData || body instanceof Blob || body instanceof ArrayBuffer;
+    if (!isBinaryBody) {
+      headers['Content-Type'] = 'application/json';
+    }
     if (this.config.locale) {
       headers['X-Locale'] = this.config.locale;
     }
@@ -198,14 +239,16 @@ export class ApiClient {
     signal: AbortSignal,
   ): Promise<Response> {
     const fetchImpl = this.config.fetchImpl;
+    const body = options.body;
+    const isBinaryBody = body instanceof FormData || body instanceof Blob || body instanceof ArrayBuffer;
     const init: RequestInit = {
       method: options.method ?? 'GET',
       headers,
       signal,
       credentials: 'include', // cookies for session
     };
-    if (options.body !== undefined && options.method !== 'GET') {
-      init.body = JSON.stringify(options.body);
+    if (body !== undefined && options.method !== 'GET') {
+      init.body = isBinaryBody ? body : JSON.stringify(body);
     }
     try {
       return await fetchImpl(url, init);

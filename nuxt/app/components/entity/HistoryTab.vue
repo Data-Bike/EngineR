@@ -84,7 +84,7 @@
       <template #content>
         <div class="p-6 space-y-4">
           <h2 class="text-lg font-bold">{{ t('entity.history.compare') }}</h2>
-          <div class="grid grid-cols-2 gap-4">
+          <div class="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
               <p class="text-sm font-medium mb-1">{{ t('entity.history.revision') }} {{ compareFrom }}</p>
               <div class="rounded-md border border-[var(--ui-border)] p-2 text-sm space-y-1">
@@ -124,6 +124,7 @@ const props = defineProps<{
 
 const { t } = useI18n();
 const toast = useToast();
+const api = useApi();
 
 interface FieldChange {
   predicate_id: string;
@@ -171,13 +172,8 @@ interface ApiRevision {
 }
 
 async function fetchHistory() {
-  const config = useRuntimeConfig();
-  const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
   try {
-    const res = await $fetch<{ data: ApiRevision[] }>(`${baseUrl.replace(/\/$/, '')}/entities/${props.entityId}/history`, {
-      credentials: 'include',
-      headers: { Accept: 'application/json' },
-    });
+    const res = await api.entities.getHistory(props.entityId);
     revisions.value = res.data ?? [];
   } catch (e: unknown) {
     toast.add({ title: t('common.error'), description: e instanceof Error ? e.message : String(e), color: 'error' });

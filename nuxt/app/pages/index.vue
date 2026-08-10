@@ -1,5 +1,5 @@
 <template>
-  <div class="p-6 space-y-6">
+  <div class="p-4 sm:p-6 space-y-6 max-w-full overflow-x-hidden">
     <!-- Page header -->
     <div>
       <h1 class="text-2xl font-bold">{{ t('nav.home') }}</h1>
@@ -69,6 +69,7 @@ definePageMeta({ middleware: 'auth' });
 
 const { t } = useI18n();
 const toast = useToast();
+const api = useApi();
 
 const stats = reactive({
   my_tasks: 0,
@@ -83,12 +84,7 @@ const stats = reactive({
 
 async function fetchStats() {
   try {
-    const config = useRuntimeConfig();
-    const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
-    const res = await $fetch<{ data: typeof stats }>(`${baseUrl.replace(/\/$/, '')}/dashboard/stats`, {
-      credentials: 'include',
-      headers: { Accept: 'application/json' },
-    });
+    const res = await api.dashboard.stats();
     Object.assign(stats, res.data);
   } catch (err) {
     // Silent fail — dashboard stats are non-critical

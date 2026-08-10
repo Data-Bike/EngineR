@@ -16,9 +16,11 @@
 //! string after compilation (docs/07 §4).
 
 use crate::ast::{
-    FieldRef, Operator, QueryAst, QueryError, RelationDirection, SelectField, SortKey, SystemField,
+    FieldRef, Operator, QueryAst, QueryError, SystemField,
     WhereExpr,
 };
+#[cfg(test)]
+use crate::ast::{SelectField, SortKey};
 use enginer_security_domain::decision::QueryObligations;
 
 /// The security rewriter.

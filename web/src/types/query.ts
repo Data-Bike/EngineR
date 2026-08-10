@@ -89,15 +89,15 @@ export interface QueryAst {
   from: FromClause;
   select: SelectField[];
   where?: WhereExpr;
+  search?: string;
+  filters?: Record<string, string | string[]>;
   sort: SortKey[];
   page: KeysetPage;
   as_of?: string;
 }
 
-/** Query request body (docs/06 §9). */
-export interface QueryBody {
-  query: QueryAst;
-}
+/** Query request body (docs/06 §9). For the mock/legacy API the body is the AST directly. */
+export interface QueryBody extends QueryAst {}
 
 /** Query response (docs/06 §9). */
 export interface QueryResponse {

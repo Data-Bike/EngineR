@@ -7,12 +7,13 @@
 </template>
 
 <script setup lang="ts">
-// Global setup: fetch session context on app load (docs/16 §5)
+// Global setup: fetch session context on app load, but skip on public pages
 const { fetchContext, isAuthenticated } = useAuth();
+const route = useRoute();
+const publicPaths = ['/login', '/health'];
 
-// Only fetch if not already authenticated (e.g. after page refresh)
 onMounted(() => {
-  if (!isAuthenticated.value) {
+  if (!isAuthenticated.value && !publicPaths.includes(route.path)) {
     fetchContext();
   }
 });

@@ -1,5 +1,5 @@
 <template>
-  <div class="p-6 space-y-6">
+  <div class="p-4 sm:p-6 space-y-6 max-w-full overflow-x-hidden">
     <div>
       <h1 class="text-2xl font-bold">{{ t('nav.objects') }}</h1>
       <p class="text-[var(--ui-text-muted)] mt-1">{{ t('objects.subtitle') }}</p>
@@ -34,6 +34,7 @@ definePageMeta({ middleware: 'auth' });
 
 const { t } = useI18n();
 const toast = useToast();
+const api = useApi();
 
 interface TypeRow {
   id: string;
@@ -41,6 +42,7 @@ interface TypeRow {
   display_name: string;
   status: string;
   version: number;
+  entity_count?: number;
   count?: number;
 }
 
@@ -65,13 +67,8 @@ function typeIcon(typeId: string): string {
 async function fetchTypes() {
   loading.value = true;
   try {
-    const config = useRuntimeConfig();
-    const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
-    const res = await $fetch<{ data: TypeRow[] }>(`${baseUrl.replace(/\/$/, '')}/schemas/types`, {
-      credentials: 'include',
-      headers: { Accept: 'application/json' },
-    });
-    types.value = (res.data || []).map((t) => ({ ...t, count: 3 }));
+    const res = await api.schemas.listTypes();
+    types.value = (res.data || []).map((t) => ({ ...t, count: t.entity_count ?? t.count ?? 0 }));
   } catch (err) {
     toast.add({ title: t('common.error'), description: err instanceof Error ? err.message : String(err), color: 'error' });
   } finally {

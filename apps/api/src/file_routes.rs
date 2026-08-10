@@ -12,7 +12,6 @@
 //! Security: `bulk.import` for upload, `bulk.export` for download.
 
 use crate::state::AppState;
-use enginer_security_api::client::SecurityClient;
 use enginer_security_api::contract::{
     ActionDecisionRequest, DecisionEffectDto, SecurityContextDto,
 };
@@ -75,6 +74,7 @@ pub struct UploadStatusResponse {
 
 /// File metadata response.
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[allow(dead_code)]
 pub struct FileMetadataResponse {
     pub object_id: String,
     pub filename: String,

@@ -9,7 +9,7 @@ max_json_bytes = 1048576
 [database]
 # Local dev: point directly at the docker-compose Postgres.
 # Production: use a secret ref like "secret://enginer/db".
-url_secret_ref = "postgres://enginer_app:enginer_app@localhost:5432/enginer"
+url_secret_ref = "postgres://enginer_app:enginer_app@localhost:6543/enginer"
 max_connections = 40
 acquire_timeout_ms = 500
 statement_timeout_ms = 4000

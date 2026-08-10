@@ -1,5 +1,5 @@
 <template>
-  <div class="p-6 space-y-6">
+  <div class="p-4 sm:p-6 space-y-6 max-w-full overflow-x-hidden">
     <!-- Header -->
     <div class="flex items-center justify-between">
       <div>
@@ -19,17 +19,20 @@
       <UCard v-for="type in types" :key="type.type_id">
         <div class="flex items-start justify-between">
           <div class="flex-1">
-            <div class="flex items-center gap-2">
+            <div class="flex items-center gap-2 flex-wrap">
               <p class="font-medium">{{ type.display_name }}</p>
               <UBadge variant="subtle" size="sm">{{ type.type_id }}</UBadge>
               <UBadge v-if="type.entity_class" variant="outline" size="sm">{{ type.entity_class }}</UBadge>
+              <UBadge v-if="type.entity_count !== undefined" variant="soft" size="sm" color="primary">
+                {{ type.entity_count }} {{ t('admin.objects_count', 'объектов') }}
+              </UBadge>
             </div>
             <p class="text-sm text-[var(--ui-text-muted)] mt-1">{{ type.description }}</p>
             <div v-if="type.fields && type.fields.length > 0" class="mt-2">
               <p class="text-xs font-medium text-[var(--ui-text-muted)] mb-1">{{ t('admin.fields_count', { n: type.fields.length }) }}</p>
               <div class="flex flex-wrap gap-1">
                 <UBadge v-for="field in type.fields.slice(0, 8)" :key="field.alias" variant="subtle" size="sm">
-                  {{ field.label_key ? t(field.label_key, field.alias) : field.alias }}
+                  {{ field.label ? t(field.label, field.alias) : field.alias }}
                 </UBadge>
                 <UBadge v-if="type.fields.length > 8" variant="outline" size="sm">
                   +{{ type.fields.length - 8 }}
@@ -82,7 +85,7 @@
                 <p class="text-sm font-medium">{{ t('admin.field_n', { n: idx + 1 }) }}</p>
                 <UButton size="xs" variant="ghost" color="error" icon="i-lucide-x" @click="removeField(idx)" />
               </div>
-              <div class="grid grid-cols-2 gap-2">
+              <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
                 <UFormField :label="t('admin.field_alias')">
                   <UInput v-model="field.alias" class="w-full" placeholder="inn, full_name, ..." />
                 </UFormField>
@@ -90,7 +93,7 @@
                   <UInput v-model="field.label" class="w-full" placeholder="ИНН, ФИО, ..." />
                 </UFormField>
               </div>
-              <div class="grid grid-cols-3 gap-2">
+              <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
                 <UFormField :label="t('admin.field_kind')">
                   <USelect v-model="field.kind" :items="fieldKindOptions" class="w-full" />
                 </UFormField>
@@ -119,17 +122,15 @@
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue';
-import { useI18n } from 'vue-i18n';
+import { capability } from '~/middleware/capability';
 
 definePageMeta({
-  middleware: ['auth'],
+  middleware: ['auth', capability('admin.view')],
 });
 
 const { t } = useI18n();
-const { requireCapability } = useCapability();
-requireCapability('admin.view');
 const toast = useToast();
+const api = useApi();
 
 interface TypeField {
   alias: string;
@@ -144,6 +145,7 @@ interface SchemaType {
   display_name: string;
   description: string;
   entity_class: string;
+  entity_count?: number;
   fields: TypeField[];
 }
 
@@ -181,25 +183,46 @@ const formData = ref<SchemaType>({
 async function fetchTypes() {
   loading.value = true;
   try {
-    const config = useRuntimeConfig();
-    const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
-    const res = await $fetch<{ data: any[] }>(`${baseUrl.replace(/\/$/, '')}/schemas/types`, {
-      credentials: 'include',
-      headers: { Accept: 'application/json' },
-    });
-    types.value = (res.data ?? []).map((t: any) => ({
-      type_id: t.type_id ?? t.alias ?? '',
-      display_name: t.display_name ?? t.name ?? t.type_id,
+    const res = await api.schemas.listTypes();
+
+    // Map basic type info — API returns `id` not `type_id`
+    const baseTypes = (res.data ?? []).map((t: any) => ({
+      type_id: t.type_id ?? t.id ?? t.alias ?? t.name ?? '',
+      display_name: t.display_name ?? t.name ?? t.id ?? '',
       description: t.description ?? '',
       entity_class: t.entity_class ?? 'data',
-      fields: (t.fields ?? []).map((f: any) => ({
-        alias: f.alias ?? f.predicate_id ?? '',
-        label: f.label_key ?? f.alias,
-        kind: f.kind ?? 'text',
-        required: f.required ?? false,
-        identity: f.identity ?? false,
-      })),
+      entity_count: t.entity_count as number | undefined,
+      fields: [] as TypeField[],
     }));
+
+    // Load fields for each type via view API (in parallel)
+    const enriched = await Promise.all(baseTypes.map(async (tp) => {
+      try {
+        const vres = await api.schemas.getTypeView(tp.type_id, 'form');
+        const data = vres.data as { sections?: Array<{ fields?: Array<any> }> } | undefined;
+        const fields: TypeField[] = [];
+        if (data?.sections) {
+          for (const section of data.sections) {
+            if (section.fields) {
+              for (const f of section.fields) {
+                fields.push({
+                  alias: f.alias ?? f.predicate_id ?? '',
+                  label: f.label_key ?? f.alias ?? f.predicate_id ?? '',
+                  kind: f.kind ?? 'text',
+                  required: f.required ?? false,
+                  identity: f.identity ?? false,
+                });
+              }
+            }
+          }
+        }
+        return { ...tp, fields };
+      } catch {
+        return tp;
+      }
+    }));
+
+    types.value = enriched;
   } catch (e: unknown) {
     toast.add({ title: t('common.error'), description: e instanceof Error ? e.message : String(e), color: 'error' });
   } finally {
@@ -242,18 +265,21 @@ function removeField(idx: number) {
 async function saveType() {
   saving.value = true;
   try {
-    const config = useRuntimeConfig();
-    const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
-    // In a real system, this would create a schema draft with the type definition
-    // For the mock, we just add it to the local list
+    const payload = {
+      type_id: formData.value.type_id,
+      display_name: formData.value.display_name,
+      description: formData.value.description,
+      entity_class: formData.value.entity_class,
+      fields: formData.value.fields,
+    };
     if (editing.value) {
-      const idx = types.value.findIndex(t => t.type_id === formData.value.type_id);
-      if (idx >= 0) types.value[idx] = { ...formData.value };
+      await api.schemas.updateType(formData.value.type_id, payload);
     } else {
-      types.value.push({ ...formData.value });
+      await api.schemas.createType(payload);
     }
     showDialog.value = false;
     toast.add({ title: t('admin.type_saved'), color: 'success' });
+    await fetchTypes();
   } catch (e: unknown) {
     toast.add({ title: t('common.error'), description: e instanceof Error ? e.message : String(e), color: 'error' });
   } finally {
@@ -262,10 +288,12 @@ async function saveType() {
 }
 
 async function deleteType(type: SchemaType) {
-  const idx = types.value.findIndex(t => t.type_id === type.type_id);
-  if (idx >= 0) {
-    types.value.splice(idx, 1);
+  try {
+    await api.schemas.deleteType(type.type_id);
     toast.add({ title: t('admin.type_deleted'), color: 'success' });
+    await fetchTypes();
+  } catch (e: unknown) {
+    toast.add({ title: t('common.error'), description: e instanceof Error ? e.message : String(e), color: 'error' });
   }
 }
 

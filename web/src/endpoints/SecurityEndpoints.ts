@@ -1,30 +1,30 @@
 /**
- * Security API endpoints (docs/09).
- *
- * These are internal endpoints under /internal/security/v1, used by the PEP
- * in the API server. The Nuxt client calls the public admin surface, not
- * these directly — but the types are shared.
+ * Security/permissions admin API endpoints (public admin surface).
  */
 
 import type { ApiClient, ParsedResponse } from '../client/ApiClient.js';
-import type {
-  ActionDecisionRequest,
-  ActionDecisionResponse,
-  QueryDecisionRequest,
-  QueryDecisionResponse,
-} from '../types/index.js';
 
-/** Security API endpoint methods (internal). */
+/** Security admin API endpoint methods. */
 export class SecurityEndpoints {
   constructor(private readonly client: ApiClient) {}
 
-  /** POST /internal/security/v1/decisions/action — action decision (docs/09 §4). */
-  async actionDecision(req: ActionDecisionRequest): Promise<ParsedResponse<ActionDecisionResponse>> {
-    return this.client.post<ActionDecisionResponse>('/decisions/action', req);
+  /** GET /permissions/groups — list permission groups. */
+  async listGroups(): Promise<ParsedResponse<unknown[]>> {
+    return this.client.get<unknown[]>('/permissions/groups');
   }
 
-  /** POST /internal/security/v1/decisions/query — query decision (docs/09 §5). */
-  async queryDecision(req: QueryDecisionRequest): Promise<ParsedResponse<QueryDecisionResponse>> {
-    return this.client.post<QueryDecisionResponse>('/decisions/query', req);
+  /** POST /permissions/groups — create a permission group. */
+  async createGroup(body: unknown): Promise<ParsedResponse<unknown>> {
+    return this.client.post<unknown>('/permissions/groups', body);
+  }
+
+  /** PUT /permissions/groups/{groupId} — update a permission group. */
+  async updateGroup(groupId: string, body: unknown): Promise<ParsedResponse<unknown>> {
+    return this.client.put<unknown>(`/permissions/groups/${groupId}`, body);
+  }
+
+  /** DELETE /permissions/groups/{groupId} — delete a permission group. */
+  async deleteGroup(groupId: string): Promise<ParsedResponse<unknown>> {
+    return this.client.delete<unknown>(`/permissions/groups/${groupId}`);
   }
 }

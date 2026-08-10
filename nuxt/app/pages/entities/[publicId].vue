@@ -1,5 +1,5 @@
 <template>
-  <div class="p-6 space-y-6">
+  <div class="p-4 sm:p-6 space-y-6 max-w-full overflow-x-hidden">
     <!-- Loading state -->
     <div v-if="loading" class="text-center py-12 text-[var(--ui-text-muted)]">
       {{ t('entity.loading') }}
@@ -95,6 +95,7 @@ definePageMeta({
 const { t } = useI18n();
 const route = useRoute();
 const toast = useToast();
+const api = useApi();
 
 const publicId = computed(() => route.params.publicId as string);
 const entity = ref<Entity | null>(null);
@@ -120,12 +121,7 @@ async function fetchEntity() {
   loading.value = true;
   error.value = null;
   try {
-    const config = useRuntimeConfig();
-    const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
-    const res = await $fetch<{ data: Entity }>(`${baseUrl.replace(/\/$/, '')}/entities/${publicId.value}`, {
-      credentials: 'include',
-      headers: { Accept: 'application/json' },
-    });
+    const res = await api.entities.get(publicId.value);
     entity.value = res.data;
   } catch (e: unknown) {
     error.value = e instanceof Error ? e.message : t('entity.error');
@@ -138,14 +134,7 @@ async function doRetire() {
   if (!entity.value) return;
   retiring.value = true;
   try {
-    const config = useRuntimeConfig();
-    const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
-    await $fetch(`${baseUrl.replace(/\/$/, '')}/entities/${publicId.value}/retire`, {
-      method: 'POST',
-      credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
-      body: { reason: retireReason.value },
-    });
+    await api.entities.retire(publicId.value, { reason: retireReason.value });
     showRetire.value = false;
     retireReason.value = '';
     toast.add({ title: t('entity.retired_success'), color: 'success' });

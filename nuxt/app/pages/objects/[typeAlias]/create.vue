@@ -1,5 +1,5 @@
 <template>
-  <div class="p-6 space-y-6">
+  <div class="p-4 sm:p-6 space-y-6 max-w-full overflow-x-hidden">
     <!-- Page header -->
     <div class="flex items-center justify-between">
       <div>
@@ -62,6 +62,7 @@ definePageMeta({
 const { t } = useI18n();
 const route = useRoute();
 const toast = useToast();
+const api = useApi();
 
 const typeAlias = computed(() => route.params.typeAlias as string);
 const view = ref<ViewDefinition | null>(null);
@@ -88,17 +89,8 @@ async function fetchView() {
   loadingView.value = true;
   viewError.value = null;
   try {
-    const config = useRuntimeConfig();
-    const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
-    const res = await $fetch<{ data: ViewDefinition }>(
-      `${baseUrl.replace(/\/$/, '')}/schemas/types/${typeAlias.value}/view`,
-      {
-        query: { view_type: 'form' },
-        credentials: 'include',
-        headers: { Accept: 'application/json' },
-      },
-    );
-    view.value = res.data;
+    const res = await api.schemas.getTypeView(typeAlias.value, 'form');
+    view.value = res.data as ViewDefinition;
   } catch (e: unknown) {
     viewError.value = e instanceof Error ? e.message : t('entity.error');
     toast.add({ title: t('common.error'), description: viewError.value!, color: 'error' });
@@ -135,10 +127,58 @@ async function onSubmit(body: FormSubmission) {
   }
 }
 
-async function checkDuplicates(_body: FormSubmission): Promise<DuplicateMatch[]> {
+async function checkDuplicates(body: FormSubmission): Promise<DuplicateMatch[]> {
   // Query for entities with matching identity fields (docs/17 §5)
-  // Placeholder: would call api.entities.query with identity field filters
-  return [];
+  // Use /entities/query with type filter and identity field comparisons
+
+  // Collect identity fields from the view definition
+  const identityFields: Array<{ predicate_id: string; value: unknown }> = [];
+  if (view.value?.sections) {
+    for (const section of view.value.sections) {
+      for (const field of section.fields) {
+        if (field.identity && !field.hidden) {
+          const val = body.fields.find((f) => f.predicate_id === field.alias)?.value;
+          if (val !== undefined && val !== null && String(val).trim() !== '') {
+            identityFields.push({ predicate_id: field.alias, value: val });
+          }
+        }
+      }
+    }
+  }
+
+  if (identityFields.length === 0) return [];
+
+  try {
+    // Query entities of the same type
+    const queryBody = {
+      from: { type_id: typeAlias.value, alias: 'e' },
+      select: [
+        { field: { system: 'public_id' }, alias: 'public_id' },
+        { field: { system: 'display_name' }, alias: 'display_name' },
+      ],
+      where: {
+        or: identityFields.map((f) => ({
+          comparison: {
+            field: { predicate: f.predicate_id },
+            op: 'eq',
+            value: String(f.value),
+          },
+        })),
+      },
+      page: { size: 5 },
+    };
+    const res = await api.entities.query(queryBody);
+    const rows = res.data?.rows ?? [];
+    return rows.map((r) => ({
+      public_id: r.public_id as string,
+      type_id: typeAlias.value,
+      match_type: 'exact' as const,
+      explanation: identityFields.map((f) => f.predicate_id).join(', '),
+    }));
+  } catch {
+    // On error, don't block creation
+    return [];
+  }
 }
 
 async function createEntity(body: FormSubmission) {
@@ -156,25 +196,15 @@ async function createEntity(body: FormSubmission) {
       value: statementValue,
     };
   });
-  const config = useRuntimeConfig();
-  const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
-  const res = await $fetch<{ data: { public_id: string } }>(
-    `${baseUrl.replace(/\/$/, '')}/entities`,
-    {
-      method: 'POST',
-      credentials: 'include',
-      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: {
-        type_id: body.type_id,
-        schema_revision: body.schema_revision,
-        identity_mode: body.identity_mode,
-        statements,
-      },
-    },
-  );
+  const res = await api.entities.create({
+    type_id: body.type_id,
+    schema_revision: body.schema_revision,
+    identity_mode: body.identity_mode,
+    statements,
+  });
   toast.add({ title: t('entity.create_success'), color: 'success' });
   // Navigate to the created entity card
-  navigateTo(`/entities/${res.data.public_id}`);
+  await navigateTo(`/entities/${res.data.public_id}`);
 }
 
 function openExisting(publicId: string) {

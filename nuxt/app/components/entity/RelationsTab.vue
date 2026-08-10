@@ -160,6 +160,7 @@ const props = defineProps<{
 
 const { t } = useI18n();
 const toast = useToast();
+const api = useApi();
 
 interface RelationItem {
   id: string;
@@ -247,16 +248,10 @@ async function searchEntities() {
     return;
   }
   try {
-    const config = useRuntimeConfig();
-    const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
-    const res = await $fetch<{ data: { rows: any[] } }>(`${baseUrl.replace(/\/$/, '')}/entities/query`, {
-      method: 'POST',
-      credentials: 'include',
-      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: {
-        from: { type_id: newRelation.value.targetType },
-        search: entitySearch.value,
-      },
+    const res = await api.entities.query({
+      from: { type_id: newRelation.value.targetType, alias: 'e' },
+      search: entitySearch.value,
+      page: { size: 10 },
     });
     searchResults.value = res.data?.rows ?? [];
   } catch {
@@ -273,20 +268,13 @@ function selectEntity(entity: any) {
 async function submitAddRelation() {
   submitting.value = true;
   try {
-    const config = useRuntimeConfig();
-    const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
-    await $fetch(`${baseUrl.replace(/\/$/, '')}/entities/${props.entityId}/relations`, {
-      method: 'POST',
-      credentials: 'include',
-      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: {
-        predicate: newRelation.value.predicate,
-        direction: 'outgoing',
-        target_display_name: newRelation.value.targetName,
-        target_type: newRelation.value.targetType,
-        valid_from: newRelation.value.validFrom,
-        source: 'manual',
-      },
+    await api.entities.addRelation(props.entityId, {
+      predicate: newRelation.value.predicate,
+      direction: 'outgoing',
+      target_display_name: newRelation.value.targetName,
+      target_type: newRelation.value.targetType,
+      valid_from: newRelation.value.validFrom,
+      source: 'manual',
     });
     showAddDialog.value = false;
     toast.add({ title: t('entity.relations.added'), color: 'success' });
@@ -302,21 +290,14 @@ async function submitLinkRelation() {
   if (!selectedEntity.value) return;
   submitting.value = true;
   try {
-    const config = useRuntimeConfig();
-    const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
-    await $fetch(`${baseUrl.replace(/\/$/, '')}/entities/${props.entityId}/relations`, {
-      method: 'POST',
-      credentials: 'include',
-      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: {
-        predicate: newRelation.value.predicate,
-        direction: 'outgoing',
-        target_entity_id: selectedEntity.value.public_id,
-        target_display_name: selectedEntity.value.display_name,
-        target_type: selectedEntity.value.type_id,
-        valid_from: newRelation.value.validFrom,
-        source: 'manual',
-      },
+    await api.entities.addRelation(props.entityId, {
+      predicate: newRelation.value.predicate,
+      direction: 'outgoing',
+      target_entity_id: selectedEntity.value.public_id,
+      target_display_name: selectedEntity.value.display_name,
+      target_type: selectedEntity.value.type_id,
+      valid_from: newRelation.value.validFrom,
+      source: 'manual',
     });
     showLinkDialog.value = false;
     toast.add({ title: t('entity.relations.linked'), color: 'success' });
@@ -330,13 +311,7 @@ async function submitLinkRelation() {
 
 async function removeRelation(item: RelationItem) {
   try {
-    const config = useRuntimeConfig();
-    const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
-    await $fetch(`${baseUrl.replace(/\/$/, '')}/entities/${props.entityId}/relations/${item.id}`, {
-      method: 'DELETE',
-      credentials: 'include',
-      headers: { Accept: 'application/json' },
-    });
+    await api.entities.deleteRelation(props.entityId, item.id);
     toast.add({ title: t('entity.relations.removed'), color: 'success' });
     await fetchRelations();
   } catch (e: unknown) {
@@ -360,13 +335,8 @@ interface ApiRelation {
 }
 
 async function fetchRelations() {
-  const config = useRuntimeConfig();
-  const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
   try {
-    const res = await $fetch<{ data: ApiRelation[] }>(`${baseUrl.replace(/\/$/, '')}/entities/${props.entityId}/relations`, {
-      credentials: 'include',
-      headers: { Accept: 'application/json' },
-    });
+    const res = await api.entities.getRelations(props.entityId);
     const relations = res.data ?? [];
     const sectionMap = new Map<string, RelationSection>();
     for (const rel of relations) {
@@ -383,8 +353,12 @@ async function fetchRelations() {
         });
       }
       const section = sectionMap.get(key)!;
+      const relId = rel.relation_id ?? '';
+      if (!relId) {
+        console.warn('Relation missing relation_id', rel);
+      }
       section.items.push({
-        id: rel.relation_id ?? `${Date.now()}-${Math.random()}`,
+        id: relId,
         predicateId,
         direction,
         targetPublicId: rel.target_public_id ?? rel.target_entity_id ?? '',

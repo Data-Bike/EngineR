@@ -1,7 +1,6 @@
 //! EngineR API entrypoint.
 
 use enginer_api::{rocket_build, ApiConfig, AppState};
-use rocket::config::{Config, LogLevel};
 use std::sync::Arc;
 
 #[rocket::main]

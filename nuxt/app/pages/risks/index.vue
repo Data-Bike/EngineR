@@ -1,5 +1,5 @@
 <template>
-  <div class="p-6 space-y-6">
+  <div class="p-4 sm:p-6 space-y-6 max-w-full overflow-x-hidden">
     <!-- Page header -->
     <div class="flex items-center justify-between">
       <div>
@@ -20,7 +20,7 @@
     <UCard>
       <div class="flex flex-wrap gap-3 items-end">
         <UFormField :label="t('risks.filter.status')">
-          <USelect v-model="filters.status" :items="statusOptions" value-key="value" option-label="label" class="w-48" />
+          <USelect v-model="filters.status" :items="statusOptions" value-key="value" class="w-full sm:w-48" />
         </UFormField>
         <UButton @click="fetchAssessments" icon="i-lucide-search">{{ t('common.search') }}</UButton>
         <UButton @click="resetFilters" variant="ghost" icon="i-lucide-rotate-ccw">{{ t('common.reset') }}</UButton>
@@ -31,7 +31,7 @@
     <UCard>
       <div v-if="loading" class="py-8 text-center text-[var(--ui-text-muted)]">{{ t('common.loading') }}</div>
       <div v-else-if="assessments.length === 0" class="py-8 text-center text-[var(--ui-text-muted)]">{{ t('entity.empty') }}</div>
-      <table v-else class="w-full text-sm">
+      <div v-else class="overflow-x-auto"><table class="w-full text-sm">
         <thead>
           <tr class="border-b border-[var(--ui-border)] text-left">
             <th class="py-2 px-3 font-medium text-[var(--ui-text-muted)]">ID</th>
@@ -68,7 +68,7 @@
             </td>
           </tr>
         </tbody>
-      </table>
+      </table></div>
     </UCard>
   </div>
 </template>
@@ -83,6 +83,7 @@ definePageMeta({ middleware: 'auth' });
 
 const { t } = useI18n();
 const toast = useToast();
+const api = useApi();
 
 interface FactorRow {
   factor_id: string;
@@ -149,13 +150,8 @@ function resetFilters() {
 async function fetchAssessments() {
   loading.value = true;
   try {
-    const config = useRuntimeConfig();
-    const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
-    const res = await $fetch<{ data: AssessmentRow[] }>(`${baseUrl.replace(/\/$/, '')}/assessments`, {
-      credentials: 'include',
-      headers: { Accept: 'application/json' },
-    });
-    assessments.value = res.data || [];
+    const res = await api.checks.listAssessments();
+    assessments.value = res.data as AssessmentRow[];
   } catch (err) {
     toast.add({ title: t('common.error'), description: err instanceof Error ? err.message : String(err), color: 'error' });
   } finally {

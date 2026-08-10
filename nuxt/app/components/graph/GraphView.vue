@@ -136,7 +136,7 @@
         <h3 class="font-medium">{{ selectedNode.label }}</h3>
         <p class="text-sm text-[var(--ui-text-muted)]">{{ selectedNode.typeLabel }}</p>
       </template>
-      <dl class="grid grid-cols-2 gap-2 text-sm">
+      <dl class="grid grid-cols-1 sm:grid-cols-2 gap-2 text-sm">
         <dt class="text-[var(--ui-text-muted)]">ID</dt>
         <dd>{{ selectedNode.id }}</dd>
         <dt class="text-[var(--ui-text-muted)]">{{ t('entity.graph.edges') }}</dt>
@@ -161,6 +161,7 @@ const props = defineProps<{
 
 const { t } = useI18n();
 const toast = useToast();
+const api = useApi();
 
 // --- State ---
 const asOf = ref<string>('');
@@ -293,14 +294,7 @@ async function expandNode(nodeId: string) {
 
   // Fetch relations for this node (progressive traversal, docs/17 §7)
   try {
-    const config = useRuntimeConfig();
-    const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
-    const res = await $fetch<{ data: { nodes: ApiGraphNode[]; edges: ApiGraphEdge[] } }>(`${baseUrl.replace(/\/$/, '')}/entities/${nodeId}/graph`, {
-      method: 'POST',
-      credentials: 'include',
-      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: { max_depth: 3, direction: direction.value },
-    });
+    const res = await api.entities.getGraph(nodeId, { max_depth: depth.value, direction: direction.value });
     const apiNodes = res.data?.nodes ?? [];
     const apiEdges = res.data?.edges ?? [];
     // Add new nodes (skip duplicates)
@@ -345,14 +339,7 @@ async function reload() {
   visited.value.clear();
   // Initial load: fetch graph data from API
   try {
-    const config = useRuntimeConfig();
-    const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
-    const res = await $fetch<{ data: { nodes: ApiGraphNode[]; edges: ApiGraphEdge[] } }>(`${baseUrl.replace(/\/$/, '')}/entities/${props.rootEntityId}/graph`, {
-      method: 'POST',
-      credentials: 'include',
-      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: { max_depth: 3, direction: 'both' },
-    });
+    const res = await api.entities.getGraph(props.rootEntityId, { max_depth: depth.value, direction: direction.value });
     const apiNodes = res.data?.nodes ?? [];
     const apiEdges = res.data?.edges ?? [];
     nodes.value = apiNodes.map((n) => ({

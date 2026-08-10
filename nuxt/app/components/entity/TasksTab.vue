@@ -41,7 +41,7 @@
                 <span>{{ t('entity.tasks.created') }}: {{ task.created_at }}</span>
               </div>
               <!-- Sub-tasks -->
-              <div v-if="task.sub_tasks.length > 0" class="mt-2 text-xs text-[var(--ui-text-muted)]">
+              <div v-if="task.sub_tasks && task.sub_tasks.length > 0" class="mt-2 text-xs text-[var(--ui-text-muted)]">
                 {{ t('entity.tasks.sub_tasks') }}: {{ task.sub_tasks.length }}
               </div>
             </div>
@@ -117,6 +117,7 @@ const props = defineProps<{
 
 const { t } = useI18n();
 const toast = useToast();
+const api = useApi();
 
 const tasks = ref<WorkflowTask[]>([]);
 const showCreate = ref(false);
@@ -127,7 +128,7 @@ const newDueDate = ref('');
 const newDescription = ref('');
 
 const sortedTasks = computed(() =>
-  [...tasks.value].sort((a, b) => a.priority - b.priority || a.created_at.localeCompare(b.created_at)),
+  [...tasks.value].sort((a, b) => a.priority - b.priority || (a.created_at ?? '').localeCompare(b.created_at ?? '')),
 );
 
 const kindOptions = computed(() => [
@@ -183,7 +184,7 @@ function isOverdue(dueDate: string): boolean {
 }
 
 function canCancel(status: TaskStatus): boolean {
-  return ['not_started', 'in_progress', 'waiting'].includes(status);
+  return ['pending', 'assigned', 'in_progress'].includes(status);
 }
 
 async function fetchTasks() {
@@ -191,13 +192,8 @@ async function fetchTasks() {
     tasks.value = [];
     return;
   }
-  const config = useRuntimeConfig();
-  const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
   try {
-    const res = await $fetch<{ data: WorkflowTask[] }>(`${baseUrl.replace(/\/$/, '')}/entities/${props.entityId}/tasks`, {
-      credentials: 'include',
-      headers: { Accept: 'application/json' },
-    });
+    const res = await api.checks.getEntityTasks(props.entityId);
     tasks.value = res.data ?? [];
   } catch (e: unknown) {
     toast.add({ title: t('common.error'), description: e instanceof Error ? e.message : String(e), color: 'error' });
@@ -206,14 +202,8 @@ async function fetchTasks() {
 }
 
 async function startTask(taskId: string) {
-  const config = useRuntimeConfig();
-  const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
   try {
-    await $fetch(`${baseUrl.replace(/\/$/, '')}/tasks/${taskId}/start`, {
-      method: 'POST',
-      credentials: 'include',
-      headers: { Accept: 'application/json' },
-    });
+    await api.checks.startTask(taskId);
     toast.add({ title: t('entity.tasks.start'), color: 'success' });
     await fetchTasks();
   } catch (e: unknown) {
@@ -222,14 +212,8 @@ async function startTask(taskId: string) {
 }
 
 async function completeTask(taskId: string) {
-  const config = useRuntimeConfig();
-  const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
   try {
-    await $fetch(`${baseUrl.replace(/\/$/, '')}/tasks/${taskId}/complete`, {
-      method: 'POST',
-      credentials: 'include',
-      headers: { Accept: 'application/json' },
-    });
+    await api.checks.completeTask(taskId, { result: {} });
     toast.add({ title: t('entity.tasks.complete'), color: 'success' });
     await fetchTasks();
   } catch (e: unknown) {
@@ -238,14 +222,8 @@ async function completeTask(taskId: string) {
 }
 
 async function cancelTask(taskId: string) {
-  const config = useRuntimeConfig();
-  const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
   try {
-    await $fetch(`${baseUrl.replace(/\/$/, '')}/tasks/${taskId}/cancel`, {
-      method: 'POST',
-      credentials: 'include',
-      headers: { Accept: 'application/json' },
-    });
+    await api.checks.cancelTask(taskId, { reason: 'cancelled' });
     toast.add({ title: t('common.cancel'), color: 'success' });
     await fetchTasks();
   } catch (e: unknown) {
@@ -257,18 +235,11 @@ async function createTask() {
   if (!props.entityId) return;
   creating.value = true;
   try {
-    const config = useRuntimeConfig();
-    const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
-    await $fetch(`${baseUrl.replace(/\/$/, '')}/entities/${props.entityId}/tasks`, {
-      method: 'POST',
-      credentials: 'include',
-      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: {
-        title: newTitle.value,
-        kind: newKind.value,
-        due_date: newDueDate.value || undefined,
-        description: newDescription.value || undefined,
-      },
+    await api.checks.createEntityTask(props.entityId, {
+      title: newTitle.value,
+      kind: newKind.value,
+      due_date: newDueDate.value || undefined,
+      description: newDescription.value || undefined,
     });
     toast.add({ title: t('entity.tasks.create'), color: 'success' });
     showCreate.value = false;

@@ -13,7 +13,6 @@
 //! Security: `connector.manage` capability.
 
 use crate::state::AppState;
-use enginer_security_api::client::SecurityClient;
 use enginer_security_api::contract::{
     ActionDecisionRequest, DecisionEffectDto, SecurityContextDto,
 };

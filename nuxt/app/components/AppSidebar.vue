@@ -1,13 +1,15 @@
 <template>
   <aside
     :class="[
-      'border-r border-[var(--ui-border)] overflow-y-auto transition-all',
+      'border-r border-[var(--ui-border)] overflow-y-auto transition-all shrink-0',
       collapsed ? 'w-16' : 'w-64',
     ]"
-    role="navigation"
-    aria-label="Main navigation"
   >
-    <nav class="p-2">
+    <nav
+      class="p-2"
+      role="navigation"
+      aria-label="Main navigation"
+    >
       <ul class="space-y-1">
         <li v-for="item in menuItems" :key="item.to">
           <NuxtLink

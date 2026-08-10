@@ -7,18 +7,22 @@
  */
 
 import { createEnginerClient, type EnginerClient } from '@enginer/api-client';
+import { useAuthStore } from './useAuth';
 
 export function useApi(): EnginerClient {
   const config = useRuntimeConfig();
   const { locale } = useI18n();
   const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone;
+  const authStore = useAuthStore();
 
   return createEnginerClient({
-    baseUrl: config.public.apiBaseUrl as string,
+    baseUrl: (config.public.apiBaseUrl as string) || '/api/v1',
     locale: locale.value,
     timezone,
+    csrfToken: authStore.user?.csrf_token ?? (config.public.apiCsrfToken as string) ?? '',
     onRefresh: async () => {
-      await navigateTo('/login');
+      const route = useRoute();
+      await navigateTo({ path: '/login', query: { redirect: route.fullPath } });
     },
   });
 }

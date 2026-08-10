@@ -56,7 +56,7 @@ pub fn compile(ast: &QueryAst) -> Result<CompiledQuery, QueryError> {
                 sql.push_str(&format!(", {col} AS {alias}"));
                 output_aliases.push(field.alias.clone());
             }
-            FieldRef::Predicate { predicate_id } => {
+            FieldRef::Predicate { predicate_id: _ } => {
                 // LATERAL join to core.statement for this predicate.
                 let alias = format!("p{}", output_aliases.len());
                 let placeholder = next_placeholder(&mut binds);
@@ -314,6 +314,65 @@ fn compile_predicate_comparison(
     };
     let pred_ph = next_placeholder(binds);
     binds.push(serde_json::json!(predicate_id));
+
+    // IS NULL / IS NOT NULL map to NOT EXISTS / EXISTS on the statement row.
+    match op {
+        Operator::IsNull => {
+            return Ok(format!(
+                "NOT EXISTS (SELECT 1 FROM core.statement ps
+                    WHERE ps.tenant_id = e.tenant_id AND ps.subject = e.entity_id
+                      AND ps.predicate = {pred_ph} AND ps.status = 'active')"
+            ));
+        }
+        Operator::IsNotNull => {
+            return Ok(format!(
+                "EXISTS (SELECT 1 FROM core.statement ps
+                    WHERE ps.tenant_id = e.tenant_id AND ps.subject = e.entity_id
+                      AND ps.predicate = {pred_ph} AND ps.status = 'active')"
+            ));
+        }
+        Operator::In => {
+            let vals = values.clone().unwrap_or_default();
+            if vals.is_empty() {
+                return Err(QueryError::SyntaxInvalid {
+                    message: "IN with empty values".to_string(),
+                });
+            }
+            let mut phs = Vec::new();
+            for v in vals {
+                let ph = next_placeholder(binds);
+                phs.push(ph);
+                binds.push(v);
+            }
+            return Ok(format!(
+                "EXISTS (SELECT 1 FROM core.statement ps
+                    WHERE ps.tenant_id = e.tenant_id AND ps.subject = e.entity_id
+                      AND ps.predicate = {pred_ph} AND ps.status = 'active'
+                      AND ps.object->>'value_nfc' IN ({}))",
+                phs.join(", ")
+            ));
+        }
+        Operator::Between => {
+            let vals = values.clone().unwrap_or_default();
+            if vals.len() != 2 {
+                return Err(QueryError::SyntaxInvalid {
+                    message: "BETWEEN requires exactly 2 values".to_string(),
+                });
+            }
+            let ph1 = next_placeholder(binds);
+            binds.push(vals[0].clone());
+            let ph2 = next_placeholder(binds);
+            binds.push(vals[1].clone());
+            return Ok(format!(
+                "EXISTS (SELECT 1 FROM core.statement ps
+                    WHERE ps.tenant_id = e.tenant_id AND ps.subject = e.entity_id
+                      AND ps.predicate = {pred_ph} AND ps.status = 'active'
+                      AND ps.object->>'value_nfc' BETWEEN {ph1}::text AND {ph2}::text)"
+            ));
+        }
+        _ => {}
+    }
+
     let val_ph = next_placeholder(binds);
     binds.push(value.clone().unwrap_or(serde_json::Value::Null));
     let op_sql = match op {

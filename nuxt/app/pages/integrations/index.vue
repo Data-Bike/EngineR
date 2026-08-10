@@ -1,5 +1,5 @@
 <template>
-  <div class="p-6 space-y-6">
+  <div class="p-4 sm:p-6 space-y-6 max-w-full overflow-x-hidden">
     <!-- Page header -->
     <div class="flex items-center justify-between">
       <div>
@@ -43,7 +43,7 @@
       <div v-else-if="connectors.length === 0" class="py-8 text-center text-[var(--ui-text-muted)]">
         {{ t('entity.empty') }}
       </div>
-      <table v-else class="w-full text-sm">
+      <div v-else class="overflow-x-auto"><table class="w-full text-sm">
         <thead>
           <tr class="border-b border-[var(--ui-border)] text-left">
             <th class="py-2 px-3 font-medium text-[var(--ui-text-muted)]">{{ t('integrations.col.id') }}</th>
@@ -111,7 +111,7 @@
             </td>
           </tr>
         </tbody>
-      </table>
+      </table></div>
     </UCard>
 
     <!-- New connector dialog -->
@@ -140,7 +140,7 @@
                 v-model="newConnector.trust_rank"
                 :items="trustOptions"
                 value-key="value"
-                option-label="label"
+               
                 class="w-full"
               />
             </UFormField>
@@ -195,7 +195,7 @@ const trustOptions = [
 
 const activeCount = computed(() => connectors.value.filter((c) => c.enabled).length);
 const disabledCount = computed(() => connectors.value.filter((c) => !c.enabled).length);
-const healthyCount = computed(() => connectors.value.filter((c) => c.enabled).length);
+const healthyCount = computed(() => connectors.value.filter((c: any) => (c.status === 'healthy')).length);
 
 function trustColor(rank: number): string {
   if (rank >= 75) return 'bg-green-500';
@@ -207,13 +207,7 @@ function trustColor(rank: number): string {
 async function fetchConnectors() {
   loading.value = true;
   try {
-    const config = useRuntimeConfig();
-    const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
-    const res = await $fetch<{ data: ConnectorInstance[] }>(`${baseUrl.replace(/\/$/, '')}/connectors`, {
-      method: 'GET',
-      credentials: 'include',
-      headers: { Accept: 'application/json' },
-    });
+    const res = await api.connectors.list();
     connectors.value = res.data;
   } catch (err) {
     toast.add({
@@ -228,14 +222,11 @@ async function fetchConnectors() {
 
 async function toggleConnector(conn: ConnectorInstance, enable: boolean) {
   try {
-    const config = useRuntimeConfig();
-    const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
-    const endpoint = enable ? 'enable' : 'disable';
-    await $fetch(`${baseUrl.replace(/\/$/, '')}/connectors/${conn.instance_id}/${endpoint}`, {
-      method: 'POST',
-      credentials: 'include',
-      headers: { Accept: 'application/json' },
-    });
+    if (enable) {
+      await api.connectors.enable(conn.instance_id);
+    } else {
+      await api.connectors.disable(conn.instance_id);
+    }
     toast.add({
       title: enable ? t('integrations.enabled_ok') : t('integrations.disabled_ok'),
       color: 'success',
@@ -253,16 +244,7 @@ async function toggleConnector(conn: ConnectorInstance, enable: boolean) {
 async function runHealthCheck(id: string) {
   healthChecking.value = id;
   try {
-    const config = useRuntimeConfig();
-    const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
-    const res = await $fetch<{ data: { healthy: boolean; latency_ms: number; message: string } }>(
-      `${baseUrl.replace(/\/$/, '')}/connectors/${id}/health`,
-      {
-        method: 'POST',
-        credentials: 'include',
-        headers: { Accept: 'application/json' },
-      },
-    );
+    const res = await api.connectors.healthCheck(id);
     toast.add({
       title: res.data.healthy ? t('integrations.healthy_ok') : t('integrations.healthy_fail'),
       description: `${res.data.latency_ms}ms — ${res.data.message}`,
@@ -282,18 +264,11 @@ async function runHealthCheck(id: string) {
 async function submitNew() {
   submitting.value = true;
   try {
-    const config = useRuntimeConfig();
-    const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
-    await $fetch(`${baseUrl.replace(/\/$/, '')}/connectors`, {
-      method: 'POST',
-      body: {
-        connector_type_id: newConnector.connector_type_id,
-        environment: newConnector.environment,
-        rate_limit_rps: newConnector.rate_limit_rps,
-        trust_rank: newConnector.trust_rank,
-      },
-      credentials: 'include',
-      headers: { Accept: 'application/json' },
+    await api.connectors.create({
+      connector_type_id: newConnector.connector_type_id,
+      environment: newConnector.environment,
+      rate_limit_rps: newConnector.rate_limit_rps,
+      trust_rank: newConnector.trust_rank,
     });
     showNewDialog.value = false;
     toast.add({ title: t('integrations.created_ok'), color: 'success' });

@@ -8,23 +8,11 @@
 
 // --- Checks (docs/04 §4) ---
 
-export type CheckStatus =
-  | 'pending'
-  | 'running'
-  | 'completed'
-  | 'failed'
-  | 'skipped'
-  | 'cancelled';
+import type { CheckStatus as ApiCheckStatus, CheckKind as ApiCheckKind, TaskStatus as ApiTaskStatus } from './check.js';
 
-export type CheckKind =
-  | 'sanction'
-  | 'pep'
-  | 'adverse_media'
-  | 'registry'
-  | 'identity'
-  | 'address'
-  | 'tax'
-  | 'custom';
+// Re-export check-related enums from the API client to avoid duplicate/conflicting
+// definitions. The API client is the source of truth for these.
+export type { ApiCheckStatus as CheckStatus, ApiCheckKind as CheckKind, ApiTaskStatus as TaskStatus };
 
 /** A check instance on an entity. */
 export interface CheckInstance {
@@ -108,14 +96,6 @@ export interface RiskAssessment {
 }
 
 // --- Tasks / Workflow (docs/04 §6) ---
-
-export type TaskStatus =
-  | 'not_started'
-  | 'in_progress'
-  | 'waiting'
-  | 'completed'
-  | 'cancelled'
-  | 'error';
 
 export type TaskKind =
   | 'request_processing'

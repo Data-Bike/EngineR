@@ -40,7 +40,7 @@
       />
 
       <!-- Profile dropdown -->
-      <UDropdownMenu :items="profileItems">
+      <UDropdownMenu :options="profileItems">
         <UButton
           color="neutral"
           variant="ghost"
@@ -106,7 +106,7 @@ const profileItems = computed(() => {
 });
 
 async function doLogout() {
-  logout();
+  await logout();
   await navigateTo('/login');
 }
 </script>

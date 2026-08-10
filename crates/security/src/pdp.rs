@@ -13,7 +13,7 @@
 //!
 //! Default deny. Fail closed (docs/08 §4, §15).
 
-use crate::abac::{DataPermission, DataRule, Effect};
+use crate::abac::{DataPermission, DataRule};
 use crate::capability::{Capability, CapabilityGroup};
 use crate::error::{SecurityError, SecurityResult};
 use serde::{Deserialize, Serialize};

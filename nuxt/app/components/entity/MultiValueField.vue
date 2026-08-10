@@ -63,7 +63,10 @@ const canAdd = computed(() => {
   return max === undefined || items.value.length < max;
 });
 
-const canRemove = computed(() => items.value.length > props.field.min_cardinality);
+const canRemove = computed(() => {
+  const min = props.field.min_cardinality ?? 0;
+  return items.value.length > min;
+});
 
 function addItem() {
   const next = [...items.value, ''];

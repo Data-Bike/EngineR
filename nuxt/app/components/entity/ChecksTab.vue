@@ -1,11 +1,19 @@
 <template>
   <div class="space-y-4">
     <!-- Header -->
-    <div class="flex items-center justify-between">
+    <div class="flex items-center justify-between flex-wrap gap-2">
       <h3 class="font-medium">{{ t('entity.tabs.checks') }}</h3>
-      <UButton size="sm" icon="i-lucide-play" @click="runCheck" :loading="running">
-        {{ t('entity.checks.run') }}
-      </UButton>
+      <div class="flex items-center gap-2">
+        <USelectMenu
+          v-model="selectedKind"
+          :items="checkKinds"
+          size="sm"
+          class="w-40"
+        />
+        <UButton size="sm" icon="i-lucide-play" @click="runCheck" :loading="running">
+          {{ t('entity.checks.run') }}
+        </UButton>
+      </div>
     </div>
 
     <!-- Check instances -->
@@ -96,9 +104,18 @@ const props = defineProps<{
 
 const { t } = useI18n();
 const toast = useToast();
+const api = useApi();
 
 const checks = ref<CheckInstance[]>([]);
 const running = ref(false);
+const selectedKind = ref('kyc');
+const checkKinds = [
+  { label: 'KYC', value: 'kyc' },
+  { label: 'Sanctions', value: 'sanctions' },
+  { label: 'Financial Health', value: 'financial_health' },
+  { label: 'Legal Status', value: 'legal_status' },
+  { label: 'Ownership', value: 'ownership' },
+];
 
 function checkStatusIcon(status: CheckStatus): string {
   const icons: Record<CheckStatus, string> = {
@@ -139,13 +156,8 @@ function checkStatusColor(status: CheckStatus): BadgeColor {
 }
 
 async function fetchChecks() {
-  const config = useRuntimeConfig();
-  const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
   try {
-    const res = await $fetch<{ data: CheckInstance[] }>(`${baseUrl.replace(/\/$/, '')}/entities/${props.entityId}/checks`, {
-      credentials: 'include',
-      headers: { Accept: 'application/json' },
-    });
+    const res = await api.checks.getEntityChecks(props.entityId);
     checks.value = res.data ?? [];
   } catch (e: unknown) {
     toast.add({ title: t('common.error'), description: e instanceof Error ? e.message : String(e), color: 'error' });
@@ -156,15 +168,8 @@ async function fetchChecks() {
 async function runCheck() {
   running.value = true;
   try {
-    const config = useRuntimeConfig();
-    const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
-    const kind = 'sanction';
-    await $fetch(`${baseUrl.replace(/\/$/, '')}/checks`, {
-      method: 'POST',
-      credentials: 'include',
-      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: { target_entity_id: props.entityId, check_kind: kind },
-    });
+    const kind = selectedKind.value;
+    await api.checks.requestCheck({ target_entity_id: props.entityId, check_kind: kind, connector_instance_id: undefined, parameters: {} });
     toast.add({ title: t('entity.checks.run'), color: 'success' });
     await fetchChecks();
   } catch (e: unknown) {

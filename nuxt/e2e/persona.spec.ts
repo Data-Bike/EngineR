@@ -62,8 +62,8 @@ test.describe('Persona matrix', () => {
       });
 
       await page.goto('/login');
-      await page.locator('input').first().fill(persona.username);
-      await page.locator('input[type="password"]').fill('password');
+      await page.locator('input[name="username"]').fill(persona.username);
+      await page.locator('input[name="password"]').fill('password');
       await page.locator('button[type="submit"]').click();
 
       // Should be redirected to home

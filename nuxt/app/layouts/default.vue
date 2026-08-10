@@ -12,7 +12,7 @@
       <AppSidebar :collapsed="sidebarCollapsed" />
 
       <!-- Main content area -->
-      <main id="main-content" class="flex-1 overflow-auto focus:outline-none" tabindex="-1">
+      <main id="main-content" class="flex-1 min-w-0 overflow-auto focus:outline-none" tabindex="-1">
         <NuxtPage />
       </main>
     </div>

@@ -7,9 +7,14 @@
  */
 
 export function capability(cap: string) {
-  return defineNuxtRouteMiddleware(() => {
+  return defineNuxtRouteMiddleware((to) => {
     const store = useAuthStore();
-    if (!store.isAuthenticated) return;
+    if (!store.isAuthenticated) {
+      return navigateTo({
+        path: '/login',
+        query: { redirect: to.fullPath },
+      });
+    }
     if (!store.hasCapability(cap)) {
       throw createError({
         statusCode: 403,

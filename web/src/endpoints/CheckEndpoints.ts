@@ -30,6 +30,16 @@ export class CheckEndpoints {
     return this.client.post<CheckResponse>('/checks', body);
   }
 
+  /** GET /checks — list all checks (optional filters). */
+  async listChecks(query?: { target_entity_id?: string; status?: string }): Promise<ParsedResponse<CheckResponse[]>> {
+    return this.client.get<CheckResponse[]>('/checks', query);
+  }
+
+  /** GET /entities/{id}/checks — list checks for an entity. */
+  async getEntityChecks(entityId: string): Promise<ParsedResponse<CheckResponse[]>> {
+    return this.client.get<CheckResponse[]>(`/entities/${entityId}/checks`);
+  }
+
   /** GET /checks/{id} — get check status. */
   async getCheck(id: string): Promise<ParsedResponse<CheckResponse>> {
     return this.client.get<CheckResponse>(`/checks/${id}`);
@@ -38,6 +48,16 @@ export class CheckEndpoints {
   /** GET /checks/{id}/evidence — get check evidence. */
   async getCheckEvidence(id: string): Promise<ParsedResponse<EvidenceResponse>> {
     return this.client.get<EvidenceResponse>(`/checks/${id}/evidence`);
+  }
+
+  /** GET /assessments — list all risk assessments. */
+  async listAssessments(): Promise<ParsedResponse<unknown[]>> {
+    return this.client.get<unknown[]>('/assessments');
+  }
+
+  /** POST /assessments — trigger a risk assessment. */
+  async createAssessment(body: unknown): Promise<ParsedResponse<unknown>> {
+    return this.client.post<unknown>('/assessments', body);
   }
 
   // --- Assessment ---
@@ -58,6 +78,11 @@ export class CheckEndpoints {
   /** GET /entities/{id}/factors — get risk factors. */
   async getFactors(entityId: string): Promise<ParsedResponse<FactorSummary[]>> {
     return this.client.get<FactorSummary[]>(`/entities/${entityId}/factors`);
+  }
+
+  /** POST /entities/{id}/factors/{factorId}/resolve — resolve a risk factor. */
+  async resolveFactor(entityId: string, factorId: string): Promise<ParsedResponse<unknown>> {
+    return this.client.post<unknown>(`/entities/${entityId}/factors/${factorId}/resolve`, {});
   }
 
   // --- Workflow ---
@@ -101,5 +126,20 @@ export class CheckEndpoints {
     body: CancelTaskBody,
   ): Promise<ParsedResponse<TaskResponse>> {
     return this.client.post<TaskResponse>(`/tasks/${id}/cancel`, body);
+  }
+
+  /** POST /tasks/{id}/start — start a task. */
+  async startTask(id: string): Promise<ParsedResponse<TaskResponse>> {
+    return this.client.post<TaskResponse>(`/tasks/${id}/start`, {});
+  }
+
+  /** GET /entities/{id}/tasks — list tasks for an entity. */
+  async getEntityTasks(entityId: string): Promise<ParsedResponse<TaskResponse[]>> {
+    return this.client.get<TaskResponse[]>(`/entities/${entityId}/tasks`);
+  }
+
+  /** POST /entities/{id}/tasks — create a task for an entity. */
+  async createEntityTask(entityId: string, body: unknown): Promise<ParsedResponse<TaskResponse>> {
+    return this.client.post<TaskResponse>(`/entities/${entityId}/tasks`, body);
   }
 }

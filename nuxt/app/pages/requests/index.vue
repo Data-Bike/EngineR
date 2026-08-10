@@ -1,5 +1,5 @@
 <template>
-  <div class="p-6 space-y-6">
+  <div class="p-4 sm:p-6 space-y-6 max-w-full overflow-x-hidden">
     <!-- Page header -->
     <div class="flex items-center justify-between">
       <div>
@@ -23,7 +23,7 @@
     <UCard>
       <div class="flex flex-wrap gap-3 items-end">
         <UFormField :label="t('requests.filter.status')">
-          <USelect v-model="filters.status" :items="statusOptions" value-key="value" option-label="label" class="w-48" />
+          <USelect v-model="filters.status" :items="statusOptions" value-key="value" class="w-full sm:w-48" />
         </UFormField>
         <UButton @click="fetchRequests" icon="i-lucide-search">{{ t('common.search') }}</UButton>
         <UButton @click="resetFilters" variant="ghost" icon="i-lucide-rotate-ccw">{{ t('common.reset') }}</UButton>
@@ -34,7 +34,7 @@
     <UCard>
       <div v-if="loading" class="py-8 text-center text-[var(--ui-text-muted)]">{{ t('common.loading') }}</div>
       <div v-else-if="requests.length === 0" class="py-8 text-center text-[var(--ui-text-muted)]">{{ t('entity.empty') }}</div>
-      <table v-else class="w-full text-sm">
+      <div v-else class="overflow-x-auto"><table class="w-full text-sm">
         <thead>
           <tr class="border-b border-[var(--ui-border)] text-left">
             <th class="py-2 px-3 font-medium text-[var(--ui-text-muted)]">ID</th>
@@ -69,7 +69,7 @@
             </td>
           </tr>
         </tbody>
-      </table>
+      </table></div>
     </UCard>
 
     <!-- New request dialog -->
@@ -87,7 +87,7 @@
               <UInput v-model="newRequest.requested_product" class="w-full" />
             </UFormField>
             <UFormField :label="t('requests.form.urgency')">
-              <USelect v-model="newRequest.urgency" :items="urgencyOptions" value-key="value" option-label="label" class="w-full" />
+              <USelect v-model="newRequest.urgency" :items="urgencyOptions" value-key="value" class="w-full" />
             </UFormField>
             <UFormField :label="t('requests.form.due_date')">
               <UInput v-model="newRequest.due_date" type="datetime-local" class="w-full" />
@@ -114,6 +114,7 @@ definePageMeta({ middleware: 'auth' });
 
 const { t } = useI18n();
 const toast = useToast();
+const api = useApi();
 
 interface RequestRow {
   request_id: string;
@@ -195,13 +196,8 @@ function resetFilters() {
 async function fetchRequests() {
   loading.value = true;
   try {
-    const config = useRuntimeConfig();
-    const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
-    const res = await $fetch<{ data: RequestRow[] }>(`${baseUrl.replace(/\/$/, '')}/requests`, {
-      credentials: 'include',
-      headers: { Accept: 'application/json' },
-    });
-    requests.value = res.data || [];
+    const res = await api.requests.list();
+    requests.value = res.data as RequestRow[];
   } catch (err) {
     toast.add({ title: t('common.error'), description: err instanceof Error ? err.message : String(err), color: 'error' });
   } finally {
@@ -212,14 +208,7 @@ async function fetchRequests() {
 async function submitNewRequest() {
   submitting.value = true;
   try {
-    const config = useRuntimeConfig();
-    const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
-    await $fetch(`${baseUrl.replace(/\/$/, '')}/requests`, {
-      method: 'POST',
-      credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
-      body: newRequest,
-    });
+    await api.requests.create(newRequest);
     showNewDialog.value = false;
     toast.add({ title: t('requests.new_success'), color: 'success' });
     await fetchRequests();

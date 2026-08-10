@@ -7,6 +7,10 @@ export default defineNuxtConfig({
     compatibilityVersion: 4,
   },
 
+  devServer: {
+    port: 3009,
+  },
+
   // SPA mode for authenticated intranet/admin (docs/16 §2).
   // Public help/login pages MAY use SSR with separate cache policy.
   ssr: false,

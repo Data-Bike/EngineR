@@ -56,6 +56,21 @@ export class FileEndpoints {
     return this.client.get<FileMetadataResponse>(`/files/${id}`);
   }
 
+  /** POST /entities/{entityId}/documents — upload a document via simple multipart form. */
+  async uploadEntityDocument<T = unknown>(entityId: string, form: FormData): Promise<ParsedResponse<T>> {
+    return this.client.postMultipart<T>(`/entities/${entityId}/documents`, form);
+  }
+
+  /** GET /entities/{entityId}/documents — list entity documents. */
+  async getEntityDocuments(entityId: string): Promise<ParsedResponse<ApiDocument[]>> {
+    return this.client.get<ApiDocument[]>(`/entities/${entityId}/documents`);
+  }
+
+  /** GET /entities/{entityId}/documents/{docId}/download — download a document as Blob. */
+  async downloadEntityDocument(entityId: string, docId: string): Promise<Blob> {
+    return this.client.downloadBlob(`/entities/${entityId}/documents/${docId}/download`);
+  }
+
   /** DELETE /files/{id} — delete a file. */
   async deleteFile(id: string): Promise<ParsedResponse<void>> {
     return this.client.delete<void>(`/files/${id}`);

@@ -89,6 +89,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue';
 import { useI18n } from 'vue-i18n';
+import type { ApiDocument } from '@enginer/api-client';
 
 const props = defineProps<{
   entityId: string;
@@ -96,6 +97,7 @@ const props = defineProps<{
 
 const { t } = useI18n();
 const toast = useToast();
+const api = useApi();
 
 interface DocQualifier {
   label: string;
@@ -151,26 +153,9 @@ function onFileSelect(event: Event) {
   newFile.value = target.files?.[0] ?? null;
 }
 
-interface ApiDocument {
-  id: string;
-  title: string;
-  kind: string;
-  file_name: string;
-  size_bytes: number;
-  qualifiers?: Array<{ label: string; value: string }>;
-  valid_from?: string;
-  valid_to?: string;
-  source?: string;
-}
-
 async function fetchDocuments() {
-  const config = useRuntimeConfig();
-  const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
   try {
-    const res = await $fetch<{ data: ApiDocument[] }>(`${baseUrl.replace(/\/$/, '')}/entities/${props.entityId}/documents`, {
-      credentials: 'include',
-      headers: { Accept: 'application/json' },
-    });
+    const res = await api.files.getEntityDocuments(props.entityId);
     documents.value = (res.data ?? []).map((doc) => ({
       id: doc.id,
       title: doc.title,
@@ -192,18 +177,11 @@ async function uploadDoc() {
   if (!newFile.value) return;
   uploading.value = true;
   try {
-    const config = useRuntimeConfig();
-    const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
     const formData = new FormData();
     formData.append('file', newFile.value);
     formData.append('title', newDocTitle.value);
     formData.append('kind', newDocKind.value);
-    await $fetch(`${baseUrl.replace(/\/$/, '')}/entities/${props.entityId}/documents`, {
-      method: 'POST',
-      credentials: 'include',
-      headers: { Accept: 'application/json' },
-      body: formData,
-    });
+    await api.files.uploadEntityDocument(props.entityId, formData);
     toast.add({ title: t('entity.documents.upload'), color: 'success' });
     showUpload.value = false;
     newDocTitle.value = '';
@@ -217,14 +195,18 @@ async function uploadDoc() {
 }
 
 async function downloadDoc(doc: DocumentItem) {
-  const config = useRuntimeConfig();
-  const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
   try {
-    await $fetch(`${baseUrl.replace(/\/$/, '')}/entities/${props.entityId}/documents/${doc.id}/download`, {
-      credentials: 'include',
-      headers: { Accept: 'application/json' },
-    });
-    toast.add({ title: t('entity.documents.download', 'Download'), color: 'success' });
+    const blob = await api.files.downloadEntityDocument(props.entityId, doc.id);
+    // Create download link
+    const url = window.URL.createObjectURL(blob);
+    const a = window.document.createElement('a');
+    a.href = url;
+    a.download = doc.fileName || doc.title || 'document';
+    window.document.body.appendChild(a);
+    a.click();
+    window.document.body.removeChild(a);
+    window.URL.revokeObjectURL(url);
+    toast.add({ title: t('entity.documents.download'), color: 'success' });
   } catch (e: unknown) {
     toast.add({ title: t('common.error'), description: e instanceof Error ? e.message : String(e), color: 'error' });
   }
@@ -235,15 +217,10 @@ function previewDoc(_doc: DocumentItem) {
 }
 
 async function removeDoc(doc: DocumentItem) {
-  const config = useRuntimeConfig();
-  const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
   try {
-    await $fetch(`${baseUrl.replace(/\/$/, '')}/entities/${props.entityId}/documents/${doc.id}`, {
-      method: 'DELETE',
-      credentials: 'include',
-      headers: { Accept: 'application/json' },
-    });
-    toast.add({ title: t('entity.documents.removed', 'Removed'), color: 'success' });
+    const api = useApi();
+    await api.http.delete(`/entities/${props.entityId}/documents/${doc.id}`);
+    toast.add({ title: t('entity.documents.removed'), color: 'success' });
     await fetchDocuments();
   } catch (e: unknown) {
     toast.add({ title: t('common.error'), description: e instanceof Error ? e.message : String(e), color: 'error' });
