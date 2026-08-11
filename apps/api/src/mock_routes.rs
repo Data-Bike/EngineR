@@ -8,8 +8,106 @@
 use rocket::serde::json::Json;
 use rocket::State;
 use rocket::{delete, get, post, put, routes};
+use rocket::http::Status;
+use rocket::request::{self, FromRequest, Request};
 use serde::Serialize;
 use std::sync::Mutex;
+
+/// Request guard that enforces coarse mock capability checks.
+#[derive(Debug)]
+pub struct MockCapabilityGuard;
+
+#[rocket::async_trait]
+impl<'r> FromRequest<'r> for MockCapabilityGuard {
+    type Error = &'static str;
+
+    async fn from_request(req: &'r Request<'_>) -> request::Outcome<Self, Self::Error> {
+        if req.cookies().get("session").is_none() {
+            return request::Outcome::Error((Status::Unauthorized, "missing session"));
+        }
+
+        if let Some(cap) = required_capability(req.method().as_str(), req.uri().path().as_str()) {
+            let allowed = [
+                "admin.view",
+                "audit.view",
+                "audit.admin",
+                "entity.read",
+                "entity.create",
+                "entity.edit",
+                "check.run",
+                "connector.admin",
+                "schema.admin",
+                "risk.view",
+                "assessment.view",
+            ];
+            if allowed.contains(&cap) {
+                request::Outcome::Success(MockCapabilityGuard)
+            } else {
+                request::Outcome::Error((Status::Forbidden, "missing capability"))
+            }
+        } else {
+            request::Outcome::Success(MockCapabilityGuard)
+        }
+    }
+}
+
+fn required_capability(method: &str, path: &str) -> Option<&'static str> {
+    let segs: Vec<&str> = path.split('/').collect();
+    match (method, &segs[..]) {
+        // Audit
+        (_, ["", "api", "v1", "audit", "checkpoint"]) => Some("audit.admin"),
+        (_, ["", "api", "v1", "audit", "checkpoints"]) => Some("audit.admin"),
+        (_, ["", "api", "v1", "audit", "verify"]) => Some("audit.admin"),
+        ("PUT", ["", "api", "v1", "audit", "retention"]) => Some("audit.admin"),
+
+        // Checks
+        ("POST", ["", "api", "v1", "checks"]) => Some("check.run"),
+
+        // Connectors
+        (_, ["", "api", "v1", "connectors", ..]) => Some("connector.admin"),
+
+        // Schema / types / predicates / drafts
+        (_, ["", "api", "v1", "schemas", ..]) => Some("schema.admin"),
+
+        // Permission groups
+        (_, ["", "api", "v1", "permissions", ..]) => Some("admin.view"),
+
+        // Requests and reports
+        ("POST", ["", "api", "v1", "requests"]) => Some("entity.create"),
+        ("POST", ["", "api", "v1", "reports"]) => Some("assessment.view"),
+
+        // Entity graph / query reads that happen to use POST
+        ("POST", ["", "api", "v1", "entities", _, "graph"]) => Some("entity.read"),
+        ("POST", ["", "api", "v1", "entities", "query"]) => Some("entity.read"),
+
+        // Entity assessments / risk factors
+        ("POST", ["", "api", "v1", "entities", _, "assessment"]) => Some("assessment.view"),
+        ("POST", ["", "api", "v1", "entities", _, "factors", _, "resolve"]) => Some("risk.view"),
+
+        // Entity tasks and task lifecycle
+        ("POST", ["", "api", "v1", "entities", _, "tasks"]) => Some("entity.edit"),
+        (_, ["", "api", "v1", "tasks", _, ..]) => Some("entity.edit"),
+
+        // Entity documents and staged file uploads
+        (_, ["", "api", "v1", "entities", _, "documents", ..]) => Some("entity.edit"),
+        (_, ["", "api", "v1", "files", ..]) => Some("entity.edit"),
+
+        // Entity relations
+        (_, ["", "api", "v1", "entities", _, "relations", ..]) => Some("entity.edit"),
+
+        // Entity create
+        ("POST", ["", "api", "v1", "entities"]) => Some("entity.create"),
+
+        // Entity update / retire
+        ("PUT", ["", "api", "v1", "entities", _]) => Some("entity.edit"),
+        ("POST", ["", "api", "v1", "entities", _, "retire"]) => Some("entity.edit"),
+
+        // Monitors
+        ("POST", ["", "api", "v1", "monitors", _, "run"]) => Some("entity.read"),
+
+        _ => None,
+    }
+}
 
 /// API envelope wrapper.
 #[derive(Debug, Serialize)]
@@ -643,7 +741,7 @@ pub async fn latest_checkpoint() -> Json<ApiEnvelope<CheckpointMock>> {
 }
 
 #[post("/audit/checkpoint")]
-pub async fn create_checkpoint() -> Json<ApiEnvelope<CheckpointMock>> {
+pub async fn create_checkpoint(_cap: MockCapabilityGuard) -> Json<ApiEnvelope<CheckpointMock>> {
     Json(ApiEnvelope {
         data: CheckpointMock {
             checkpoint_id: 2,
@@ -663,7 +761,7 @@ pub struct ChainVerificationMock {
 }
 
 #[post("/audit/verify")]
-pub async fn verify_chain() -> Json<ApiEnvelope<ChainVerificationMock>> {
+pub async fn verify_chain(_cap: MockCapabilityGuard) -> Json<ApiEnvelope<ChainVerificationMock>> {
     Json(ApiEnvelope {
         data: ChainVerificationMock {
             valid: true,
@@ -696,7 +794,7 @@ pub async fn get_retention() -> Json<ApiEnvelope<RetentionPolicyMock>> {
 }
 
 #[put("/audit/retention", data = "<policy>")]
-pub async fn put_retention(policy: Json<RetentionPolicyMock>) -> Json<ApiEnvelope<RetentionPolicyMock>> {
+pub async fn put_retention(_cap: MockCapabilityGuard, policy: Json<RetentionPolicyMock>) -> Json<ApiEnvelope<RetentionPolicyMock>> {
     Json(ApiEnvelope { data: policy.into_inner(), meta: meta() })
 }
 
@@ -842,7 +940,7 @@ pub struct QueryResponseMock {
 }
 
 #[post("/entities/query", data = "<body>")]
-pub async fn query_entities_post(
+pub async fn query_entities_post(_cap: MockCapabilityGuard, 
     db: &State<MockDb>,
     body: String,
 ) -> Json<ApiEnvelope<QueryResponseMock>> {
@@ -1077,7 +1175,7 @@ pub async fn query_requests(
 }
 
 #[post("/requests", data = "<body>")]
-pub async fn create_request(body: String) -> Json<ApiEnvelope<RequestMock>> {
+pub async fn create_request(_cap: MockCapabilityGuard, body: String) -> Json<ApiEnvelope<RequestMock>> {
     let _ = body;
     Json(ApiEnvelope {
         data: RequestMock {
@@ -1319,7 +1417,7 @@ pub async fn list_reports() -> Json<ApiEnvelope<Vec<ReportMock>>> {
 }
 
 #[post("/reports", data = "<body>")]
-pub async fn create_report(body: String) -> Json<ApiEnvelope<ReportMock>> {
+pub async fn create_report(_cap: MockCapabilityGuard, body: String) -> Json<ApiEnvelope<ReportMock>> {
     let _ = body;
     Json(ApiEnvelope {
         data: ReportMock {
@@ -1398,7 +1496,7 @@ pub async fn get_relations(
 }
 
 #[post("/entities/<public_id>/relations", data = "<body>")]
-pub async fn create_relation(
+pub async fn create_relation(_cap: MockCapabilityGuard, 
     db: &State<MockDb>,
     public_id: String,
     body: String,
@@ -1421,7 +1519,7 @@ pub async fn create_relation(
 }
 
 #[delete("/entities/<public_id>/relations/<relation_id>")]
-pub async fn delete_relation(
+pub async fn delete_relation(_cap: MockCapabilityGuard, 
     db: &State<MockDb>,
     public_id: String,
     relation_id: String,
@@ -1721,7 +1819,7 @@ pub struct GraphDataMock {
 }
 
 #[post("/entities/<public_id>/graph", data = "<body>")]
-pub async fn get_entity_graph(public_id: String, body: String) -> Json<ApiEnvelope<GraphDataMock>> {
+pub async fn get_entity_graph(_cap: MockCapabilityGuard, public_id: String, body: String) -> Json<ApiEnvelope<GraphDataMock>> {
     let _ = body;
     let (nodes, edges) = match public_id.as_str() {
         "ent-001" => (
@@ -1772,7 +1870,7 @@ pub async fn list_predicates() -> Json<ApiEnvelope<Vec<PredicateMock>>> {
 // --- Entity create ---
 
 #[post("/entities", data = "<body>")]
-pub async fn create_entity(body: String) -> Json<ApiEnvelope<EntityMock>> {
+pub async fn create_entity(_cap: MockCapabilityGuard, body: String) -> Json<ApiEnvelope<EntityMock>> {
     let _ = body;
     Json(ApiEnvelope {
         data: EntityMock {
@@ -1793,7 +1891,7 @@ pub async fn create_entity(body: String) -> Json<ApiEnvelope<EntityMock>> {
 // --- Connector actions ---
 
 #[post("/connectors/<id>/health")]
-pub async fn connector_health(id: String) -> Json<ApiEnvelope<serde_json::Value>> {
+pub async fn connector_health(_cap: MockCapabilityGuard, id: String) -> Json<ApiEnvelope<serde_json::Value>> {
     Json(ApiEnvelope {
         data: serde_json::json!({ "instance_id": id, "status": "healthy", "latency_ms": 42 }),
         meta: meta(),
@@ -1801,7 +1899,7 @@ pub async fn connector_health(id: String) -> Json<ApiEnvelope<serde_json::Value>
 }
 
 #[post("/connectors/<id>/enable")]
-pub async fn connector_enable(id: String) -> Json<ApiEnvelope<serde_json::Value>> {
+pub async fn connector_enable(_cap: MockCapabilityGuard, id: String) -> Json<ApiEnvelope<serde_json::Value>> {
     Json(ApiEnvelope {
         data: serde_json::json!({ "instance_id": id, "enabled": true }),
         meta: meta(),
@@ -1809,7 +1907,7 @@ pub async fn connector_enable(id: String) -> Json<ApiEnvelope<serde_json::Value>
 }
 
 #[post("/connectors/<id>/disable")]
-pub async fn connector_disable(id: String) -> Json<ApiEnvelope<serde_json::Value>> {
+pub async fn connector_disable(_cap: MockCapabilityGuard, id: String) -> Json<ApiEnvelope<serde_json::Value>> {
     Json(ApiEnvelope {
         data: serde_json::json!({ "instance_id": id, "enabled": false }),
         meta: meta(),
@@ -1817,7 +1915,7 @@ pub async fn connector_disable(id: String) -> Json<ApiEnvelope<serde_json::Value
 }
 
 #[post("/connectors", data = "<body>")]
-pub async fn create_connector(body: String) -> Json<ApiEnvelope<ConnectorInstanceMock>> {
+pub async fn create_connector(_cap: MockCapabilityGuard, body: String) -> Json<ApiEnvelope<ConnectorInstanceMock>> {
     let _ = body;
     Json(ApiEnvelope {
         data: ConnectorInstanceMock {
@@ -1836,7 +1934,7 @@ pub async fn create_connector(body: String) -> Json<ApiEnvelope<ConnectorInstanc
 // --- Check actions ---
 
 #[post("/checks", data = "<body>")]
-pub async fn create_check(body: String) -> Json<ApiEnvelope<CheckInstanceMock>> {
+pub async fn create_check(_cap: MockCapabilityGuard, body: String) -> Json<ApiEnvelope<CheckInstanceMock>> {
     let _ = body;
     Json(ApiEnvelope {
         data: CheckInstanceMock {
@@ -1860,7 +1958,7 @@ pub async fn create_check(body: String) -> Json<ApiEnvelope<CheckInstanceMock>> 
 // --- Monitor run ---
 
 #[post("/monitors/<id>/run")]
-pub async fn run_monitor(id: String) -> Json<ApiEnvelope<serde_json::Value>> {
+pub async fn run_monitor(_cap: MockCapabilityGuard, id: String) -> Json<ApiEnvelope<serde_json::Value>> {
     Json(ApiEnvelope {
         data: serde_json::json!({ "monitor_id": id, "status": "started", "job_id": "job-001" }),
         meta: meta(),
@@ -1875,7 +1973,7 @@ pub struct RetireBody {
 }
 
 #[post("/entities/<public_id>/retire", data = "<body>")]
-pub async fn retire_entity(public_id: String, body: String) -> Json<ApiEnvelope<serde_json::Value>> {
+pub async fn retire_entity(_cap: MockCapabilityGuard, public_id: String, body: String) -> Json<ApiEnvelope<serde_json::Value>> {
     let pid = public_id.clone();
     let _ = body;
     Json(ApiEnvelope {
@@ -1887,7 +1985,7 @@ pub async fn retire_entity(public_id: String, body: String) -> Json<ApiEnvelope<
 // --- Schema actions ---
 
 #[post("/schemas/drafts", data = "<body>")]
-pub async fn create_schema_draft(db: &State<MockDb>, body: String) -> Json<ApiEnvelope<SchemaDraftMock>> {
+pub async fn create_schema_draft(_cap: MockCapabilityGuard, db: &State<MockDb>, body: String) -> Json<ApiEnvelope<SchemaDraftMock>> {
     let parsed: serde_json::Value = serde_json::from_str(&body).unwrap_or_default();
     let name = parsed.get("name")
         .and_then(|v| v.as_str())
@@ -1910,7 +2008,7 @@ pub async fn create_schema_draft(db: &State<MockDb>, body: String) -> Json<ApiEn
 }
 
 #[post("/schemas/drafts/<id>/validate")]
-pub async fn validate_schema_draft(id: String) -> Json<ApiEnvelope<serde_json::Value>> {
+pub async fn validate_schema_draft(_cap: MockCapabilityGuard, id: String) -> Json<ApiEnvelope<serde_json::Value>> {
     Json(ApiEnvelope {
         data: serde_json::json!({ "revision_id": id, "valid": true, "warnings": [] }),
         meta: meta(),
@@ -1918,7 +2016,7 @@ pub async fn validate_schema_draft(id: String) -> Json<ApiEnvelope<serde_json::V
 }
 
 #[post("/schemas/drafts/<id>/publish")]
-pub async fn publish_schema_draft(id: String) -> Json<ApiEnvelope<serde_json::Value>> {
+pub async fn publish_schema_draft(_cap: MockCapabilityGuard, id: String) -> Json<ApiEnvelope<serde_json::Value>> {
     Json(ApiEnvelope {
         data: serde_json::json!({ "revision_id": id, "status": "published" }),
         meta: meta(),
@@ -1926,7 +2024,7 @@ pub async fn publish_schema_draft(id: String) -> Json<ApiEnvelope<serde_json::Va
 }
 
 #[post("/schemas/drafts/<id>/impact")]
-pub async fn impact_schema_draft(id: String) -> Json<ApiEnvelope<serde_json::Value>> {
+pub async fn impact_schema_draft(_cap: MockCapabilityGuard, id: String) -> Json<ApiEnvelope<serde_json::Value>> {
     Json(ApiEnvelope {
         data: serde_json::json!({ "revision_id": id, "affected_entities": 0, "affected_statements": 0, "breaking": false }),
         meta: meta(),
@@ -1934,7 +2032,7 @@ pub async fn impact_schema_draft(id: String) -> Json<ApiEnvelope<serde_json::Val
 }
 
 #[post("/schemas/drafts/<id>/retire")]
-pub async fn retire_schema_draft(id: String) -> Json<ApiEnvelope<serde_json::Value>> {
+pub async fn retire_schema_draft(_cap: MockCapabilityGuard, id: String) -> Json<ApiEnvelope<serde_json::Value>> {
     Json(ApiEnvelope {
         data: serde_json::json!({ "revision_id": id, "status": "retired" }),
         meta: meta(),
