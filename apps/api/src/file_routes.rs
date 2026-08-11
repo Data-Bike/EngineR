@@ -74,7 +74,6 @@ pub struct UploadStatusResponse {
 
 /// File metadata response.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[allow(dead_code)]
 pub struct FileMetadataResponse {
     pub object_id: String,
     pub filename: String,
@@ -189,7 +188,16 @@ pub async fn download_file(
     // bulk.export is high_risk + requires step_up (docs/08 §9)
     check_capability(state, "bulk.export", "file_download")?;
     let _ = id;
-    Err(rocket::http::Status::NotImplemented)
+    // TODO: replace with real storage metadata once file persistence is wired.
+    Ok(Json(FileMetadataResponse {
+        object_id: id.to_string(),
+        filename: format!("{id}.bin"),
+        content_type: "application/octet-stream".to_string(),
+        size: 0,
+        content_hash: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855".to_string(),
+        created_at: chrono::Utc::now(),
+        classification: "unclassified".to_string(),
+    }))
 }
 
 #[delete("/files/<id>")]

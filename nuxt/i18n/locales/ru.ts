@@ -79,7 +79,6 @@ export default {
     confirm: 'Подтвердить',
     edit: 'Редактировать',
     delete: 'Удалить',
-    edit: 'Редактировать',
     create: 'Создать',
     refresh: 'Обновить',
     download: 'Скачать',
