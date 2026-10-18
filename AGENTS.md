@@ -750,3 +750,13 @@ publish); empty/blank identity components never produce identity keys;
   `public_id`; idempotent runners must use run-unique identity values.
 - Pre-existing `cargo clippy` failures: `cast_precision_loss` lints in
   `crates/risk-engine` under Rust 1.95 — unrelated to feature work.
+- `core.statement.object` values >~2.7KB used to fail inserts (raw JSONB in
+  the `statement_active_fact_unique` B-tree). Fixed by
+  `migrations/20261018000024_statement_fact_hash_index.sql` — the index now
+  hashes `object` via md5.
+- In-DB knowledge base: `kb_article` type (published rev 1) holds ~47
+  project-knowledge entities (`kb.*` ids: onboarding, layout, stack, creds,
+  MCP contract/gotchas, schema lifecycle, tests, graph, pitfalls, plus
+  `kb.docs.<NN>` per `docs/` spec). Query: `entities.list {type:"kb_article"}`
+  — reprovision via `docs/testing/warehouse/kb_provision.py` +
+  `kb_docs_provision.py` (idempotent by `kb_id` identity).
