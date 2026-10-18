@@ -68,7 +68,6 @@ import StatCard from '~/components/common/StatCard.vue';
 definePageMeta({ middleware: 'auth' });
 
 const { t } = useI18n();
-const toast = useToast();
 const api = useApi();
 
 const stats = reactive({

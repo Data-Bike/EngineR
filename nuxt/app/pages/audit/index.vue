@@ -318,13 +318,14 @@
 </template>
 
 <script setup lang="ts">
+import { capability } from '~/middleware/capability';
 import { ref, reactive, onMounted } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useApi } from '~/composables/useApi';
-import type { AuditRecord, ChainCheckpoint, ChainVerificationResult, RetentionPolicy } from '@enginer/api-client';
+import type { AuditKind, AuditRecord, ChainCheckpoint, ChainVerificationResult, RetentionPolicy } from '@enginer/api-client';
 
 definePageMeta({
-  middleware: 'auth',
+  middleware: ['auth', capability('audit.read')],
 });
 
 const { t } = useI18n();
@@ -371,7 +372,9 @@ const kindOptions = [
   { label: t('audit.kind.impersonation'), value: 'impersonation' },
 ];
 
-function kindColor(kind: string): string {
+type BadgeColor = 'info' | 'neutral' | 'warning' | 'error' | 'success';
+
+function kindColor(kind: string): BadgeColor {
   switch (kind) {
     case 'authentication': return 'info';
     case 'decision': return 'neutral';
@@ -386,7 +389,7 @@ function kindColor(kind: string): string {
   }
 }
 
-function effectColor(effect: string): string {
+function effectColor(effect: string): BadgeColor {
   switch (effect) {
     case 'allow': return 'success';
     case 'deny': return 'error';
@@ -425,7 +428,7 @@ async function fetchAudit() {
   try {
     const res = await api.audit.query({
       limit: 100,
-      kind: filters.kind && filters.kind !== 'all' ? filters.kind : undefined,
+      kind: filters.kind && filters.kind !== 'all' ? filters.kind as AuditKind : undefined,
       actor: filters.actor || undefined,
       action: filters.action || undefined,
       from: filters.from ? new Date(filters.from).toISOString() : undefined,
@@ -450,8 +453,8 @@ async function loadMore() {
   try {
     const res = await api.audit.query({
       limit: 100,
-      cursor: String(lastSeq),
-      kind: filters.kind && filters.kind !== 'all' ? filters.kind : undefined,
+      cursor: lastSeq,
+      kind: filters.kind && filters.kind !== 'all' ? filters.kind as AuditKind : undefined,
       actor: filters.actor || undefined,
       action: filters.action || undefined,
       from: filters.from ? new Date(filters.from).toISOString() : undefined,

@@ -1,4 +1,4 @@
-//! Pure domain types, newtypes and invariants for EngineR.
+//! Pure domain types, newtypes and invariants for `EngineR`.
 //!
 //! Normative sources:
 //! - `docs/03-universal-domain-model.md`
@@ -36,9 +36,7 @@ pub use schema::{
     EntityClass, PredicateDefinition, PredicateDirection, SchemaRevision, SchemaRevisionState,
     TypeDefinition,
 };
-pub use statement::{
-    Confidence, Revision, Statement, StatementObject, StatementStatus, ValidTime,
-};
+pub use statement::{Confidence, Revision, Statement, StatementObject, StatementStatus, ValidTime};
 pub use time::{RecordedTime, ValidPeriod};
 
 /// Re-export of common chrono types used across the domain.

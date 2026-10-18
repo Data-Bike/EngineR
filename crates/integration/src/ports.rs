@@ -13,11 +13,7 @@ use std::collections::HashMap;
 /// Port for loading criteria (docs/14 §8).
 pub trait CriterionPort: Send + Sync {
     /// Load active criteria for a tenant and target type.
-    fn load_criteria(
-        &self,
-        tenant_id: &str,
-        target_type: &str,
-    ) -> Result<Vec<Criterion>, String>;
+    fn load_criteria(&self, tenant_id: &str, target_type: &str) -> Result<Vec<Criterion>, String>;
 }
 
 /// Port for calling connectors (docs/14 §5-6).
@@ -30,10 +26,8 @@ pub trait ConnectorPort: Send + Sync {
     ) -> Result<Vec<SourceObservation>, String>;
 
     /// Map observations to provenance statements.
-    fn map_observations(
-        &self,
-        observations: &[SourceObservation],
-    ) -> Result<MappingResult, String>;
+    fn map_observations(&self, observations: &[SourceObservation])
+        -> Result<MappingResult, String>;
 }
 
 /// Port for storing and retrieving factors (docs/14 §9).
@@ -54,10 +48,7 @@ pub trait AssessmentPort: Send + Sync {
     fn store_assessment(&self, assessment: &Assessment) -> Result<(), String>;
 
     /// Load the latest assessment for a target entity.
-    fn load_latest_assessment(
-        &self,
-        target_entity_id: &str,
-    ) -> Result<Option<Assessment>, String>;
+    fn load_latest_assessment(&self, target_entity_id: &str) -> Result<Option<Assessment>, String>;
 }
 
 /// Port for storing decisions (docs/14 §10).
@@ -66,10 +57,7 @@ pub trait DecisionPort: Send + Sync {
     fn store_decision(&self, decision: &Decision) -> Result<(), String>;
 
     /// Load the latest decision for a target entity.
-    fn load_latest_decision(
-        &self,
-        target_entity_id: &str,
-    ) -> Result<Option<Decision>, String>;
+    fn load_latest_decision(&self, target_entity_id: &str) -> Result<Option<Decision>, String>;
 }
 
 /// Port for workflow operations (docs/13 §7).

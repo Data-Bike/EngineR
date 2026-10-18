@@ -6,12 +6,12 @@
 #![cfg(test)]
 
 use crate::ports::{
-    Clock, EntityRepository, IdGenerator, IdentityKeyRepository, IdentityPolicyRepository,
-    Outbox, SchemaRepository, StatementRepository,
+    Clock, EntityRepository, IdGenerator, IdentityKeyRepository, IdentityPolicyRepository, Outbox,
+    SchemaRepository, StatementRepository,
 };
 use enginer_domain::{
-    DomainError, Entity, EntityId, IdentityKey, IdentityKeyStatus, IdentityPolicy,
-    PublicEntityId, SchemaRevision, SchemaRevisionId, Statement, StatementId, TenantId, TypeId,
+    DomainError, Entity, EntityId, IdentityKey, IdentityKeyStatus, IdentityPolicy, PublicEntityId,
+    SchemaRevision, SchemaRevisionId, Statement, StatementId, TenantId, TypeId,
 };
 use futures::future::BoxFuture;
 use std::collections::HashMap;

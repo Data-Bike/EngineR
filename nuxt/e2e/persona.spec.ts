@@ -14,15 +14,15 @@ import { test, expect } from '@playwright/test';
 const personas = {
   admin: {
     username: 'admin@test',
-    capabilities: ['admin.view', 'audit.view', 'entity.create', 'entity.read'],
+    capabilities: ['admin.pages.access', 'audit.read', 'entity.create', 'entity.read'],
   },
   security_officer: {
     username: 'security@test',
-    capabilities: ['check.run', 'entity.read', 'factor.view'],
+    capabilities: ['check.view', 'check.run', 'entity.read', 'security.manage'],
   },
   manager: {
     username: 'manager@test',
-    capabilities: ['request.create', 'entity.read'],
+    capabilities: ['entity.create', 'entity.read'],
   },
   risk_analyst: {
     username: 'risk@test',

@@ -158,6 +158,9 @@ impl Assessment {
 
     /// Check if the assessment is current (not superseded).
     pub fn is_current(&self) -> bool {
-        matches!(self.status, AssessmentStatus::Draft | AssessmentStatus::Approved)
+        matches!(
+            self.status,
+            AssessmentStatus::Draft | AssessmentStatus::Approved
+        )
     }
 }

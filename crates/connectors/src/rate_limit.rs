@@ -62,8 +62,7 @@ impl RateLimiter {
         let mut last = self.last_refill.lock().unwrap();
         let now = Instant::now();
         let elapsed = now.duration_since(*last);
-        let tokens_to_add =
-            (elapsed.as_millis() as u64 * self.config.max_rps as u64) / 1000;
+        let tokens_to_add = (elapsed.as_millis() as u64 * self.config.max_rps as u64) / 1000;
         if tokens_to_add > 0 {
             let current = self.tokens.load(Ordering::Relaxed);
             let new_tokens = (current + tokens_to_add).min(self.config.burst as u64);

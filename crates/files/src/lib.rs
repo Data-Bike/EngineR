@@ -17,10 +17,7 @@ pub use scan::{
     FileScanResult, FileScanStatus, FileScanner, FileSignature, ScanConfig as FileScanConfig,
     ScanFinding, ScanSeverity,
 };
-pub use storage::{
-    ObjectMetadata, ObjectStorage, StorageClass, StorageConfig, StorageUrl,
-};
+pub use storage::{ObjectMetadata, ObjectStorage, StorageClass, StorageConfig, StorageUrl};
 pub use upload::{
-    StagedUpload, UploadAbort, UploadChunk, UploadComplete, UploadInit,
-    UploadStatus,
+    StagedUpload, UploadAbort, UploadChunk, UploadComplete, UploadInit, UploadStatus,
 };

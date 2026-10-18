@@ -88,7 +88,10 @@
         <div class="p-6 space-y-4">
           <h2 class="text-lg font-bold">{{ t('entity.reports.generate') }}</h2>
           <UFormField :label="t('entity.reports.entity')">
-            <UInput v-model="newEntityId" :placeholder="t('entity.search')" class="w-full" />
+            <EntityAutocomplete
+              v-model="newEntityId"
+              :placeholder="t('entity.search_placeholder')"
+            />
           </UFormField>
           <UFormField :label="t('entity.reports.template')">
             <USelect v-model="newTemplate" :items="templateOptions" class="w-full" />
@@ -98,7 +101,11 @@
           </UFormField>
           <div class="flex justify-end gap-2">
             <UButton variant="outline" @click="showGenerate = false">{{ t('common.cancel') }}</UButton>
-            <UButton @click="generateReport" :loading="generating">{{ t('entity.reports.generate') }}</UButton>
+            <UButton
+              @click="generateReport"
+              :loading="generating"
+              :disabled="!newEntityId"
+            >{{ t('entity.reports.generate') }}</UButton>
           </div>
         </div>
       </template>
@@ -107,12 +114,13 @@
 </template>
 
 <script setup lang="ts">
+import { capability } from '~/middleware/capability';
 import { ref, computed, onMounted } from 'vue';
 import { useI18n } from 'vue-i18n';
-import type { ReportInstance, ReportFormat, ReportStatus } from '@enginer/api-client';
+import type { ReportInstance, ReportFormat } from '@enginer/api-client';
 
 definePageMeta({
-  middleware: 'auth',
+  middleware: ['auth', capability('report.view')],
 });
 
 const { t } = useI18n();
@@ -145,22 +153,6 @@ const formatOptions = computed(() => [
   { label: 'CSV', value: 'csv' },
 ]);
 
-type BadgeColor = 'primary' | 'secondary' | 'success' | 'info' | 'warning' | 'error' | 'neutral';
-
-function reportStatusColor(status: ReportStatus): BadgeColor {
-  const colors: Partial<Record<string, BadgeColor>> = {
-    draft: 'neutral',
-    generating: 'primary',
-    ready: 'success',
-    failed: 'error',
-    expired: 'neutral',
-    completed: 'success',
-    pending: 'primary',
-    rendering: 'primary',
-  };
-  return colors[status] ?? 'neutral';
-}
-
 function isExpired(report: ReportInstance): boolean {
   if (!report.expires_at) return false;
   return new Date(report.expires_at) < new Date();
@@ -170,12 +162,6 @@ function formatFileSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
-function formatSize(report: any): string {
-  const bytes = report?.size_bytes;
-  if (!bytes) return '—';
-  return formatFileSize(Number(bytes));
 }
 
 function downloadReport(report: ReportInstance) {

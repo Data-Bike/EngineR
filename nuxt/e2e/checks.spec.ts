@@ -56,7 +56,7 @@ async function setupChecksMocks(page: import('@playwright/test').Page) {
           timezone: 'Europe/Moscow',
           auth_strength: 'normal',
           groups_revision: 1,
-          capabilities: ['check.run', 'entity.read'],
+          capabilities: ['check.view', 'check.run', 'entity.read'],
           workspaces: ['default'],
           policy_revision: 1,
         },
@@ -85,6 +85,17 @@ async function setupChecksMocks(page: import('@playwright/test').Page) {
       status: 200,
       contentType: 'application/json',
       body: JSON.stringify({ data: mockChecks }),
+    });
+  });
+
+  // EntityAutocomplete inside the new-check dialog queries /entities — without
+  // this mock the real API returns 401 and ApiClient redirects to /login,
+  // unmounting the dialog mid-test.
+  await page.route('**/api/v1/entities**', (route) => {
+    route.fulfill({
+      status: 200,
+      contentType: 'application/json',
+      body: JSON.stringify({ data: [] }),
     });
   });
 }
@@ -148,8 +159,9 @@ test.describe('Checks page', () => {
     await page.goto('/checks');
     await page.getByRole('button', { name: /Новая проверка|New check/i }).click();
     await expect(page.locator('[role="dialog"]')).toBeVisible();
-    // Open kind select inside the dialog
-    const kindSelect = page.locator('[role="dialog"] [role="combobox"]').first();
+    // Open kind select inside the dialog — nth(1): first combobox is the
+    // live entity autocomplete which rerenders while fetching suggestions
+    const kindSelect = page.locator('[role="dialog"] [role="combobox"]').nth(1);
     await kindSelect.click();
     await expect(page.locator('[role="option"]').first()).toBeVisible();
     const optionTexts = await page.locator('[role="option"]').allTextContents();

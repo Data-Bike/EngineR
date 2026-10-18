@@ -251,7 +251,7 @@ const docSections: { title: string; icon: string; items: DocItem[] }[] = [
           <h3>Настройка политик безопасности</h3>
           <p>EngineR поддерживает два класса прав:</p>
           <ul>
-            <li><strong>Системные capabilities</strong> — глобальные права (admin.view, entity.create, check.run и т.д.)</li>
+            <li><strong>Системные capabilities</strong> — глобальные права (admin.pages.access, entity.create, check.run и т.д.)</li>
             <li><strong>Data permissions</strong> — права на данные (тип, объект, поле, связь, классификация)</li>
           </ul>
           <h4>Права на связи</h4>

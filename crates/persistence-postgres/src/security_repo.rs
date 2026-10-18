@@ -3,11 +3,12 @@
 //! Loads the policy + membership snapshot for a tenant + principal at a given
 //! revision. Implements `enginer_security_api::SnapshotProvider`.
 
+use crate::rls::RlsContext;
 use enginer_domain::{PrincipalId, TenantId};
 use enginer_security_api::client::{SecurityClientError, SnapshotProvider};
-use enginer_security_pdp::PdpSnapshot;
 use enginer_security_domain::policy::{PolicyRule, PolicyRuleEffect, ResourceSelector};
 use enginer_security_domain::principal::{GroupClass, PrincipalGroupMembership};
+use enginer_security_pdp::PdpSnapshot;
 use sqlx::postgres::PgPool;
 use std::sync::Arc;
 
@@ -39,6 +40,27 @@ impl SnapshotProvider for PgSecuritySnapshotProvider {
         let tenant_u = tenant.raw();
         let principal_u = principal.raw();
         let result = async_std::task::block_on(async move {
+            // sec.* tables are under FORCE RLS: every query must run inside a
+            // transaction with the tenant context installed, otherwise the
+            // snapshot silently comes back empty (fail closed — but useless).
+            let mut tx = pool
+                .begin()
+                .await
+                .map_err(|e| SecurityClientError::Unavailable {
+                    message: e.to_string(),
+                })?;
+            RlsContext {
+                tenant_id: tenant,
+                principal_id: principal,
+                purpose: "pdp.snapshot".to_string(),
+                policy_revision,
+            }
+            .install_tx(&mut tx)
+            .await
+            .map_err(|e| SecurityClientError::Unavailable {
+                message: e.to_string(),
+            })?;
+
             // Resolve current policy revision if not pinned.
             let rev = match policy_revision {
                 Some(r) => r,
@@ -49,7 +71,7 @@ impl SnapshotProvider for PgSecuritySnapshotProvider {
                          ORDER BY published_at DESC NULLS LAST LIMIT 1",
                     )
                     .bind(tenant_u)
-                    .fetch_optional(&*pool)
+                    .fetch_optional(&mut *tx)
                     .await
                     .map_err(|e| SecurityClientError::Unavailable {
                         message: e.to_string(),
@@ -59,22 +81,45 @@ impl SnapshotProvider for PgSecuritySnapshotProvider {
             };
 
             // Memberships.
-            let mrows: Vec<(uuid::Uuid, String, chrono::DateTime<chrono::Utc>, Option<chrono::DateTime<chrono::Utc>>, i64)> =
-                sqlx::query_as(
-                    "SELECT g.group_id, g.class, m.valid_from, m.valid_to, m.groups_revision
+            let mrows: Vec<(
+                uuid::Uuid,
+                String,
+                chrono::DateTime<chrono::Utc>,
+                Option<chrono::DateTime<chrono::Utc>>,
+                i64,
+            )> = sqlx::query_as(
+                // Ancestor groups are effective memberships too: a role
+                // inheriting from another role carries all of the parent's
+                // rules (docs — роль-наследник копирует права родителя).
+                // Ancestor rows inherit the direct membership's validity
+                // window. UNION (set semantics) terminates parent_id cycles.
+                // valid_from tolerance: writers stamp app-clock time, this
+                // query uses the DB clock — allow for ±120s of clock skew.
+                "WITH RECURSIVE eff AS (
+                     SELECT g.group_id, g.class, g.parent_id,
+                            m.valid_from, m.valid_to, m.groups_revision
                      FROM sec.principal_group_membership m
-                     JOIN sec.group g ON g.group_id = m.group_id AND g.tenant_id = m.tenant_id
+                     JOIN sec.\"group\" g ON g.group_id = m.group_id AND g.tenant_id = m.tenant_id
                      WHERE m.tenant_id = $1 AND m.principal_id = $2
                        AND (m.valid_to IS NULL OR m.valid_to >= now())
-                       AND m.valid_from <= now()",
-                )
-                .bind(tenant_u)
-                .bind(principal_u)
-                .fetch_all(&*pool)
-                .await
-                .map_err(|e| SecurityClientError::Unavailable {
-                    message: e.to_string(),
-                })?;
+                       AND m.valid_from <= now() + interval '120 seconds'
+                     UNION
+                     SELECT p.group_id, p.class, p.parent_id,
+                            e.valid_from, e.valid_to, e.groups_revision
+                     FROM sec.\"group\" p
+                     JOIN eff e ON e.parent_id = p.group_id
+                     WHERE p.tenant_id = $1
+                 )
+                 SELECT DISTINCT group_id, class, valid_from, valid_to,
+                        groups_revision FROM eff",
+            )
+            .bind(tenant_u)
+            .bind(principal_u)
+            .fetch_all(&mut *tx)
+            .await
+            .map_err(|e| SecurityClientError::Unavailable {
+                message: e.to_string(),
+            })?;
             let memberships: Vec<PrincipalGroupMembership> = mrows
                 .into_iter()
                 .map(|(gid, class, vf, vt, gr)| PrincipalGroupMembership {
@@ -104,11 +149,11 @@ impl SnapshotProvider for PgSecuritySnapshotProvider {
                  FROM sec.policy_rule
                  WHERE tenant_id = $1 AND policy_revision = $2
                    AND (valid_to IS NULL OR valid_to >= now())
-                   AND valid_from <= now()",
+                   AND valid_from <= now() + interval '120 seconds'",
             )
             .bind(tenant_u)
             .bind(rev)
-            .fetch_all(&*pool)
+            .fetch_all(&mut *tx)
             .await
             .map_err(|e| SecurityClientError::Unavailable {
                 message: e.to_string(),
@@ -142,11 +187,17 @@ impl SnapshotProvider for PgSecuritySnapshotProvider {
                 })
                 .collect();
 
-            Ok(PdpSnapshot {
+            let snapshot = PdpSnapshot {
                 policy_revision: rev,
                 memberships,
                 rules,
-            })
+            };
+            tx.commit()
+                .await
+                .map_err(|e| SecurityClientError::Unavailable {
+                    message: e.to_string(),
+                })?;
+            Ok(snapshot)
         });
         result
     }

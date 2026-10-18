@@ -19,11 +19,7 @@ impl Fairing for CorsFairing {
     }
 
     async fn on_response<'r>(&self, req: &'r Request<'_>, res: &mut Response<'r>) {
-        let origin = req
-            .headers()
-            .get_one("Origin")
-            .unwrap_or("*")
-            .to_string();
+        let origin = req.headers().get_one("Origin").unwrap_or("*").to_string();
 
         res.set_header(Header::new("Access-Control-Allow-Origin", origin));
         res.set_header(Header::new(

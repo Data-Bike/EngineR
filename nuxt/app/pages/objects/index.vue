@@ -27,10 +27,11 @@
 </template>
 
 <script setup lang="ts">
+import { capability } from '~/middleware/capability';
 import { ref, onMounted } from 'vue';
 import { useI18n } from 'vue-i18n';
 
-definePageMeta({ middleware: 'auth' });
+definePageMeta({ middleware: ['auth', capability('entity.read')] });
 
 const { t } = useI18n();
 const toast = useToast();
@@ -68,7 +69,11 @@ async function fetchTypes() {
   loading.value = true;
   try {
     const res = await api.schemas.listTypes();
-    types.value = (res.data || []).map((t) => ({ ...t, count: t.entity_count ?? t.count ?? 0 }));
+    const schemaTypes = (res.data || []) as TypeRow[];
+    types.value = schemaTypes.map((schemaType) => ({
+      ...schemaType,
+      count: schemaType.entity_count ?? schemaType.count ?? 0,
+    }));
   } catch (err) {
     toast.add({ title: t('common.error'), description: err instanceof Error ? err.message : String(err), color: 'error' });
   } finally {

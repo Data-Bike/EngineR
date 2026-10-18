@@ -4,8 +4,8 @@
 //! - `/health/ready`: config valid, DB usable, PDP/policy loaded.
 
 use crate::state::AppState;
-use rocket::serde::json::Json;
 use rocket::get;
+use rocket::serde::json::Json;
 
 #[get("/live")]
 pub fn live() -> Json<serde_json::Value> {

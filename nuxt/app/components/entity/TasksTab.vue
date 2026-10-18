@@ -49,7 +49,7 @@
           <!-- Actions -->
           <div class="flex gap-1">
             <UButton
-              v-if="task.status === 'not_started' || task.status === 'waiting'"
+              v-if="task.status === 'pending' || task.status === 'assigned' || task.status === 'overdue'"
               size="xs"
               variant="outline"
               @click="startTask(task.task_id)"
@@ -143,24 +143,26 @@ const kindOptions = computed(() => [
 
 function taskStatusIcon(status: TaskStatus): string {
   const icons: Record<TaskStatus, string> = {
-    not_started: 'i-lucide-circle',
+    pending: 'i-lucide-circle',
+    assigned: 'i-lucide-user-check',
     in_progress: 'i-lucide-play-circle',
-    waiting: 'i-lucide-clock',
     completed: 'i-lucide-check-circle',
     cancelled: 'i-lucide-x-circle',
-    error: 'i-lucide-alert-octagon',
+    overdue: 'i-lucide-clock-alert',
+    escalated: 'i-lucide-alert-octagon',
   };
   return icons[status] ?? 'i-lucide-circle';
 }
 
 function taskStatusClass(status: TaskStatus): string {
   const classes: Record<TaskStatus, string> = {
-    not_started: 'text-[var(--ui-text-muted)]',
+    pending: 'text-[var(--ui-text-muted)]',
+    assigned: 'text-blue-500',
     in_progress: 'text-blue-500',
-    waiting: 'text-yellow-500',
     completed: 'text-green-500',
     cancelled: 'text-[var(--ui-text-muted)]',
-    error: 'text-red-500',
+    overdue: 'text-red-500',
+    escalated: 'text-orange-500',
   };
   return classes[status] ?? '';
 }
@@ -169,12 +171,13 @@ type BadgeColor = 'primary' | 'secondary' | 'success' | 'info' | 'warning' | 'er
 
 function taskStatusColor(status: TaskStatus): BadgeColor {
   const colors: Record<TaskStatus, BadgeColor> = {
-    not_started: 'neutral',
+    pending: 'neutral',
+    assigned: 'info',
     in_progress: 'primary',
-    waiting: 'warning',
     completed: 'success',
     cancelled: 'neutral',
-    error: 'error',
+    overdue: 'error',
+    escalated: 'warning',
   };
   return colors[status] ?? 'neutral';
 }
@@ -184,7 +187,7 @@ function isOverdue(dueDate: string): boolean {
 }
 
 function canCancel(status: TaskStatus): boolean {
-  return ['pending', 'assigned', 'in_progress'].includes(status);
+  return ['pending', 'assigned', 'in_progress', 'overdue', 'escalated'].includes(status);
 }
 
 async function fetchTasks() {
@@ -194,7 +197,12 @@ async function fetchTasks() {
   }
   try {
     const res = await api.checks.getEntityTasks(props.entityId);
-    tasks.value = res.data ?? [];
+    tasks.value = (res.data ?? []).map((task) => ({
+      ...task,
+      description: task.description ?? undefined,
+      assignee: task.assignee ?? undefined,
+      due_date: task.due_date ?? undefined,
+    }));
   } catch (e: unknown) {
     toast.add({ title: t('common.error'), description: e instanceof Error ? e.message : String(e), color: 'error' });
     tasks.value = [];

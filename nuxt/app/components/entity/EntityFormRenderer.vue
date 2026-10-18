@@ -23,7 +23,7 @@
         >
           <FormField
             :field="field"
-            :value="values[field.predicate_id]"
+            :model-value="values[field.predicate_id]"
             :error="validationErrors?.[field.predicate_id]"
             @update:value="updateValue(field.predicate_id, $event)"
           />
@@ -58,13 +58,14 @@
         {{ t('entity.save_draft') }}
       </UButton>
       <UButton type="submit" :loading="submitting">
-        {{ t('entity.create') }}
+        {{ submitLabel ?? t('entity.create') }}
       </UButton>
     </div>
   </form>
 </template>
 
 <script setup lang="ts">
+import { computed, ref } from 'vue';
 import type {
   FieldDefinition,
   FieldValidationError,
@@ -79,6 +80,7 @@ const props = defineProps<{
   validationErrors?: Record<string, FieldValidationError>;
   submitting?: boolean;
   allowDraft?: boolean;
+  submitLabel?: string;
 }>();
 
 const emit = defineEmits<{

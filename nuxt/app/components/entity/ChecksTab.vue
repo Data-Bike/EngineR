@@ -4,7 +4,7 @@
     <div class="flex items-center justify-between flex-wrap gap-2">
       <h3 class="font-medium">{{ t('entity.tabs.checks') }}</h3>
       <div class="flex items-center gap-2">
-        <USelectMenu
+        <USelect
           v-model="selectedKind"
           :items="checkKinds"
           size="sm"
@@ -158,7 +158,14 @@ function checkStatusColor(status: CheckStatus): BadgeColor {
 async function fetchChecks() {
   try {
     const res = await api.checks.getEntityChecks(props.entityId);
-    checks.value = res.data ?? [];
+    checks.value = (res.data ?? []).map((check) => ({
+      ...check,
+      entity_public_id: check.target_entity_id,
+      kind: check.kind as CheckInstance['kind'],
+      status: check.status as CheckInstance['status'],
+      completed_at: check.completed_at ?? undefined,
+      evidence: (check.evidence ?? []) as unknown as CheckInstance['evidence'],
+    }));
   } catch (e: unknown) {
     toast.add({ title: t('common.error'), description: e instanceof Error ? e.message : String(e), color: 'error' });
     checks.value = [];
@@ -179,8 +186,9 @@ async function runCheck() {
   }
 }
 
-function stepUp(_checkId: string) {
-  // Would trigger step-up auth flow (docs/16 §5)
+async function stepUp(_checkId: string) {
+  const route = useRoute();
+  await navigateTo({ path: '/login', query: { redirect: route.fullPath, step_up: '1' } });
 }
 
 onMounted(fetchChecks);

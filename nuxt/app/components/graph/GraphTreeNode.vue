@@ -31,7 +31,10 @@
         :key="childId"
         :node="allNodes.get(childId)!"
         :all-nodes="allNodes"
+        :edges="edges"
         :visited="visited"
+        :selected-node-id="selectedNodeId"
+        :ancestors="[...ancestors, node.id]"
         :depth="depth + 1"
         @select="$emit('select', $event)"
         @expand="$emit('expand', $event)"
@@ -41,6 +44,8 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue';
+
 interface GraphNode {
   id: string;
   label: string;
@@ -49,14 +54,25 @@ interface GraphNode {
   expanded: boolean;
   hasChildren: boolean;
   cycle: boolean;
-  x: number;
-  y: number;
+  x?: number;
+  y?: number;
+  r?: number;
+  status?: string;
+  virtual?: boolean;
+}
+
+interface GraphEdge {
+  source: string;
+  target: string;
 }
 
 const props = defineProps<{
   node: GraphNode;
   allNodes: Map<string, GraphNode>;
+  edges: GraphEdge[];
   visited: Set<string>;
+  selectedNodeId: string | null;
+  ancestors: string[];
   depth: number;
 }>();
 
@@ -67,15 +83,24 @@ const emit = defineEmits<{
 
 const { t } = useI18n();
 
-// Child IDs would come from edges — for now, derive from visited set
 const childIds = computed<string[]>(() => {
-  // In real implementation, this would look up edges where source = node.id
-  return [];
+  const result = new Set<string>();
+  for (const edge of props.edges) {
+    const candidate = edge.source === props.node.id
+      ? edge.target
+      : edge.target === props.node.id
+        ? edge.source
+        : undefined;
+    if (candidate && !props.ancestors.includes(candidate) && props.allNodes.has(candidate)) {
+      result.add(candidate);
+    }
+  }
+  return [...result];
 });
 
-const hasChildren = computed(() => props.node.hasChildren);
-const selected = computed(() => false); // Would be tracked by parent
-const isCycle = computed(() => props.visited.has(props.node.id));
+const hasChildren = computed(() => childIds.value.length > 0 || props.node.hasChildren);
+const selected = computed(() => props.selectedNodeId === props.node.id);
+const isCycle = computed(() => props.node.cycle);
 
 function select() {
   emit('select', props.node.id);

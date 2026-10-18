@@ -10,6 +10,7 @@ import type {
   UploadAbortBody,
   UploadStatusResponse,
   FileMetadataResponse,
+  ApiDocument,
 } from '../types/index.js';
 
 /** Files API endpoint methods. */
@@ -26,8 +27,8 @@ export class FileEndpoints {
     uploadId: string,
     index: number,
     chunk: ArrayBuffer | Blob,
-  ): Promise<ParsedResponse<unknown>> {
-    return this.client.putRaw<unknown>(`/files/upload/${uploadId}/chunks/${index}`, chunk);
+  ): Promise<ParsedResponse<UploadStatusResponse>> {
+    return this.client.putRaw<UploadStatusResponse>(`/files/upload/${uploadId}/chunks/${index}`, chunk);
   }
 
   /** POST /files/upload/{id}/complete — complete upload. */
@@ -56,9 +57,12 @@ export class FileEndpoints {
     return this.client.get<FileMetadataResponse>(`/files/${id}`);
   }
 
-  /** POST /entities/{entityId}/documents — upload a document via simple multipart form. */
-  async uploadEntityDocument<T = unknown>(entityId: string, form: FormData): Promise<ParsedResponse<T>> {
-    return this.client.postMultipart<T>(`/entities/${entityId}/documents`, form);
+  /** POST /entities/{entityId}/documents — upload a document. */
+  async uploadEntityDocument<T = unknown>(
+    entityId: string,
+    body: { title: string; kind: string; file_name: string; content_type: string; bytes: number[] },
+  ): Promise<ParsedResponse<T>> {
+    return this.client.post<T>(`/entities/${entityId}/documents`, body);
   }
 
   /** GET /entities/{entityId}/documents — list entity documents. */
@@ -69,6 +73,11 @@ export class FileEndpoints {
   /** GET /entities/{entityId}/documents/{docId}/download — download a document as Blob. */
   async downloadEntityDocument(entityId: string, docId: string): Promise<Blob> {
     return this.client.downloadBlob(`/entities/${entityId}/documents/${docId}/download`);
+  }
+
+  /** DELETE /entities/{entityId}/documents/{docId} — remove an entity document. */
+  async deleteEntityDocument(entityId: string, docId: string): Promise<ParsedResponse<void>> {
+    return this.client.delete<void>(`/entities/${entityId}/documents/${docId}`);
   }
 
   /** DELETE /files/{id} — delete a file. */

@@ -1,0 +1,84 @@
+@startuml enginer_schema_types
+' =============================================================================
+' EngineR — Диаграмма типов сущностей и допустимых типов связей (edge-предикатов)
+' Источник: meta.type_definition + meta.predicate_definition (опубликованная
+' ревизия схемы) + apps/api/src/seed.rs (домены/диапазоны seed-схемы).
+' Тестовые типы test_type_*/e2e_type_* намеренно опущены.
+' =============================================================================
+skinparam classAttributeIconSize 0
+skinparam linetype ortho
+skinparam shadowing false
+title Типы объектов и связи (edge-предикаты) — EngineR
+
+class "person\nФизическое лицо" as person #LightBlue {
+  + full_name : text [1..1] (required)
+  + inn : text [0..1] (identity)
+  + birth_date : date [0..1]
+  + email : email [0..*]
+  + phone : phone [0..*]
+  + address : text [0..*]
+}
+note bottom of person
+  identity policy: INN (participates_in_identity)
+end note
+
+class "legal_entity\nЮридическое лицо" as legal_entity #LightBlue {
+  + name : text [1..1] (required)
+  + short_name : text [0..1]
+  + inn : text [1..1] (required, identity)
+  + ogrn : text [0..1] (identity)
+  + kpp : text [0..1]
+  + okved : text [0..1]
+  + address : text [0..*]
+}
+note bottom of legal_entity
+  identity policy: INN + OGRN
+end note
+
+class "request\nЗаявка" as request #LightYellow {
+  + title : text [1..1] (required)
+  + status_note : text [0..1]
+}
+
+class "check\nПроверка" as check #LightYellow {
+  + title : text [1..1] (required)
+}
+
+class "document\nДокумент" as document #LightGreen {
+  + title : text [1..1] (required)
+  + amount : decimal [0..1]
+}
+
+class "contract\nДоговор" as contract #LightGreen {
+  + title : text
+  + amount : decimal
+}
+
+' --- Edge-предикаты (связи) --------------------------------------------------
+' Формат: домен --[0..*]--> диапазон : predicate_alias «RU-метка»
+person "1" --> "0..*" legal_entity : works_for\n«Работает в» / inverse «Сотрудник»
+person "1" --> "0..*" legal_entity : owns\n«Владеет» / inverse «Владелец»
+person "1" --> "0..*" check : performs_check\n«Выполняет проверку»
+legal_entity "1" --> "0..*" contract : has_contract\n«Имеет договор»
+
+' Предикаты с wildcard-диапазоном — связывают объект заявки/проверки с любым
+' субъектом/объектом проверки.
+request "1" --> "0..*" legal_entity : for_entity\n«По объекту» / inverse «Имеет объект»
+check "1" --> "0..*" legal_entity : for_entity\n«По объекту» / inverse «Имеет объект»
+person "1" --> "0..*" person : related_to\n«Связан с» (wildcard)
+legal_entity "1" --> "0..*" legal_entity : related_to\n«Связан с» (wildcard)
+
+legend right
+  <b>Edge-предикаты (is_edge=true):</b>
+  works_for — person → legal_entity
+  owns — person → legal_entity
+  performs_check — person → check
+  has_contract — legal_entity → contract
+  for_entity — request|check → * (wildcard range)
+  related_to — * → * (wildcard)
+  ----
+  Обязательные поля помечены [1..1].
+  Поля identity участвуют в дедупликации
+  (identity_mode: return_existing|fail|merge).
+endlegend
+@enduml

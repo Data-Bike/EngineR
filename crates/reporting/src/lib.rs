@@ -21,8 +21,8 @@ pub use dataset::{
     Dataset, DatasetColumn, DatasetColumnType, DatasetQuery, DatasetSnapshot, DatasetStatus,
 };
 pub use definition::{
-    ChartDefinition, ExportFormat, ReportAudience, ReportDefinition, ReportSection,
-    ReportStatus, SummaryDefinition, TableDefinition,
+    ChartDefinition, ExportFormat, ReportAudience, ReportDefinition, ReportSection, ReportStatus,
+    SummaryDefinition, TableDefinition,
 };
 pub use error::{ReportError, ReportResult};
 pub use render::{
@@ -30,6 +30,5 @@ pub use render::{
     TemplateRenderer,
 };
 pub use template::{
-    FieldFormat, Template, TemplateDefinition, TemplateFormat, TemplateLocale,
-    TemplateVersion,
+    FieldFormat, Template, TemplateDefinition, TemplateFormat, TemplateLocale, TemplateVersion,
 };

@@ -221,7 +221,11 @@ impl FieldPolicy {
         Self {
             field_name: field_name.to_string(),
             kind: FieldPolicyKind::PartialMask,
-            mask: Some(MaskStrategy::partial_mask(show_prefix, show_suffix, mask_char)),
+            mask: Some(MaskStrategy::partial_mask(
+                show_prefix,
+                show_suffix,
+                mask_char,
+            )),
             mark_in_meta,
         }
     }

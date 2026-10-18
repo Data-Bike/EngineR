@@ -200,11 +200,7 @@ pub enum ReactionResult {
 
 impl Reaction {
     /// Create a new reaction instance.
-    pub fn new(
-        config: &ReactionConfig,
-        target_entity_id: &str,
-        trigger_context: &str,
-    ) -> Self {
+    pub fn new(config: &ReactionConfig, target_entity_id: &str, trigger_context: &str) -> Self {
         let idempotency_key = config
             .idempotency_key_template
             .replace("{target}", target_entity_id)

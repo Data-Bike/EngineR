@@ -61,7 +61,10 @@ pub fn normalize_text(raw: &str) -> Result<NormalizedText, NormalizationError> {
     // strings are WTF-8/UTF-8 and apply a conservative trim. Full NFC requires
     // the `unicode-normalization` crate; a TODO is wired in `AGENTS.md`.
     let trimmed = raw.trim();
-    if !trimmed.chars().all(|c| c.is_whitespace() || !c.is_control() || c == '\t') {
+    if !trimmed
+        .chars()
+        .all(|c| c.is_whitespace() || !c.is_control() || c == '\t')
+    {
         // allow tab/whitespace, reject other control chars
     }
     Ok(NormalizedText {
@@ -141,11 +144,12 @@ pub fn normalize_phone(raw: &str) -> Result<NormalizedPhone, NormalizationError>
 /// (here: lowercase ASCII domain; full IDNA needs the `idna` crate).
 pub fn normalize_email(raw: &str) -> Result<NormalizedEmail, NormalizationError> {
     let trimmed = raw.trim();
-    let (local, domain) = trimmed
-        .split_once('@')
-        .ok_or_else(|| NormalizationError::InvalidEmail {
-            message: "missing @".to_string(),
-        })?;
+    let (local, domain) =
+        trimmed
+            .split_once('@')
+            .ok_or_else(|| NormalizationError::InvalidEmail {
+                message: "missing @".to_string(),
+            })?;
     if local.is_empty() || domain.is_empty() {
         return Err(NormalizationError::InvalidEmail {
             message: "empty local or domain".to_string(),

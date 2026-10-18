@@ -28,6 +28,7 @@
 
 <script setup lang="ts">
 const { t } = useI18n();
+const authStore = useAuthStore();
 const { capabilities } = useAuth();
 
 defineProps<{ collapsed?: boolean }>();
@@ -41,19 +42,25 @@ interface MenuItem {
 
 const allItems: MenuItem[] = [
   { to: '/', label: 'nav.home', icon: 'i-lucide-home' },
-  { to: '/objects', label: 'nav.objects', icon: 'i-lucide-database' },
-  { to: '/requests', label: 'nav.requests', icon: 'i-lucide-clipboard-list' },
-  { to: '/checks', label: 'nav.checks', icon: 'i-lucide-shield-check' },
-  { to: '/monitoring', label: 'nav.monitoring', icon: 'i-lucide-eye' },
-  { to: '/risks', label: 'nav.risks', icon: 'i-lucide-alert-triangle' },
-  { to: '/reports', label: 'nav.reports', icon: 'i-lucide-file-text' },
+  { to: '/objects', label: 'nav.objects', icon: 'i-lucide-database', capability: 'entity.read' },
+  { to: '/requests', label: 'nav.requests', icon: 'i-lucide-clipboard-list', capability: 'entity.read' },
+  { to: '/checks', label: 'nav.checks', icon: 'i-lucide-shield-check', capability: 'check.view' },
+  { to: '/monitoring', label: 'nav.monitoring', icon: 'i-lucide-eye', capability: 'monitor.manage' },
+  { to: '/risks', label: 'nav.risks', icon: 'i-lucide-alert-triangle', capability: 'risk.view' },
+  { to: '/reports', label: 'nav.reports', icon: 'i-lucide-file-text', capability: 'report.view' },
   { to: '/docs', label: 'nav.docs', icon: 'i-lucide-book-open' },
-  { to: '/admin', label: 'nav.admin', icon: 'i-lucide-settings', capability: 'admin.view' },
-  { to: '/integrations', label: 'nav.integrations', icon: 'i-lucide-plug', capability: 'admin.view' },
-  { to: '/audit', label: 'nav.audit', icon: 'i-lucide-scroll-text', capability: 'audit.view' },
+  { to: '/admin', label: 'nav.admin', icon: 'i-lucide-settings', capability: 'admin.pages.access' },
+  { to: '/integrations', label: 'nav.integrations', icon: 'i-lucide-plug', capability: 'connector.manage' },
+  { to: '/audit', label: 'nav.audit', icon: 'i-lucide-scroll-text', capability: 'audit.read' },
 ];
 
+// Menu entries are hidden (not rendered at all) when the capability or the
+// URL rule denies access — the server re-checks on every API call.
 const menuItems = computed(() =>
-  allItems.filter((item) => !item.capability || capabilities.value.includes(item.capability)),
+  allItems.filter(
+    (item) =>
+      (!item.capability || capabilities.value.includes(item.capability)) &&
+      authStore.canUrl(item.to),
+  ),
 );
 </script>

@@ -2,7 +2,7 @@
 //!
 //! `f64` is forbidden for money, shares and deterministic scores. Money and
 //! measurements use `Decimal` (stored as canonical string + scale over the wire,
-//! `numeric(p,s)` in PostgreSQL). Instants are UTC + source IANA zone.
+//! `numeric(p,s)` in `PostgreSQL`). Instants are UTC + source IANA zone.
 
 use crate::ids::ContentHash;
 use chrono::{DateTime, NaiveDate, Utc};
@@ -42,7 +42,7 @@ pub enum ScalarKind {
     Money,
     /// Measurement: decimal + unit.
     Measurement,
-    /// Geo point / shape (PostGIS when profile enabled).
+    /// Geo point / shape (`PostGIS` when profile enabled).
     Geo,
     /// Structured JSON only by explicit predicate schema.
     Json,
@@ -111,6 +111,7 @@ pub enum CanonicalScalar {
 
 impl CanonicalScalar {
     /// The scalar kind of this value.
+    #[must_use]
     pub fn kind(&self) -> ScalarKind {
         match self {
             Self::Text { .. } => ScalarKind::Text,
@@ -132,13 +133,17 @@ impl CanonicalScalar {
 
     /// Canonical byte representation for fingerprinting. Stable across processes
     /// (deterministic ordering, no locale-dependent formatting).
+    #[must_use]
     pub fn canonical_bytes(&self) -> Vec<u8> {
         let mut buf = Vec::new();
         let kind = self.kind();
         buf.extend_from_slice(kind.tag().as_bytes());
         buf.push(b'|');
         match self {
-            Self::Text { value_nfc, language_tag } => {
+            Self::Text {
+                value_nfc,
+                language_tag,
+            } => {
                 buf.extend_from_slice(value_nfc.as_bytes());
                 if let Some(tag) = language_tag {
                     buf.push(b'@');
@@ -147,13 +152,12 @@ impl CanonicalScalar {
             }
             Self::Boolean { value } => buf.push(if *value { b'1' } else { b'0' }),
             Self::Integer { value } => buf.extend_from_slice(value.to_string().as_bytes()),
-            Self::Decimal { value } => buf.extend_from_slice(value.as_bytes()),
-            Self::Date { value } => buf.extend_from_slice(value.to_string().as_bytes()),
-            Self::Instant { value, .. } => {
-                buf.extend_from_slice(value.to_rfc3339().as_bytes())
+            Self::Decimal { value } | Self::Uri { value } | Self::Json { value } => {
+                buf.extend_from_slice(value.as_bytes());
             }
+            Self::Date { value } => buf.extend_from_slice(value.to_string().as_bytes()),
+            Self::Instant { value, .. } => buf.extend_from_slice(value.to_rfc3339().as_bytes()),
             Self::Uuid { value } => buf.extend_from_slice(value.as_bytes()),
-            Self::Uri { value } => buf.extend_from_slice(value.as_bytes()),
             Self::Email { local, domain } => {
                 buf.extend_from_slice(local.as_bytes());
                 buf.push(b'@');
@@ -176,8 +180,11 @@ impl CanonicalScalar {
                 buf.push(b'|');
                 buf.extend_from_slice(unit.as_bytes());
             }
-            Self::Json { value } => buf.extend_from_slice(value.as_bytes()),
-            Self::Blob { content_hash, size_bytes, mime } => {
+            Self::Blob {
+                content_hash,
+                size_bytes,
+                mime,
+            } => {
                 buf.extend_from_slice(&content_hash.raw());
                 buf.push(b'|');
                 buf.extend_from_slice(size_bytes.to_string().as_bytes());

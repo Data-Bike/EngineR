@@ -4,6 +4,8 @@ legacy-prototype/
 
 # Node
 node_modules/
+nuxt/node_modules/
+web/node_modules/
 nuxt/.nuxt/
 nuxt/.output/
 nuxt/dist/

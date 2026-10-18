@@ -17,6 +17,7 @@
     "@nuxt/ui": "^4.10.0",
     "@nuxtjs/i18n": "^10.6.0",
     "@pinia/nuxt": "^1.0.1",
+    "d3-force": "^3.0.0",
     "nuxt": "^4.5.1",
     "pinia": "^4.0.2",
     "vue": "^3.5.0",
@@ -26,6 +27,7 @@
   "devDependencies": {
     "@nuxt/test-utils": "^4.1.0",
     "@playwright/test": "^1.62.1",
+    "@types/d3-force": "^3.0.10",
     "@vitejs/plugin-vue": "^6.0.8",
     "@vue/test-utils": "^2.4.11",
     "happy-dom": "^20.11.1",

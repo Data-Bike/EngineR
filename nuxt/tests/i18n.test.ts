@@ -114,6 +114,11 @@ describe('i18n locale files', () => {
         expect(locale.schema.retire).toBeTruthy();
         expect(locale.schema.types).toBeTruthy();
         expect(locale.schema.predicates).toBeTruthy();
+        expect(locale.schema.description).toBeTruthy();
+        expect(locale.schema.status.impact_ready).toBeTruthy();
+        expect(locale.schema.compatibility.breaking).toBeTruthy();
+        expect(locale.schema.publish_acknowledgement).toBeTruthy();
+        expect(locale.schema.audit_reason).toBeTruthy();
       });
 
       it('has all common keys', () => {

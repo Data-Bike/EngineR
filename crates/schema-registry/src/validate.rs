@@ -30,19 +30,24 @@ pub struct ValidationReport {
 impl ValidationReport {
     /// Empty report.
     pub fn empty() -> Self {
-        Self { findings: Vec::new() }
+        Self {
+            findings: Vec::new(),
+        }
     }
 
     /// True if there are no error-severity findings.
     pub fn passes(&self) -> bool {
-        !self
-            .findings
-            .iter()
-            .any(|f| f.severity == Severity::Error)
+        !self.findings.iter().any(|f| f.severity == Severity::Error)
     }
 
     /// Add a finding.
-    pub fn add(&mut self, severity: Severity, code: impl Into<String>, message: impl Into<String>, path: Option<String>) {
+    pub fn add(
+        &mut self,
+        severity: Severity,
+        code: impl Into<String>,
+        message: impl Into<String>,
+        path: Option<String>,
+    ) {
         self.findings.push(ValidationFinding {
             severity,
             code: code.into(),

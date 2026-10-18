@@ -38,15 +38,23 @@ vi.mock('vue-i18n', () => ({
     retireRevision: vi.fn(),
   },
 });
+;(globalThis as any).__useApi = (...args: unknown[]) => (globalThis as any).useApi(...args);
 ;(globalThis as any).useCapability = () => ({
   requireCapability: vi.fn().mockReturnValue(true),
   hasCapability: vi.fn().mockReturnValue(true),
 });
+;(globalThis as any).__useCapability = (...args: unknown[]) => (globalThis as any).useCapability(...args);
 ;(globalThis as any).navigateTo = vi.fn();
+;(globalThis as any).__navigateTo = (...args: unknown[]) => (globalThis as any).navigateTo(...args);
 ;(globalThis as any).definePageMeta = vi.fn();
+;(globalThis as any).__definePageMeta = (...args: unknown[]) => (globalThis as any).definePageMeta(...args);
 ;(globalThis as any).onBeforeRouteLeave = vi.fn();
+;(globalThis as any).__onBeforeRouteLeave = (...args: unknown[]) => (globalThis as any).onBeforeRouteLeave(...args);
 ;(globalThis as any).useRoute = () => ({ params: {}, query: {} });
+;(globalThis as any).__useRoute = (...args: unknown[]) => (globalThis as any).useRoute(...args);
 ;(globalThis as any).useAuth = () => ({
   isAuthenticated: { value: false },
   fetchContext: vi.fn(),
 });
+;(globalThis as any).__useAuth = (...args: unknown[]) => (globalThis as any).useAuth(...args);
+;(globalThis as any).useToast = () => ({ add: vi.fn() });

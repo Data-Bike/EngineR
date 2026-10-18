@@ -84,7 +84,7 @@ pub struct ScanConfig {
 impl Default for ScanConfig {
     fn default() -> Self {
         Self {
-            max_size_bytes: 100 * 1024 * 1024, // 100 MB
+            max_size_bytes: 100 * 1024 * 1024,        // 100 MB
             max_decompressed_size: 500 * 1024 * 1024, // 500 MB
             check_formulas: true,
             check_macros: true,
@@ -176,7 +176,12 @@ impl FileScanResult {
     }
 
     /// Mark scan as accepted with warnings.
-    pub fn mark_accepted_with_warnings(&mut self, signature: FileSignature, findings: Vec<ScanFinding>, duration_ms: u64) {
+    pub fn mark_accepted_with_warnings(
+        &mut self,
+        signature: FileSignature,
+        findings: Vec<ScanFinding>,
+        duration_ms: u64,
+    ) {
         self.status = FileScanStatus::AcceptedWithWarnings;
         self.signature = Some(signature);
         self.findings = findings;
@@ -185,7 +190,12 @@ impl FileScanResult {
     }
 
     /// Mark scan as rejected.
-    pub fn mark_rejected(&mut self, signature: Option<FileSignature>, findings: Vec<ScanFinding>, duration_ms: u64) {
+    pub fn mark_rejected(
+        &mut self,
+        signature: Option<FileSignature>,
+        findings: Vec<ScanFinding>,
+        duration_ms: u64,
+    ) {
         self.status = FileScanStatus::Rejected;
         self.signature = signature;
         self.findings = findings;

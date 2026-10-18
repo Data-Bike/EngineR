@@ -14,13 +14,12 @@
 
 use crate::error::ApplicationError;
 use crate::ports::{
-    Clock, EntityRepository, IdGenerator, IdentityKeyRepository, IdentityPolicyRepository,
-    Outbox, SchemaRepository, StatementRepository,
+    Clock, EntityRepository, IdGenerator, IdentityKeyRepository, IdentityPolicyRepository, Outbox,
+    SchemaRepository, StatementRepository,
 };
 use enginer_domain::{
-    compute_identity_key, CanonicalScalar, Entity, EntityClass, IdentityKey,
-    IdentityKeyStatus, IdentityMode, Statement, StatementObject, StatementStatus,
-    TenantId, TypeId,
+    compute_identity_key, CanonicalScalar, Entity, EntityClass, IdentityKey, IdentityKeyStatus,
+    IdentityMode, Statement, StatementObject, StatementStatus, TenantId, TypeId,
 };
 #[cfg(test)]
 use enginer_domain::{EntityId, PublicEntityId};
@@ -66,7 +65,10 @@ pub struct CreateEntity {
 }
 
 impl CreateEntity {
-    pub async fn execute(&self, cmd: CreateEntityCommand) -> Result<CreateEntityResult, ApplicationError> {
+    pub async fn execute(
+        &self,
+        cmd: CreateEntityCommand,
+    ) -> Result<CreateEntityResult, ApplicationError> {
         // 1. Resolve identity policies for the type.
         let policies = self
             .identity_policies
@@ -78,7 +80,8 @@ impl CreateEntity {
         let now = self.clock.now_utc();
         let mut computed_keys: Vec<(uuid::Uuid, String)> = Vec::new();
         for policy in &policies {
-            let mut components: Vec<String> = Vec::with_capacity(policy.key_component_predicate_ids.len());
+            let mut components: Vec<String> =
+                Vec::with_capacity(policy.key_component_predicate_ids.len());
             for pred_id in &policy.key_component_predicate_ids {
                 // Find the statement value for this predicate.
                 let val = cmd.statements.iter().find_map(|(pid, obj)| {
@@ -373,7 +376,10 @@ mod tests {
         let result = uc.execute(cmd).await.unwrap();
         assert_eq!(result.outcome, DedupOutcome::Deduplicated);
         assert_eq!(result.entity.entity_id, existing_entity_id);
-        assert!(result.statements.is_empty(), "dedup must not write statements");
+        assert!(
+            result.statements.is_empty(),
+            "dedup must not write statements"
+        );
         assert_eq!(outbox.event_count(), 0, "dedup must not emit outbox event");
     }
 
@@ -445,6 +451,9 @@ mod tests {
         assert_eq!(*revision, 1);
         assert_eq!(*event_type, "entity.created");
         assert_eq!(payload["type_id"], serde_json::json!(type_id.raw()));
-        assert_eq!(payload["public_id"], serde_json::json!(result.entity.public_id.raw()));
+        assert_eq!(
+            payload["public_id"],
+            serde_json::json!(result.entity.public_id.raw())
+        );
     }
 }

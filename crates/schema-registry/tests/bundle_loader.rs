@@ -21,7 +21,11 @@ fn load_skr_core_bundle() {
 fn bundle_has_person_and_legal_entity() {
     let dir = enginer_schema_registry::bundle::skr_core_dir();
     let bundle = LoadedBundle::from_dir(&dir).expect("bundle loads");
-    let aliases: Vec<&str> = bundle.types.iter().map(|t| t.stable_alias.as_str()).collect();
+    let aliases: Vec<&str> = bundle
+        .types
+        .iter()
+        .map(|t| t.stable_alias.as_str())
+        .collect();
     assert!(aliases.contains(&"person"), "missing person");
     assert!(aliases.contains(&"legal_entity"), "missing legal_entity");
 }
@@ -30,7 +34,11 @@ fn bundle_has_person_and_legal_entity() {
 fn bundle_has_request_check_risk() {
     let dir = enginer_schema_registry::bundle::skr_core_dir();
     let bundle = LoadedBundle::from_dir(&dir).expect("bundle loads");
-    let aliases: Vec<&str> = bundle.types.iter().map(|t| t.stable_alias.as_str()).collect();
+    let aliases: Vec<&str> = bundle
+        .types
+        .iter()
+        .map(|t| t.stable_alias.as_str())
+        .collect();
     assert!(aliases.contains(&"request"), "missing request");
     assert!(aliases.contains(&"check"), "missing check");
     assert!(aliases.contains(&"risk_factor"), "missing risk_factor");

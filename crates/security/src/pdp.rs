@@ -421,7 +421,9 @@ impl LocalPdpClient {
 
         // Step 4-6: Gather data rules, discard invalid, apply deny-overrides
         let now = chrono::Utc::now();
-        let rules = self.snapshot.applicable_data_rules(principal, &context.action, now);
+        let rules = self
+            .snapshot
+            .applicable_data_rules(principal, &context.action, now);
 
         // Check for deny rules (deny-overrides, docs/08 §3)
         let deny_rules: Vec<&DataRule> = rules.iter().filter(|r| r.is_deny()).copied().collect();
@@ -455,8 +457,10 @@ impl LocalPdpClient {
             }
             for field in &rule.resource.fields {
                 if let Some(entity_type) = &rule.resource.entity_type {
-                    if let Some(entry) =
-                        data_perm.allowed_fields.iter_mut().find(|(t, _)| t == entity_type)
+                    if let Some(entry) = data_perm
+                        .allowed_fields
+                        .iter_mut()
+                        .find(|(t, _)| t == entity_type)
                     {
                         if !entry.1.contains(field) {
                             entry.1.push(field.clone());

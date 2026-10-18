@@ -11,3 +11,5 @@ export { DashboardEndpoints } from './DashboardEndpoints.js';
 export { RequestEndpoints } from './RequestEndpoints.js';
 export { MonitorEndpoints } from './MonitorEndpoints.js';
 export { AuditEndpoints } from './AuditEndpoints.js';
+export { UserEndpoints } from './UserEndpoints.js';
+export type { UserListParams, UserInputBody } from './UserEndpoints.js';

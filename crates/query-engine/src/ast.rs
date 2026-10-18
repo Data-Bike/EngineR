@@ -173,7 +173,12 @@ pub enum QueryError {
 impl QueryAst {
     /// Enforce syntactic limits (docs/06 §16): max select fields, max sort
     /// keys, max where depth, max page size.
-    pub fn enforce_syntactic_limits(&self, max_select: usize, max_sort: usize, max_page: u32) -> Result<(), QueryError> {
+    pub fn enforce_syntactic_limits(
+        &self,
+        max_select: usize,
+        max_sort: usize,
+        max_page: u32,
+    ) -> Result<(), QueryError> {
         if self.select.len() > max_select {
             return Err(QueryError::TooComplex {
                 message: format!("too many select fields (max {max_select})"),
@@ -230,7 +235,10 @@ mod tests {
                 },
                 direction: SortDirection::Asc,
             }],
-            page: KeysetPage { size: 50, after: None },
+            page: KeysetPage {
+                size: 50,
+                after: None,
+            },
             as_of: None,
         };
         let json = serde_json::to_string(&ast).unwrap();
@@ -255,7 +263,10 @@ mod tests {
                 .collect(),
             where_expr: None,
             sort: vec![],
-            page: KeysetPage { size: 500, after: None },
+            page: KeysetPage {
+                size: 500,
+                after: None,
+            },
             as_of: None,
         };
         assert!(ast.enforce_syntactic_limits(5, 5, 100).is_err());

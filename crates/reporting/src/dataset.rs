@@ -136,7 +136,12 @@ pub struct DatasetSnapshot {
 
 impl DatasetSnapshot {
     /// Create a new materializing snapshot.
-    pub fn new(dataset_id: &str, dataset_version: &str, schema_revision_id: &str, policy_revision_id: &str) -> Self {
+    pub fn new(
+        dataset_id: &str,
+        dataset_version: &str,
+        schema_revision_id: &str,
+        policy_revision_id: &str,
+    ) -> Self {
         Self {
             snapshot_id: uuid::Uuid::now_v7().to_string(),
             dataset_id: dataset_id.to_string(),

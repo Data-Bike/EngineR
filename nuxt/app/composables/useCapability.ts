@@ -4,7 +4,7 @@
  *
  * Usage in pages:
  *   const { requireCapability } = useCapability();
- *   definePageMeta({ middleware: () => useCapability().requireCapability('admin.view') })
+ *   definePageMeta({ middleware: () => useCapability().requireCapability('admin.pages.access') })
  */
 
 export function useCapability() {

@@ -8,7 +8,13 @@
 
 // --- Checks (docs/04 §4) ---
 
-import type { CheckStatus as ApiCheckStatus, CheckKind as ApiCheckKind, TaskStatus as ApiTaskStatus } from './check.js';
+import type {
+  CheckStatus as ApiCheckStatus,
+  CheckKind as ApiCheckKind,
+  RiskLevel as ApiRiskLevel,
+  TaskKind as ApiTaskKind,
+  TaskStatus as ApiTaskStatus,
+} from './check.js';
 
 // Re-export check-related enums from the API client to avoid duplicate/conflicting
 // definitions. The API client is the source of truth for these.
@@ -18,8 +24,8 @@ export type { ApiCheckStatus as CheckStatus, ApiCheckKind as CheckKind, ApiTaskS
 export interface CheckInstance {
   check_id: string;
   entity_public_id: string;
-  kind: CheckKind;
-  status: CheckStatus;
+  kind: ApiCheckKind;
+  status: ApiCheckStatus;
   started_at?: string;
   completed_at?: string;
   connector_id?: string;
@@ -50,7 +56,7 @@ export interface EvidenceItem {
 
 // --- Risks (docs/04 §5, docs/05) ---
 
-export type RiskLevel = 'low' | 'medium' | 'high' | 'critical';
+export type RiskLevel = ApiRiskLevel;
 export type RiskDecision = 'accept' | 'reject' | 'escalate' | 'review';
 
 /** A risk factor on an entity. */
@@ -97,14 +103,7 @@ export interface RiskAssessment {
 
 // --- Tasks / Workflow (docs/04 §6) ---
 
-export type TaskKind =
-  | 'request_processing'
-  | 'check_execution'
-  | 'risk_assessment'
-  | 'monitoring_review'
-  | 'report_generation'
-  | 'approval'
-  | 'notification';
+export type TaskKind = ApiTaskKind;
 
 /** A workflow task. */
 export interface WorkflowTask {
@@ -112,7 +111,7 @@ export interface WorkflowTask {
   entity_public_id?: string;
   request_id?: string;
   kind: TaskKind;
-  status: TaskStatus;
+  status: ApiTaskStatus;
   title: string;
   description?: string;
   /** Assigned user. */
@@ -141,7 +140,7 @@ export interface MonitorSchedule {
   entity_public_id: string;
   frequency: MonitorFrequency;
   /** Checks to run on each cycle. */
-  check_kinds: CheckKind[];
+  check_kinds: ApiCheckKind[];
   /** Next run date. */
   next_run: string;
   /** Last run date. */

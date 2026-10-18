@@ -32,7 +32,7 @@ export class CheckEndpoints {
 
   /** GET /checks — list all checks (optional filters). */
   async listChecks(query?: { target_entity_id?: string; status?: string }): Promise<ParsedResponse<CheckResponse[]>> {
-    return this.client.get<CheckResponse[]>('/checks', query);
+    return this.client.get<CheckResponse[]>('/checks', query ? { query } : undefined);
   }
 
   /** GET /entities/{id}/checks — list checks for an entity. */

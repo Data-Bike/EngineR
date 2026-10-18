@@ -3,9 +3,9 @@
 #![cfg(test)]
 
 use enginer_risk_engine::{
-    evaluate, Assessment, AssessmentStatus, CriterionSeverity,
-    Decision, DecisionKind, EvaluationContext, Expr, Factor, FactorStatus, LogicalOp,
-    ObservationContext, RiskLevel, ScoreConfig, Uncertainty, WeightedAggregator,
+    evaluate, Assessment, AssessmentStatus, CriterionSeverity, Decision, DecisionKind,
+    EvaluationContext, Expr, Factor, FactorStatus, LogicalOp, ObservationContext, RiskLevel,
+    ScoreConfig, Uncertainty, WeightedAggregator,
 };
 
 // --- AST evaluation tests ---
@@ -15,10 +15,7 @@ fn evaluate_literal_integer() {
     let expr = Expr::literal(enginer_risk_engine::Value::Integer { value: 42 });
     let ctx = EvaluationContext::default();
     let result = evaluate(&expr, &ctx).unwrap();
-    assert_eq!(
-        result,
-        enginer_risk_engine::Value::Integer { value: 42 }
-    );
+    assert_eq!(result, enginer_risk_engine::Value::Integer { value: 42 });
 }
 
 #[test]
@@ -26,10 +23,7 @@ fn evaluate_literal_boolean() {
     let expr = Expr::literal(enginer_risk_engine::Value::Boolean { value: true });
     let ctx = EvaluationContext::default();
     let result = evaluate(&expr, &ctx).unwrap();
-    assert_eq!(
-        result,
-        enginer_risk_engine::Value::Boolean { value: true }
-    );
+    assert_eq!(result, enginer_risk_engine::Value::Boolean { value: true });
 }
 
 #[test]
@@ -150,15 +144,14 @@ fn evaluate_unary_not() {
 fn evaluate_existence_true() {
     let expr = Expr::exists("person.inn");
     let mut ctx = EvaluationContext::default();
-    ctx.predicate_values
-        .insert("person.inn".to_string(), vec![enginer_risk_engine::Value::Text {
+    ctx.predicate_values.insert(
+        "person.inn".to_string(),
+        vec![enginer_risk_engine::Value::Text {
             value: "1234567890".to_string(),
-        }]);
-    let result = evaluate(&expr, &ctx).unwrap();
-    assert_eq!(
-        result,
-        enginer_risk_engine::Value::Boolean { value: true }
+        }],
     );
+    let result = evaluate(&expr, &ctx).unwrap();
+    assert_eq!(result, enginer_risk_engine::Value::Boolean { value: true });
 }
 
 #[test]
@@ -166,10 +159,7 @@ fn evaluate_existence_false() {
     let expr = Expr::exists("person.inn");
     let ctx = EvaluationContext::default();
     let result = evaluate(&expr, &ctx).unwrap();
-    assert_eq!(
-        result,
-        enginer_risk_engine::Value::Boolean { value: false }
-    );
+    assert_eq!(result, enginer_risk_engine::Value::Boolean { value: false });
 }
 
 #[test]
@@ -234,10 +224,7 @@ fn evaluate_source_freshness() {
         ..Default::default()
     };
     let result = evaluate(&expr, &ctx).unwrap();
-    assert_eq!(
-        result,
-        enginer_risk_engine::Value::Boolean { value: true }
-    );
+    assert_eq!(result, enginer_risk_engine::Value::Boolean { value: true });
 }
 
 #[test]
@@ -257,10 +244,7 @@ fn evaluate_source_freshness_stale() {
         ..Default::default()
     };
     let result = evaluate(&expr, &ctx).unwrap();
-    assert_eq!(
-        result,
-        enginer_risk_engine::Value::Boolean { value: false }
-    );
+    assert_eq!(result, enginer_risk_engine::Value::Boolean { value: false });
 }
 
 // --- Factor tests ---

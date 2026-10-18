@@ -18,9 +18,9 @@ pub mod ports;
 pub use check_flow::{
     CheckFlowContext, CheckFlowInput, CheckFlowOrchestrator, CheckFlowResult, CheckFlowState,
 };
+pub use enginer_workflow::{StateMachine, Task};
 pub use error::{IntegrationError, IntegrationResult};
 pub use ports::{
-    AssessmentPort, AuditPort, ConnectorPort, CriterionPort, DecisionPort, FactorPort,
-    TaskPort, WorkflowPort,
+    AssessmentPort, AuditPort, ConnectorPort, CriterionPort, DecisionPort, FactorPort, TaskPort,
+    WorkflowPort,
 };
-pub use enginer_workflow::{StateMachine, Task};

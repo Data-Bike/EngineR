@@ -36,7 +36,10 @@ pub struct MergeEntity {
 }
 
 impl MergeEntity {
-    pub async fn execute(&self, cmd: MergeEntityCommand) -> Result<MergeEntityResult, ApplicationError> {
+    pub async fn execute(
+        &self,
+        cmd: MergeEntityCommand,
+    ) -> Result<MergeEntityResult, ApplicationError> {
         if cmd.canonical_public_id == cmd.loser_public_id {
             return Err(ApplicationError::Precondition {
                 message: "cannot merge entity with itself".to_string(),
@@ -130,7 +133,11 @@ mod tests {
             clock,
             outbox: outbox.clone(),
         };
-        MergeHarness { uc, entities, outbox }
+        MergeHarness {
+            uc,
+            entities,
+            outbox,
+        }
     }
 
     fn seed_entity(entities: &MockEntityRepository, tenant: TenantId) -> PublicEntityId {
@@ -225,7 +232,11 @@ mod tests {
         assert!(!r1.idempotent);
         let r2 = h.uc.execute(cmd).await.unwrap();
         assert!(r2.idempotent, "repeat merge must be idempotent");
-        assert_eq!(h.outbox.event_count(), 1, "repeat merge must not emit second event");
+        assert_eq!(
+            h.outbox.event_count(),
+            1,
+            "repeat merge must not emit second event"
+        );
     }
 
     #[tokio::test]

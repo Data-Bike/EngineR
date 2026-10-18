@@ -39,13 +39,19 @@ fn collect_type_ids(types: &[serde_json::Value]) -> HashSet<String> {
 fn collect_predicate_ids(preds: &[serde_json::Value]) -> HashSet<String> {
     preds
         .iter()
-        .filter_map(|p| p.get("predicate_id").and_then(|v| v.as_str()).map(String::from))
+        .filter_map(|p| {
+            p.get("predicate_id")
+                .and_then(|v| v.as_str())
+                .map(String::from)
+        })
         .collect()
 }
 
 /// Helper: get predicates array from a JSON value, or empty slice.
 fn predicates_array(v: &serde_json::Value) -> &[serde_json::Value] {
-    v.get("predicates").and_then(|p| p.as_array()).map_or(&[], |v| v)
+    v.get("predicates")
+        .and_then(|p| p.as_array())
+        .map_or(&[], |v| v)
 }
 
 /// Helper: get types array from a JSON value, or empty slice.
@@ -63,10 +69,19 @@ fn types_json_loads_and_has_core_types() {
         .filter_map(|t| t.get("stable_alias").and_then(|a| a.as_str()))
         .collect();
     assert!(aliases.contains(&"person"), "missing person type");
-    assert!(aliases.contains(&"legal_entity"), "missing legal_entity type");
-    assert!(aliases.contains(&"holding_view"), "missing holding_view type");
+    assert!(
+        aliases.contains(&"legal_entity"),
+        "missing legal_entity type"
+    );
+    assert!(
+        aliases.contains(&"holding_view"),
+        "missing holding_view type"
+    );
     assert!(aliases.contains(&"address"), "missing address type");
-    assert!(aliases.contains(&"contact_point"), "missing contact_point type");
+    assert!(
+        aliases.contains(&"contact_point"),
+        "missing contact_point type"
+    );
     assert!(aliases.contains(&"document"), "missing document type");
     assert!(aliases.contains(&"license"), "missing license type");
 }
@@ -110,7 +125,11 @@ fn no_duplicate_predicate_ids_across_both_files() {
     let domain = load_json("domain-types.json");
     let core_preds: HashSet<String> = collect_predicate_ids(predicates_array(&core));
     let domain_preds = collect_predicate_ids(predicates_array(&domain));
-    let all_preds: HashSet<_> = core_preds.iter().chain(domain_preds.iter()).cloned().collect();
+    let all_preds: HashSet<_> = core_preds
+        .iter()
+        .chain(domain_preds.iter())
+        .cloned()
+        .collect();
     assert_eq!(
         all_preds.len(),
         core_preds.len() + domain_preds.len(),
@@ -197,7 +216,10 @@ fn edge_predicates_have_range_type() {
     let domain = load_json("domain-types.json");
     for preds in [predicates_array(&predicates), predicates_array(&domain)] {
         for pred in preds {
-            let is_edge = pred.get("is_edge").and_then(|v| v.as_bool()).unwrap_or(false);
+            let is_edge = pred
+                .get("is_edge")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
             if is_edge {
                 let range = pred.get("range_type_id").and_then(|v| v.as_str());
                 assert!(
@@ -216,7 +238,10 @@ fn scalar_predicates_have_scalar_kind() {
     let domain = load_json("domain-types.json");
     for preds in [predicates_array(&predicates), predicates_array(&domain)] {
         for pred in preds {
-            let is_edge = pred.get("is_edge").and_then(|v| v.as_bool()).unwrap_or(false);
+            let is_edge = pred
+                .get("is_edge")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
             if !is_edge {
                 let kind = pred.get("scalar_kind").and_then(|v| v.as_str());
                 assert!(
@@ -240,7 +265,10 @@ fn identity_predicates_are_scalar() {
                 .and_then(|v| v.as_bool())
                 .unwrap_or(false);
             if participates {
-                let is_edge = pred.get("is_edge").and_then(|v| v.as_bool()).unwrap_or(false);
+                let is_edge = pred
+                    .get("is_edge")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
                 assert!(
                     !is_edge,
                     "identity predicate {} is an edge, must be scalar",

@@ -4,14 +4,14 @@
 //! meta-kernel. Renaming a label does not migrate facts/policies/views
 //! (ADR-003). Published revisions are immutable (docs/12 §1).
 
-use crate::ids::{PredicateId, SchemaRevisionId, TypeId, TenantId};
+use crate::ids::{PredicateId, SchemaRevisionId, TenantId, TypeId};
 use serde::{Deserialize, Serialize};
 
 /// Entity class. Drives physical storage and security defaults.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum EntityClass {
-    /// Business data entity (person, legal_entity, item, ...).
+    /// Business data entity (person, `legal_entity`, item, ...).
     Data,
     /// Schema-meta entity (type, predicate, view definition).
     Schema,

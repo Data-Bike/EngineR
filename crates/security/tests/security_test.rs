@@ -4,10 +4,10 @@
 
 use enginer_security::{
     AuditEntry, AuditKind, AuditQuery, AuditRetention, Capability, CapabilityGroup,
-    CapabilityGroupKind, CapabilityKind, ClassificationLevel, DataPermission, DataRule,
-    Decision, DecisionContext, DecisionKind, Effect, FieldPolicy, FieldPolicyKind,
-    LocalPdpClient, MaskStrategy, PdpClient, PolicySnapshot, Principal, PrincipalKind,
-    ResourceSelector, SessionInfo, TamperChain,
+    CapabilityGroupKind, CapabilityKind, ClassificationLevel, DataPermission, DataRule, Decision,
+    DecisionContext, DecisionKind, Effect, FieldPolicy, FieldPolicyKind, LocalPdpClient,
+    MaskStrategy, PdpClient, PolicySnapshot, Principal, PrincipalKind, ResourceSelector,
+    SessionInfo, TamperChain,
 };
 use std::collections::HashMap;
 
@@ -71,7 +71,10 @@ fn high_risk_capabilities_bypass_cache() {
     let caps = enginer_security::capability::standard_system_capabilities();
     // Per docs/08 §10, high_risk capabilities bypass policy cache
     let high_risk_count = caps.iter().filter(|c| c.high_risk).count();
-    assert!(high_risk_count >= 5, "expected at least 5 high_risk capabilities");
+    assert!(
+        high_risk_count >= 5,
+        "expected at least 5 high_risk capabilities"
+    );
 }
 
 #[test]
@@ -109,8 +112,14 @@ fn classification_level_is_allowed_with() {
 
 #[test]
 fn classification_level_from_str() {
-    assert_eq!(ClassificationLevel::from_str("public"), Some(ClassificationLevel::Public));
-    assert_eq!(ClassificationLevel::from_str("RESTRICTED"), Some(ClassificationLevel::Restricted));
+    assert_eq!(
+        ClassificationLevel::from_str("public"),
+        Some(ClassificationLevel::Public)
+    );
+    assert_eq!(
+        ClassificationLevel::from_str("RESTRICTED"),
+        Some(ClassificationLevel::Restricted)
+    );
     assert_eq!(ClassificationLevel::from_str("unknown"), None);
 }
 
@@ -188,7 +197,10 @@ fn data_permission_is_type_allowed_empty_allow_list() {
 #[test]
 fn data_permission_is_field_allowed() {
     let mut perm = DataPermission::default();
-    perm.allowed_fields = vec![("legal_entity".to_string(), vec!["full_name".to_string(), "inn".to_string()])];
+    perm.allowed_fields = vec![(
+        "legal_entity".to_string(),
+        vec!["full_name".to_string(), "inn".to_string()],
+    )];
     perm.denied_fields = vec![("legal_entity".to_string(), vec!["ogrn".to_string()])];
     assert!(perm.is_field_allowed("legal_entity", "full_name"));
     assert!(perm.is_field_allowed("legal_entity", "inn"));
@@ -321,7 +333,11 @@ fn make_context(action: &str) -> DecisionContext {
     }
 }
 
-fn make_snapshot_with_caps(tenant_id: &str, caps: Vec<Capability>, groups: Vec<CapabilityGroup>) -> PolicySnapshot {
+fn make_snapshot_with_caps(
+    tenant_id: &str,
+    caps: Vec<Capability>,
+    groups: Vec<CapabilityGroup>,
+) -> PolicySnapshot {
     let mut snapshot = PolicySnapshot::new("rev-001", tenant_id, "grev-001");
     for cap in caps {
         snapshot.add_capability(cap);
@@ -601,7 +617,14 @@ fn decision_step_up_required() {
 
 #[test]
 fn audit_entry_new() {
-    let entry = AuditEntry::new(1, "0000000000000000", "tenant-A", "user-001", AuditKind::Decision, "entity.read");
+    let entry = AuditEntry::new(
+        1,
+        "0000000000000000",
+        "tenant-A",
+        "user-001",
+        AuditKind::Decision,
+        "entity.read",
+    );
     assert_eq!(entry.sequence, 1);
     assert_eq!(entry.tenant_id, "tenant-A");
     assert_eq!(entry.actor, "user-001");
@@ -612,38 +635,73 @@ fn audit_entry_new() {
 
 #[test]
 fn audit_entry_with_effective_actor() {
-    let entry = AuditEntry::new(1, "0", "tenant-A", "admin-001", AuditKind::Impersonation, "impersonate")
-        .with_effective_actor("user-002");
+    let entry = AuditEntry::new(
+        1,
+        "0",
+        "tenant-A",
+        "admin-001",
+        AuditKind::Impersonation,
+        "impersonate",
+    )
+    .with_effective_actor("user-002");
     assert_eq!(entry.effective_actor.as_deref(), Some("user-002"));
 }
 
 #[test]
 fn audit_entry_with_resource() {
-    let entry = AuditEntry::new(1, "0", "tenant-A", "user-001", AuditKind::Decision, "entity.read")
-        .with_resource("legal_entity", "ent-001");
+    let entry = AuditEntry::new(
+        1,
+        "0",
+        "tenant-A",
+        "user-001",
+        AuditKind::Decision,
+        "entity.read",
+    )
+    .with_resource("legal_entity", "ent-001");
     assert_eq!(entry.resource_type.as_deref(), Some("legal_entity"));
     assert_eq!(entry.resource_id.as_deref(), Some("ent-001"));
 }
 
 #[test]
 fn audit_entry_with_decision() {
-    let entry = AuditEntry::new(1, "0", "tenant-A", "user-001", AuditKind::Decision, "entity.read")
-        .with_decision("allow", vec!["rule-001".to_string()]);
+    let entry = AuditEntry::new(
+        1,
+        "0",
+        "tenant-A",
+        "user-001",
+        AuditKind::Decision,
+        "entity.read",
+    )
+    .with_decision("allow", vec!["rule-001".to_string()]);
     assert_eq!(entry.decision.as_deref(), Some("allow"));
     assert_eq!(entry.reason_ids, vec!["rule-001".to_string()]);
 }
 
 #[test]
 fn audit_entry_with_metrics() {
-    let entry = AuditEntry::new(1, "0", "tenant-A", "user-001", AuditKind::Export, "report.export")
-        .with_metrics(Some(500), Some(1024 * 1024));
+    let entry = AuditEntry::new(
+        1,
+        "0",
+        "tenant-A",
+        "user-001",
+        AuditKind::Export,
+        "report.export",
+    )
+    .with_metrics(Some(500), Some(1024 * 1024));
     assert_eq!(entry.row_count, Some(500));
     assert_eq!(entry.bytes, Some(1024 * 1024));
 }
 
 #[test]
 fn audit_entry_add_metadata() {
-    let mut entry = AuditEntry::new(1, "0", "tenant-A", "user-001", AuditKind::Decision, "entity.read");
+    let mut entry = AuditEntry::new(
+        1,
+        "0",
+        "tenant-A",
+        "user-001",
+        AuditKind::Decision,
+        "entity.read",
+    );
     entry.add_metadata("source", "api");
     entry.add_metadata("version", "1.0");
     assert_eq!(entry.metadata.len(), 2);
@@ -652,12 +710,26 @@ fn audit_entry_add_metadata() {
 #[test]
 fn audit_entry_compute_hash() {
     let ts = chrono::Utc::now();
-    let mut entry = AuditEntry::new(1, "0000000000000000", "tenant-A", "user-001", AuditKind::Decision, "entity.read");
+    let mut entry = AuditEntry::new(
+        1,
+        "0000000000000000",
+        "tenant-A",
+        "user-001",
+        AuditKind::Decision,
+        "entity.read",
+    );
     entry.timestamp = ts;
     let hash = entry.compute_hash();
     assert!(!hash.is_empty());
     // Same input → same hash
-    let mut entry2 = AuditEntry::new(1, "0000000000000000", "tenant-A", "user-001", AuditKind::Decision, "entity.read");
+    let mut entry2 = AuditEntry::new(
+        1,
+        "0000000000000000",
+        "tenant-A",
+        "user-001",
+        AuditKind::Decision,
+        "entity.read",
+    );
     entry2.timestamp = ts;
     assert_eq!(hash, entry2.compute_hash());
 }
@@ -673,14 +745,28 @@ fn tamper_chain_new() {
 #[test]
 fn tamper_chain_append() {
     let mut chain = TamperChain::new();
-    let entry1 = AuditEntry::new(0, "0", "tenant-A", "user-001", AuditKind::Decision, "action1");
+    let entry1 = AuditEntry::new(
+        0,
+        "0",
+        "tenant-A",
+        "user-001",
+        AuditKind::Decision,
+        "action1",
+    );
     let appended1 = chain.append(entry1);
     assert_eq!(appended1.sequence, 0);
     assert!(!appended1.hash.is_empty());
     assert_eq!(chain.sequence, 1);
     assert_eq!(chain.total_entries, 1);
 
-    let entry2 = AuditEntry::new(0, "0", "tenant-A", "user-001", AuditKind::Decision, "action2");
+    let entry2 = AuditEntry::new(
+        0,
+        "0",
+        "tenant-A",
+        "user-001",
+        AuditKind::Decision,
+        "action2",
+    );
     let appended2 = chain.append(entry2);
     assert_eq!(appended2.sequence, 1);
     assert_eq!(appended2.previous_hash, appended1.hash);
@@ -704,7 +790,14 @@ fn tamper_chain_verify_valid() {
     let mut chain = TamperChain::new();
     let mut entries = Vec::new();
     for i in 0..5 {
-        let entry = AuditEntry::new(0, "0", "t", "u", AuditKind::Decision, &format!("action{}", i));
+        let entry = AuditEntry::new(
+            0,
+            "0",
+            "t",
+            "u",
+            AuditKind::Decision,
+            &format!("action{}", i),
+        );
         let appended = chain.append(entry);
         entries.push(appended);
     }
@@ -716,7 +809,14 @@ fn tamper_chain_verify_tampered() {
     let mut chain = TamperChain::new();
     let mut entries = Vec::new();
     for i in 0..3 {
-        let entry = AuditEntry::new(0, "0", "t", "u", AuditKind::Decision, &format!("action{}", i));
+        let entry = AuditEntry::new(
+            0,
+            "0",
+            "t",
+            "u",
+            AuditKind::Decision,
+            &format!("action{}", i),
+        );
         let appended = chain.append(entry);
         entries.push(appended);
     }

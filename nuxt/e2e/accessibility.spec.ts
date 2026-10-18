@@ -27,7 +27,7 @@ async function setupAuthMock(page: import('@playwright/test').Page) {
           timezone: 'Europe/Moscow',
           auth_strength: 'normal',
           groups_revision: 1,
-          capabilities: ['audit.view', 'audit.admin', 'check.run', 'connector.admin', 'entity.read'],
+          capabilities: ['audit.read', 'security.manage', 'check.view', 'check.run', 'connector.manage', 'entity.read'],
           workspaces: ['default'],
           policy_revision: 1,
         },
@@ -37,7 +37,7 @@ async function setupAuthMock(page: import('@playwright/test').Page) {
   });
 
   // Mock all audit endpoints
-  await page.route('**/api/v1/audit*', (route) => {
+  await page.route('**/api/v1/audit**', (route) => {
     const url = route.request().url();
     if (url.includes('/checkpoint') && route.request().method() === 'GET') {
       route.fulfill({
@@ -73,7 +73,7 @@ async function setupAuthMock(page: import('@playwright/test').Page) {
   });
 
   // Mock checks
-  await page.route('**/api/v1/checks*', (route) => {
+  await page.route('**/api/v1/checks**', (route) => {
     route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -82,7 +82,7 @@ async function setupAuthMock(page: import('@playwright/test').Page) {
   });
 
   // Mock connectors
-  await page.route('**/api/v1/connectors*', (route) => {
+  await page.route('**/api/v1/connectors**', (route) => {
     route.fulfill({
       status: 200,
       contentType: 'application/json',
@@ -193,7 +193,7 @@ test.describe('Accessibility — Phase 5 pages', () => {
   test('audit page expandable rows have cursor pointer', async ({ page }) => {
     await page.goto('/audit');
     // Mock with at least one entry
-    await page.route('**/api/v1/audit*', (route) => {
+    await page.route('**/api/v1/audit**', (route) => {
       route.fulfill({
         status: 200,
         contentType: 'application/json',

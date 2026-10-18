@@ -14,6 +14,7 @@ pub struct RecordedTime(pub DateTime<Utc>);
 
 impl RecordedTime {
     /// Now in UTC.
+    #[must_use]
     pub fn now() -> Self {
         Self(Utc::now())
     }
@@ -29,6 +30,7 @@ pub struct ValidPeriod {
 
 impl ValidPeriod {
     /// Build an open-ended period starting at `from`.
+    #[must_use]
     pub fn open_from(from: DateTime<Utc>) -> Self {
         Self {
             valid_from: from,
@@ -37,11 +39,9 @@ impl ValidPeriod {
     }
 
     /// Build a closed period `[from, to]`.
+    #[must_use]
     pub fn closed(from: DateTime<Utc>, to: DateTime<Utc>) -> Self {
-        debug_assert!(
-            to >= from,
-            "valid_to must be >= valid_from"
-        );
+        debug_assert!(to >= from, "valid_to must be >= valid_from");
         Self {
             valid_from: from,
             valid_to: Some(to),
@@ -49,6 +49,7 @@ impl ValidPeriod {
     }
 
     /// True if `instant` falls within this period.
+    #[must_use]
     pub fn contains(&self, instant: DateTime<Utc>) -> bool {
         instant >= self.valid_from && self.valid_to.map_or(true, |to| instant <= to)
     }

@@ -87,12 +87,13 @@
 </template>
 
 <script setup lang="ts">
+import { capability } from '~/middleware/capability';
 import { ref, computed, onMounted } from 'vue';
 import { useI18n } from 'vue-i18n';
 import type { MonitorSchedule } from '@enginer/api-client';
 
 definePageMeta({
-  middleware: 'auth',
+  middleware: ['auth', capability('monitor.manage')],
 });
 
 const { t } = useI18n();

@@ -55,7 +55,10 @@ impl SchemaDraft {
     }
 
     /// Add a type definition.
-    pub fn add_type(&mut self, ty: enginer_domain::schema::TypeDefinition) -> Result<(), SchemaDraftError> {
+    pub fn add_type(
+        &mut self,
+        ty: enginer_domain::schema::TypeDefinition,
+    ) -> Result<(), SchemaDraftError> {
         if self.state != SchemaRevisionState::Draft {
             return Err(SchemaDraftError::StateInvalid {
                 message: "draft is not editable".to_string(),
@@ -80,7 +83,11 @@ impl SchemaDraft {
                 message: "draft is not editable".to_string(),
             });
         }
-        if self.predicates.iter().any(|p| p.predicate_id == pred.predicate_id) {
+        if self
+            .predicates
+            .iter()
+            .any(|p| p.predicate_id == pred.predicate_id)
+        {
             return Err(SchemaDraftError::Validation {
                 message: format!("duplicate predicate_id {}", pred.predicate_id),
             });
@@ -108,7 +115,9 @@ impl SchemaDraft {
     pub fn publish(&mut self) -> Result<SchemaRevision, SchemaDraftError> {
         if !matches!(
             self.state,
-            SchemaRevisionState::Validating | SchemaRevisionState::ImpactReady | SchemaRevisionState::Approved
+            SchemaRevisionState::Validating
+                | SchemaRevisionState::ImpactReady
+                | SchemaRevisionState::Approved
         ) {
             return Err(SchemaDraftError::StateInvalid {
                 message: format!("cannot publish from {:?}", self.state),
@@ -138,14 +147,20 @@ impl SchemaDraft {
             if let Some(dt) = p.domain_type_id {
                 if !known.contains(&dt) {
                     return Err(SchemaDraftError::Validation {
-                        message: format!("predicate {} domain type {} not defined", p.predicate_id, dt),
+                        message: format!(
+                            "predicate {} domain type {} not defined",
+                            p.predicate_id, dt
+                        ),
                     });
                 }
             }
             if let Some(rt) = p.range_type_id {
                 if !known.contains(&rt) {
                     return Err(SchemaDraftError::Validation {
-                        message: format!("predicate {} range type {} not defined", p.predicate_id, rt),
+                        message: format!(
+                            "predicate {} range type {} not defined",
+                            p.predicate_id, rt
+                        ),
                     });
                 }
             }
@@ -183,7 +198,9 @@ fn compute_content_hash(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use enginer_domain::schema::{EntityClass, PredicateDefinition, PredicateDirection, TypeDefinition};
+    use enginer_domain::schema::{
+        EntityClass, PredicateDefinition, PredicateDirection, TypeDefinition,
+    };
     use enginer_domain::{PredicateId, TypeId};
 
     #[test]

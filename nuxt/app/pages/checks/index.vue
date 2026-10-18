@@ -138,7 +138,10 @@
           </template>
           <div class="space-y-4">
             <UFormField :label="t('checks.form.entity')">
-              <UInput v-model="newCheck.target_entity_id" placeholder="ent-..." class="w-full" />
+              <EntityAutocomplete
+                v-model="newCheck.target_entity_id"
+                :placeholder="t('entity.search_placeholder')"
+              />
             </UFormField>
             <UFormField :label="t('checks.form.kind')">
               <USelect
@@ -156,7 +159,11 @@
           <template #footer>
             <div class="flex justify-end gap-2">
               <UButton variant="outline" @click="showNewCheckDialog = false">{{ t('common.cancel') }}</UButton>
-              <UButton @click="submitNewCheck" :loading="submitting">{{ t('common.submit') }}</UButton>
+              <UButton
+                @click="submitNewCheck"
+                :loading="submitting"
+                :disabled="!newCheck.target_entity_id"
+              >{{ t('common.submit') }}</UButton>
             </div>
           </template>
         </UCard>
@@ -166,24 +173,26 @@
 </template>
 
 <script setup lang="ts">
+import { capability } from '~/middleware/capability';
 import { ref, computed, reactive, onMounted } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useApi } from '~/composables/useApi';
-import type { CheckResponse, CheckKind, CheckStatus } from '@enginer/api-client';
+import type { CheckResponse, RiskLevel } from '@enginer/api-client';
 
 definePageMeta({
-  middleware: 'auth',
+  middleware: ['auth', capability('check.view')],
 });
 
 const { t } = useI18n();
 const api = useApi();
 const toast = useToast();
 
-interface CheckRow extends CheckResponse {
+interface CheckRow extends Omit<CheckResponse, 'created_at' | 'risk_level'> {
   target_entity_id: string;
   check_kind: string;
+  created_at: string;
   final_score?: number;
-  risk_level?: string;
+  risk_level?: RiskLevel;
 }
 
 const checks = ref<CheckRow[]>([]);
@@ -235,7 +244,9 @@ const runningCount = computed(() => checks.value.filter((c) => c.status === 'run
 const completedCount = computed(() => checks.value.filter((c) => c.status === 'completed').length);
 const failedCount = computed(() => checks.value.filter((c) => c.status === 'failed').length);
 
-function statusColor(status: string): string {
+type BadgeColor = 'success' | 'info' | 'error' | 'neutral';
+
+function statusColor(status: string): BadgeColor {
   switch (status) {
     case 'completed': return 'success';
     case 'running': return 'info';

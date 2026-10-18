@@ -148,7 +148,7 @@ export class ApiClient {
       const text = await response.text().catch(() => '');
       throw new ApiClientError(
         {
-          code: 'download_failed',
+          code: 'internal_error',
           message_key: 'errors.download_failed',
           request_id: response.headers.get('X-Request-Id') ?? '',
           message: text || `HTTP ${response.status}`,
@@ -280,7 +280,10 @@ export class ApiClient {
     if (!response.ok) {
       // Error body may be wrapped (`{ error: { code, ... } }` per docs/06)
       // or unwrapped (`{ code, ... }`).
-      const errorBody = body?.error ?? body;
+      const responseObject = body && typeof body === 'object'
+        ? body as Record<string, unknown>
+        : undefined;
+      const errorBody = responseObject?.error ?? body;
       const error = errorBody as ApiError | undefined;
       if (error && error.code && error.request_id) {
         throw new ApiClientError(error, response.status);

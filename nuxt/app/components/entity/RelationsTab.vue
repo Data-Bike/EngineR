@@ -1,13 +1,27 @@
 <template>
   <div class="space-y-6">
     <!-- Top-level add button -->
-    <div class="flex justify-end gap-2">
+    <div class="flex flex-wrap justify-between gap-2">
+      <div class="flex gap-1" role="group" :aria-label="t('entity.tabs.relations')">
+        <UButton
+          size="sm"
+          :variant="showHistorical ? 'ghost' : 'solid'"
+          @click="setHistorical(false)"
+        >{{ t('entity.relations.effective') }}</UButton>
+        <UButton
+          size="sm"
+          :variant="showHistorical ? 'solid' : 'ghost'"
+          @click="setHistorical(true)"
+        >{{ t('entity.relations.historical') }}</UButton>
+      </div>
+      <div class="flex gap-2">
       <UButton size="sm" variant="outline" icon="i-lucide-plus" @click="openAddDialog">
         {{ t('entity.relations.add') }}
       </UButton>
       <UButton size="sm" variant="ghost" icon="i-lucide-link" @click="openLinkDialog">
         {{ t('entity.relations.link_existing') }}
       </UButton>
+      </div>
     </div>
 
     <!-- Sections by relation predicate -->
@@ -183,26 +197,25 @@ interface RelationSection {
 }
 
 const relationSections = ref<RelationSection[]>([]);
+const showHistorical = ref(false);
+const schemaPredicates = ref<Array<{
+  alias: string;
+  label: string;
+  domain_type: string;
+  range_type: string;
+  is_edge: boolean;
+}>>([]);
+const schemaTypes = ref<Array<{ id: string; display_name: string }>>([]);
 
 // Available predicates for this entity type
-const predicateOptions = computed(() => [
-  { label: t('entity.relations.predicate.managed_by'), value: 'managed_by' },
-  { label: t('entity.relations.predicate.owned_by'), value: 'owned_by' },
-  { label: t('entity.relations.predicate.has_address'), value: 'has_address' },
-  { label: t('entity.relations.predicate.has_contact'), value: 'has_contact' },
-  { label: t('entity.relations.predicate.has_document'), value: 'has_document' },
-  { label: t('entity.relations.predicate.member_of'), value: 'member_of' },
-  { label: t('entity.relations.predicate.subsidiary_of'), value: 'subsidiary_of' },
-  { label: t('entity.relations.predicate.beneficiary_of'), value: 'beneficiary_of' },
-]);
+const predicateOptions = computed(() => schemaPredicates.value
+  .filter((predicate) => predicate.is_edge && predicate.domain_type === props.typeId)
+  .map((predicate) => ({ label: predicate.label, value: predicate.alias })));
 
-const typeOptions = computed(() => [
-  { label: t('types.person', 'Физическое лицо'), value: 'person' },
-  { label: t('types.legal_entity', 'Юридическое лицо'), value: 'legal_entity' },
-  { label: t('types.address', 'Адрес'), value: 'address' },
-  { label: t('types.contact_point', 'Контактные данные'), value: 'contact_point' },
-  { label: t('types.document', 'Документ'), value: 'document' },
-]);
+const typeOptions = computed(() => schemaTypes.value.map((schemaType) => ({
+  label: schemaType.display_name,
+  value: schemaType.id,
+})));
 
 // Dialog state
 const showAddDialog = ref(false);
@@ -220,9 +233,10 @@ const newRelation = ref({
 });
 
 function openAddDialog() {
+  const defaultPredicate = schemaPredicates.value.find((predicate) => predicate.is_edge && predicate.domain_type === props.typeId);
   newRelation.value = {
-    predicate: 'managed_by',
-    targetType: 'person',
+    predicate: defaultPredicate?.alias ?? '',
+    targetType: defaultPredicate?.range_type ?? '',
     targetName: '',
     validFrom: new Date().toISOString().split('T')[0],
   };
@@ -230,9 +244,10 @@ function openAddDialog() {
 }
 
 function openLinkDialog() {
+  const defaultPredicate = schemaPredicates.value.find((predicate) => predicate.is_edge && predicate.domain_type === props.typeId);
   newRelation.value = {
-    predicate: 'managed_by',
-    targetType: 'person',
+    predicate: defaultPredicate?.alias ?? '',
+    targetType: defaultPredicate?.range_type ?? '',
     targetName: '',
     validFrom: new Date().toISOString().split('T')[0],
   };
@@ -336,8 +351,10 @@ interface ApiRelation {
 
 async function fetchRelations() {
   try {
-    const res = await api.entities.getRelations(props.entityId);
-    const relations = res.data ?? [];
+    const res = await api.entities.getRelations(props.entityId, {
+      as_of: showHistorical.value ? undefined : new Date().toISOString().slice(0, 10),
+    });
+    const relations = (res.data ?? []) as ApiRelation[];
     const sectionMap = new Map<string, RelationSection>();
     for (const rel of relations) {
       const predicateId = rel.predicate_id ?? rel.predicate ?? 'unknown';
@@ -376,5 +393,45 @@ async function fetchRelations() {
   }
 }
 
-onMounted(fetchRelations);
+function setHistorical(value: boolean) {
+  if (showHistorical.value === value) return;
+  showHistorical.value = value;
+  fetchRelations();
+}
+
+async function fetchRelationMetadata() {
+  try {
+    const [predicatesResponse, typesResponse] = await Promise.all([
+      api.schemas.listPredicates(),
+      api.schemas.listTypes(),
+    ]);
+    schemaPredicates.value = (predicatesResponse.data ?? []).map((predicate: any) => ({
+      alias: predicate.alias ?? predicate.predicate_id ?? '',
+      label: predicate.label ?? predicate.display_name ?? predicate.alias ?? '',
+      domain_type: predicate.domain_type ?? predicate.domain ?? '',
+      range_type: predicate.range_type ?? predicate.range ?? '',
+      is_edge: predicate.is_edge ?? false,
+    }));
+    schemaTypes.value = (typesResponse.data ?? []).map((schemaType: any) => ({
+      id: schemaType.id ?? schemaType.type_id ?? '',
+      display_name: schemaType.display_name ?? schemaType.id ?? '',
+    }));
+  } catch (cause: unknown) {
+    toast.add({
+      title: t('common.error'),
+      description: cause instanceof Error ? cause.message : String(cause),
+      color: 'error',
+    });
+  }
+}
+
+watch(() => newRelation.value.predicate, (alias) => {
+  const predicate = schemaPredicates.value.find((item) => item.alias === alias);
+  if (predicate) newRelation.value.targetType = predicate.range_type;
+});
+
+onMounted(() => {
+  fetchRelationMetadata();
+  fetchRelations();
+});
 </script>

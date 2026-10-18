@@ -171,7 +171,10 @@ impl Task {
     /// Cancel the task.
     pub fn cancel(&mut self) -> Result<(), String> {
         if self.status.is_terminal() {
-            return Err(format!("cannot cancel task in terminal status {:?}", self.status));
+            return Err(format!(
+                "cannot cancel task in terminal status {:?}",
+                self.status
+            ));
         }
         self.status = TaskStatus::Cancelled;
         Ok(())

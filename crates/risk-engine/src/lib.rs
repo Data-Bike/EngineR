@@ -9,20 +9,18 @@
 
 #![forbid(unsafe_code)]
 
-pub mod ast;
 pub mod assessment;
+pub mod ast;
 pub mod criterion;
 pub mod decision;
 pub mod error;
 pub mod factor;
 pub mod score;
 
+pub use assessment::{Assessment, AssessmentStatus, ComponentScore, Uncertainty};
 pub use ast::{
-    evaluate, AstExpr, BinaryOp, ComparisonOp, EvaluationContext, Expr, ExprKind,
-    LogicalOp, ObservationContext, UnaryOp, Value,
-};
-pub use assessment::{
-    Assessment, AssessmentStatus, ComponentScore, Uncertainty,
+    evaluate, AstExpr, BinaryOp, ComparisonOp, EvaluationContext, Expr, ExprKind, LogicalOp,
+    ObservationContext, UnaryOp, Value,
 };
 pub use criterion::{Criterion, CriterionSeverity, CriterionStatus, EvidenceSelector};
 pub use decision::{Decision, DecisionKind, DecisionReason};

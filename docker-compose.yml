@@ -38,6 +38,10 @@ services:
     environment:
       ENGINER_CONFIG: /app/config/enginer.docker.toml
       ENGINER_DATABASE_URL: postgres://enginer_app:enginer_app@postgres:5432/enginer
+      # Demo profile: imports the demo tenant/personas/policies at startup.
+      # Set to "false" for a clean production deployment.
+      ENGINER_SEED_DEMO: "true"
+      ENGINER_DEMO_PASSWORD: "enginer-demo"
       ROCKET_PORT: "8010"
       ROCKET_ADDRESS: "0.0.0.0"
       ROCKET_SECRET_KEY: "XwAPzDh3+kiZh+r+bbKm9qQtBo6WD1c8CS9LQP/7EQo="
@@ -57,6 +61,24 @@ services:
       ENGINER_DATABASE_URL: postgres://enginer_worker:enginer_worker@postgres:5432/enginer
     entrypoint: ["tini", "--"]
     command: ["/app/entrypoint-worker.sh"]
+    restart: unless-stopped
+
+  mcp:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: enginer-mcp
+    depends_on:
+      - api
+    environment:
+      # EngineR API base inside the compose network.
+      ENGINER_API_URL: http://enginer-api:8010
+      ROCKET_PORT: "8020"
+      ROCKET_ADDRESS: "0.0.0.0"
+    entrypoint: ["tini", "--"]
+    command: ["/app/enginer-mcp"]
+    ports:
+      - "8020:8020"
     restart: unless-stopped
 
   web:

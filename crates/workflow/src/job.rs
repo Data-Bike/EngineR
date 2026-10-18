@@ -145,7 +145,11 @@ impl Job {
     }
 
     /// Lease the job to a worker.
-    pub fn lease(&mut self, worker_id: &str, lease_duration: chrono::Duration) -> Result<(), String> {
+    pub fn lease(
+        &mut self,
+        worker_id: &str,
+        lease_duration: chrono::Duration,
+    ) -> Result<(), String> {
         if self.state != JobState::Queued && self.state != JobState::Leased {
             return Err(format!("cannot lease job in state {:?}", self.state));
         }
@@ -232,7 +236,10 @@ impl Job {
     /// Complete with partial success.
     pub fn partially_succeed(&mut self, result: serde_json::Value) -> Result<(), String> {
         if self.state != JobState::Running {
-            return Err(format!("cannot partially_succeed from state {:?}", self.state));
+            return Err(format!(
+                "cannot partially_succeed from state {:?}",
+                self.state
+            ));
         }
         self.state = JobState::PartiallySucceeded;
         self.status.result = Some(result);
@@ -256,7 +263,10 @@ impl Job {
     /// Cancel the job (cooperative, docs/13 §4).
     pub fn cancel(&mut self) -> Result<(), String> {
         if !self.state.is_cancellable() {
-            return Err(format!("cannot cancel job in terminal state {:?}", self.state));
+            return Err(format!(
+                "cannot cancel job in terminal state {:?}",
+                self.state
+            ));
         }
         if self.status.irreversible_step_started {
             return Err("cannot_cancel_after: irreversible step has started".to_string());

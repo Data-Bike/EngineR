@@ -74,12 +74,14 @@
 </template>
 
 <script setup lang="ts">
+import { capability } from '~/middleware/capability';
 import { ref, reactive, computed, onMounted } from 'vue';
 import { useI18n } from 'vue-i18n';
 import StatCard from '~/components/common/StatCard.vue';
 import RiskLevelBadge from '~/components/entity/RiskLevelBadge.vue';
+import type { RiskLevel } from '@enginer/api-client';
 
-definePageMeta({ middleware: 'auth' });
+definePageMeta({ middleware: ['auth', capability('risk.view')] });
 
 const { t } = useI18n();
 const toast = useToast();
@@ -99,7 +101,7 @@ interface AssessmentRow {
   target_entity_id: string;
   target_display_name: string;
   score: number;
-  risk_level: string;
+  risk_level: RiskLevel;
   decision: string;
   status: string;
   created_at: string;
@@ -128,7 +130,9 @@ const filteredAssessments = computed(() => {
   return assessments.value.filter((a) => a.status === filters.status);
 });
 
-function decisionColor(decision: string): string {
+type BadgeColor = 'success' | 'error' | 'warning' | 'neutral';
+
+function decisionColor(decision: string): BadgeColor {
   switch (decision) {
     case 'approve': return 'success';
     case 'reject': return 'error';

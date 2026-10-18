@@ -49,8 +49,6 @@ async fn policies_revision() -> Json<serde_json::Value> {
 }
 
 /// Convenience constructor for the local client used by the API app.
-pub fn local_client(
-    snapshot: Arc<dyn crate::client::SnapshotProvider>,
-) -> Arc<dyn SecurityClient> {
+pub fn local_client(snapshot: Arc<dyn crate::client::SnapshotProvider>) -> Arc<dyn SecurityClient> {
     Arc::new(crate::client::LocalSecurityClient::new(snapshot))
 }

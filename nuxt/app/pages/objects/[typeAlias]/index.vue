@@ -43,8 +43,8 @@
     <div v-if="showAdvanced" class="border border-[var(--ui-border)] rounded-md p-4 space-y-3">
       <p class="font-medium text-sm">{{ t('entity.advanced_search') }}</p>
       <div class="grid grid-cols-1 md:grid-cols-3 gap-3">
-        <UFormField v-for="col in searchableColumns" :key="col.alias" :label="col.label_key ? t(col.label_key) : col.alias">
-          <UInput v-model="advancedFilters[col.alias]" :placeholder="col.alias" class="w-full" />
+        <UFormField v-for="col in searchableColumns" :key="col.alias" :label="columnLabel(col)">
+          <UInput v-model="advancedFilters[col.alias]" :placeholder="columnLabel(col)" class="w-full" />
         </UFormField>
       </div>
       <div class="flex justify-end gap-2">
@@ -75,7 +75,7 @@
               :key="col.alias"
               class="py-2 px-3 font-medium text-[var(--ui-text-muted)]"
             >
-              {{ col.label_key ? t(col.label_key) : col.alias }}
+              {{ columnLabel(col) }}
             </th>
           </tr>
         </thead>
@@ -108,11 +108,13 @@
 </template>
 
 <script setup lang="ts">
+import { capability } from '~/middleware/capability';
+import type { FieldRef, SystemField } from '@enginer/api-client';
 definePageMeta({
-  middleware: 'auth',
+  middleware: ['auth', capability('entity.read')],
 });
 
-const { t } = useI18n();
+const { t, te } = useI18n();
 const route = useRoute();
 const toast = useToast();
 const api = useApi();
@@ -139,6 +141,29 @@ const columns = ref<{ alias: string; label_key?: string }[]>([
 const cursor = ref<string | undefined>();
 
 const searchableColumns = computed(() => columns.value.filter(c => c.alias !== 'public_id' && c.alias !== 'status'));
+
+function columnLabel(column: { alias: string; label_key?: string }): string {
+  if (column.label_key && te(column.label_key)) return t(column.label_key);
+  // System fields have dedicated i18n keys rather than raw machine names.
+  const systemKeys: Record<string, string> = {
+    display_name: 'fields.common.name',
+    status: 'requests.col.status',
+    created_at: 'requests.col.created',
+    type_id: 'fields.common.type',
+  };
+  const key = systemKeys[column.alias];
+  if (key && te(key)) return t(key);
+  if (column.alias === 'public_id' || column.alias === 'entity_id') return 'ID';
+  // Unknown field: humanize the alias instead of showing a raw key.
+  return column.alias.replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase());
+}
+
+function queryField(alias: string): FieldRef {
+  const systemFields: SystemField[] = ['public_id', 'entity_id', 'display_name', 'type_id', 'created_at', 'status', 'revision'];
+  return systemFields.includes(alias as SystemField)
+    ? { system: alias as SystemField }
+    : { predicate_id: alias };
+}
 
 function clearAdvanced() {
   advancedFilters.value = {};
@@ -170,7 +195,7 @@ async function doSearch() {
     }
     const res = await api.entities.query({
       from: { type_id: typeAlias.value ?? 'unknown', alias: 'e' },
-      select: columns.value.map((col) => ({ field: { system: col.alias }, alias: col.alias })),
+      select: columns.value.map((col) => ({ field: queryField(col.alias), alias: col.alias })),
       search: searchQuery.value || undefined,
       filters: Object.keys(filters).length > 0 ? filters : undefined,
       sort: [{ field: { system: 'display_name' }, direction: 'asc' }],
@@ -193,7 +218,7 @@ async function loadMore() {
   try {
     const res = await api.entities.query({
       from: { type_id: typeAlias.value ?? 'unknown', alias: 'e' },
-      select: columns.value.map((col) => ({ field: { system: col.alias }, alias: col.alias })),
+      select: columns.value.map((col) => ({ field: queryField(col.alias), alias: col.alias })),
       sort: [{ field: { system: 'display_name' }, direction: 'asc' }],
       page: { size: 10, after: cursor.value },
     });

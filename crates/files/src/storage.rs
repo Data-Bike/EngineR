@@ -142,14 +142,16 @@ impl ObjectMetadata {
     /// Check if the object is expired.
     pub fn is_expired(&self) -> bool {
         !self.legal_hold
-            && self.expires_at
+            && self
+                .expires_at
                 .map(|exp| chrono::Utc::now() > exp)
                 .unwrap_or(false)
     }
 
     /// Add user metadata.
     pub fn add_metadata(&mut self, key: &str, value: &str) {
-        self.user_metadata.push((key.to_string(), value.to_string()));
+        self.user_metadata
+            .push((key.to_string(), value.to_string()));
     }
 }
 

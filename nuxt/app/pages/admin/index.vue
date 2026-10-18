@@ -46,6 +46,17 @@
           </div>
         </UCard>
       </NuxtLink>
+      <NuxtLink v-if="hasCapability('users.manage') || hasCapability('user.read')" to="/admin/users" class="block" data-testid="admin-users-card">
+        <UCard class="hover:border-[var(--ui-border-muted)]">
+          <div class="flex items-center gap-3">
+            <UIcon name="i-lucide-users" class="text-2xl text-[var(--ui-primary)]" />
+            <div>
+              <p class="font-medium">{{ t('users.title') }}</p>
+              <p class="text-sm text-[var(--ui-text-muted)]">{{ t('users.desc') }}</p>
+            </div>
+          </div>
+        </UCard>
+      </NuxtLink>
     </div>
   </div>
 </template>
@@ -54,8 +65,10 @@
 import { capability } from '~/middleware/capability';
 
 definePageMeta({
-  middleware: ['auth', capability('admin.view')],
+  middleware: ['auth', capability('admin.pages.access')],
 });
 
 const { t } = useI18n();
+const store = useAuthStore();
+const hasCapability = (cap: string) => store.hasCapability(cap);
 </script>

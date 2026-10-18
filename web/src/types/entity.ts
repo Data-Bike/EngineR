@@ -110,8 +110,13 @@ export interface Entity {
   type_id: string;
   entity_class: EntityClass;
   revision: number;
+  /** Human-readable title resolved from the type's display fields. */
+  display_name?: string;
   status: EntityStatus;
   created_at: string;
+  updated_at?: string;
+  /** Current materialized predicate values used by metadata-driven forms. */
+  fields?: Record<string, unknown>;
   created_by?: string;
   retired_at?: string;
   retired_by?: string;
@@ -153,6 +158,38 @@ export interface CreateEntityResponse {
   entity_id: number;
   revision: number;
   outcome: DedupOutcome;
+}
+
+/** Replace or add materialized predicate values on an entity revision. */
+export interface UpdateEntityBody {
+  revision: number;
+  fields: StatementInput[];
+}
+
+/** Node returned by progressive graph expansion. */
+export interface EntityGraphNode {
+  id: string;
+  label: string;
+  type_label: string;
+  type_id: string;
+  status: EntityStatus;
+  has_children: boolean;
+  cycle: boolean;
+}
+
+/** Edge returned by progressive graph expansion. */
+export interface EntityGraphEdge {
+  id: string;
+  source: string;
+  target: string;
+  predicate: string;
+  label: string;
+  cycle: boolean;
+}
+
+export interface EntityGraphResponse {
+  nodes: EntityGraphNode[];
+  edges: EntityGraphEdge[];
 }
 
 /** Retire entity request body. */

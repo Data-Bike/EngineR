@@ -17,8 +17,8 @@ COPY Cargo.toml Cargo.lock ./
 COPY crates/ ./crates/
 COPY apps/ ./apps/
 
-# Build the API binary (and worker as a side effect of workspace compilation).
-RUN cargo build --release --bin enginer-api --bin enginer-worker
+# Build the API, worker and MCP binaries.
+RUN cargo build --release --bin enginer-api --bin enginer-worker --bin enginer-mcp
 
 # --- Runtime stage ---
 FROM debian:bookworm-slim AS runtime
@@ -32,6 +32,7 @@ WORKDIR /app
 # Copy binaries
 COPY --from=builder /build/target/release/enginer-api /app/enginer-api
 COPY --from=builder /build/target/release/enginer-worker /app/enginer-worker
+COPY --from=builder /build/target/release/enginer-mcp /app/enginer-mcp
 
 # Copy migrations + config
 COPY migrations/ /app/migrations/

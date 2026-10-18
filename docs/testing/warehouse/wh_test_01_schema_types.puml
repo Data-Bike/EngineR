@@ -1,0 +1,93 @@
+@startuml wh_test_01_schema_types
+' ============================================================
+' Склад ТЕСТ — диаграмма типов сущностей и типов связей
+' (ревизия схемы, опубликованная через MCP: draft→update→
+'  validate→impact→publish)
+' ============================================================
+skinparam linetype ortho
+skinparam classFontSize 12
+title Склад ТЕСТ — типы и типы связей
+
+package "Складская область (wh_*)" {
+
+  class wh_warehouse as "wh_warehouse\n«Склад»" {
+    + wh_code : text [identity, required]
+    + name : text [required]
+    + address : text
+    + wh_capacity_m2 : decimal
+  }
+
+  class wh_zone as "wh_zone\n«Зона склада»" {
+    + wh_zone_code : text [identity, required]
+    + wh_zone_kind : text  // приёмка | хранение | отгрузка | холод
+    + wh_capacity_m2 : decimal
+  }
+
+  class wh_product as "wh_product\n«Товар (SKU)»" {
+    + wh_sku : text [identity, required]
+    + name : text [required]
+    + wh_unit : text
+    + wh_category : text
+  }
+
+  class wh_stock as "wh_stock\n«Складской остаток»" {
+    + wh_qty : decimal [required]
+    + wh_batch : text
+  }
+
+  class wh_inbound as "wh_inbound\n«Приходная накладная»" {
+    + wh_doc_no : text [identity, required]
+    + wh_doc_date : date
+    + status_note : text
+  }
+
+  class wh_outbound as "wh_outbound\n«Расходная накладная»" {
+    + wh_doc_no : text [identity, required]
+    + wh_doc_date : date
+    + status_note : text
+  }
+
+  class wh_inventory as "wh_inventory\n«Инвентаризация»" {
+    + wh_inv_no : text [identity, required]
+    + wh_doc_date : date
+    + wh_diff_qty : decimal
+  }
+}
+
+package "Переиспользуемые типы каталога" {
+  class legal_entity as "legal_entity\n«Юрлицо»" {
+    + name : text [required]
+    + inn : text [identity]
+    + ogrn : text [identity]
+  }
+  class person as "person\n«Физлицо»" {
+    + full_name : text [identity, required]
+    + inn : text [identity]
+  }
+}
+
+' --- типы связей (edge-предикаты) ---
+wh_zone -right-> wh_warehouse : wh_located_in\n«расположена в»
+wh_stock --> wh_product : wh_stock_product\n«остаток товара»
+wh_stock --> wh_zone : wh_stock_zone\n«хранится в зоне»
+wh_product --> legal_entity : wh_supplied_by\n«поставляется»
+wh_inbound --> legal_entity : wh_inbound_from\n«поставщик»
+wh_inbound --> wh_warehouse : wh_inbound_to\n«на склад»
+wh_inbound --> wh_product : wh_inbound_item\n«позиция прихода»
+wh_outbound --> legal_entity : wh_outbound_to\n«получатель»
+wh_outbound --> wh_warehouse : wh_outbound_from\n«со склада»
+wh_outbound --> wh_product : wh_outbound_item\n«позиция расхода»
+wh_inventory --> wh_warehouse : wh_counted_in\n«проведена на складе»
+person --> wh_warehouse : wh_keeper\n«кладовщик»
+
+note right of wh_stock
+  Остаток — связующая сущность:
+  товар × зона × количество × партия
+end note
+
+note bottom of wh_inventory
+  Процессный объект: к нему привязываются
+  check_execution workflow, задачи пересчёта,
+  документ-акт, факторы и оценка риска
+end note
+@enduml

@@ -47,16 +47,18 @@
 </template>
 
 <script setup lang="ts">
+import { capability } from '~/middleware/capability';
 import { ref, computed, onMounted } from 'vue';
 import { useI18n } from 'vue-i18n';
 import type {
   ViewDefinition,
   FormSubmission,
   FieldValidationError,
+  QueryBody,
 } from '@enginer/api-client';
 
 definePageMeta({
-  middleware: 'auth',
+  middleware: ['auth', capability('entity.create')],
 });
 
 const { t } = useI18n();
@@ -79,6 +81,7 @@ const pendingSubmission = ref<FormSubmission | null>(null);
 
 interface DuplicateMatch {
   public_id: string;
+  display_name?: string;
   type_id: string;
   match_type: 'exact' | 'fuzzy';
   score?: number;
@@ -150,7 +153,7 @@ async function checkDuplicates(body: FormSubmission): Promise<DuplicateMatch[]> 
 
   try {
     // Query entities of the same type
-    const queryBody = {
+    const queryBody: QueryBody = {
       from: { type_id: typeAlias.value, alias: 'e' },
       select: [
         { field: { system: 'public_id' }, alias: 'public_id' },
@@ -169,12 +172,32 @@ async function checkDuplicates(body: FormSubmission): Promise<DuplicateMatch[]> 
     };
     const res = await api.entities.query(queryBody);
     const rows = res.data?.rows ?? [];
-    return rows.map((r) => ({
-      public_id: r.public_id as string,
-      type_id: typeAlias.value,
-      match_type: 'exact' as const,
-      explanation: identityFields.map((f) => f.predicate_id).join(', '),
-    }));
+    const strongAliases = new Set(['inn', 'has_tax_id', 'has_ogrn', 'ogrn', 'snils', 'snilz', 'document_number']);
+    // Field label lookup from the loaded view so the explanation shows
+    // localized names instead of raw predicate aliases.
+    const labelOf = (predicateId: string): string => {
+      for (const section of view.value?.sections ?? []) {
+        const field = section.fields.find((f) => f.predicate_id === predicateId || f.alias === predicateId);
+        if (field) return t(field.label_key);
+      }
+      return predicateId;
+    };
+    return rows.map((r) => {
+      const matchedFields = identityFields.filter((field) => (
+        String(r[field.predicate_id] ?? '').trim().toLowerCase()
+        === String(field.value).trim().toLowerCase()
+      ));
+      const exact = matchedFields.some((field) => strongAliases.has(field.predicate_id))
+        || matchedFields.length === identityFields.length;
+      return {
+        public_id: r.public_id as string,
+        display_name: r.display_name as string | undefined,
+        type_id: typeAlias.value,
+        match_type: exact ? 'exact' as const : 'fuzzy' as const,
+        score: exact ? 1 : 0.75,
+        explanation: matchedFields.map((field) => labelOf(field.predicate_id)).join(', '),
+      };
+    });
   } catch {
     // On error, don't block creation
     return [];
@@ -202,7 +225,12 @@ async function createEntity(body: FormSubmission) {
     identity_mode: body.identity_mode,
     statements,
   });
-  toast.add({ title: t('entity.create_success'), color: 'success' });
+  toast.add({
+    title: res.data.outcome === 'deduplicated'
+      ? t('entity.duplicate.open_existing')
+      : t('entity.create_success'),
+    color: res.data.outcome === 'deduplicated' ? 'warning' : 'success',
+  });
   // Navigate to the created entity card
   await navigateTo(`/entities/${res.data.public_id}`);
 }

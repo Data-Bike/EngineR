@@ -20,6 +20,7 @@ type BadgeColor = 'primary' | 'secondary' | 'success' | 'info' | 'warning' | 'er
 
 const color = computed<BadgeColor>(() => {
   const colors: Record<RiskLevel, BadgeColor> = {
+    minimal: 'neutral',
     low: 'success',
     medium: 'warning',
     high: 'error',
@@ -30,6 +31,7 @@ const color = computed<BadgeColor>(() => {
 
 const icon = computed(() => {
   const icons: Record<RiskLevel, string> = {
+    minimal: 'i-lucide-shield-check',
     low: 'i-lucide-check',
     medium: 'i-lucide-alert-circle',
     high: 'i-lucide-alert-triangle',

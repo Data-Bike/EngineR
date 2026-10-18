@@ -1,0 +1,72 @@
+@startuml enginer_test_objects
+' =============================================================================
+' EngineR — Диаграмма тестовых объектов (seed/demodata) и связей между ними
+' Источник: core.entity + core.statement (status=active), тенант
+' 00000000-0000-0000-0000-000000000002.
+' public_id сокращены до последних 12 hex для читаемости — полные значения
+' приведены в документах.
+' =============================================================================
+skinparam classAttributeIconSize 0
+skinparam shadowing false
+title Тестовые объекты и их связи — EngineR demo tenant
+
+object "person\n«Иванов Иван Иванович»\npid …9000-…0001" as p1 #LightBlue {
+  inn = 770708389301
+  birth_date = 1985-04-12
+}
+object "person\n«Петрова Мария Сергеевна»\npid …9000-…0002" as p2 #LightBlue {
+  inn = 771234567890
+  email = m.petrova@example.ru
+}
+object "legal_entity\n«ООО Ромашка»\npid …9000-…0003" as le1 #LightBlue
+object "legal_entity\n«АО Вектор»\npid …9000-…0004" as le2 #LightBlue
+object "request\n«Заявка на кредит №1024»\npid …9000-…0005" as req1 #LightYellow
+object "check\n«KYC-проверка ООО Ромашка»\npid …9000-…0006" as chk1 #LightYellow
+
+p1 --> le1 : works_for «Работает в»
+p2 --> le2 : works_for «Работает в»
+req1 --> le1 : for_entity «По объекту»
+chk1 --> le1 : for_entity «По объекту»
+
+package "Принципалы (учётные записи, sec.principal)" #WhiteSmoke {
+  object "admin\nАдминистратор" as u_admin
+  object "security_officer\nОфицер безопасности" as u_so
+  object "manager\nМенеджер" as u_mgr
+  object "risk_analyst\nРиск-аналитик" as u_ra
+  object "mcp-admin\n(service account)" as sa_adm #MistyRose
+  object "mcp-agent\n(service account)" as sa_agent #MistyRose
+}
+
+package "Роли (permission groups)" #WhiteSmoke {
+  object "admins\ncapability (32 rules)" as g_adm
+  object "managers\ncapability (20)" as g_mgr
+  object "analysts\ncapability (8)" as g_an
+  object "security\ncapability (7)" as g_sec
+  object "all_data\ndata (1)" as g_data
+  object "superadmin\ncapability (special)" as g_sa
+  object "superuser\ncapability (special)" as g_su
+}
+
+u_admin --> g_adm
+u_admin --> g_data
+u_admin --> g_sa
+u_so --> g_sec
+u_so --> g_data
+u_mgr --> g_mgr
+u_mgr --> g_data
+u_ra --> g_an
+u_ra --> g_data
+sa_adm --> g_adm
+sa_adm --> g_data
+sa_agent --> g_an
+
+legend bottom
+  <b>Демо-связи:</b>
+  works_for × 2, for_entity × 2 (seed).
+  Принципалы и членства — sec.principal +
+  sec.principal_group_membership.
+  Сервисные учётки (is_service_account=true)
+  аутентифицируются только Bearer-токенами
+  sec.api_token и получают права через те же роли.
+endlegend
+@enduml

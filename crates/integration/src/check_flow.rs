@@ -20,12 +20,11 @@ use crate::ports::{
     WorkflowPort,
 };
 use enginer_connectors::{MappingResult, SourceObservation};
-use enginer_security::{AuditEntry, AuditKind};
 use enginer_risk_engine::{
-    Assessment, Criterion, CriterionSeverity, Decision, DecisionKind,
-    EvaluationContext, Factor, ObservationContext, RiskLevel, ScoreConfig,
-    ScoreResult, Uncertainty, WeightedAggregator,
+    Assessment, Criterion, CriterionSeverity, Decision, DecisionKind, EvaluationContext, Factor,
+    ObservationContext, RiskLevel, ScoreConfig, ScoreResult, Uncertainty, WeightedAggregator,
 };
+use enginer_security::{AuditEntry, AuditKind};
 use enginer_workflow::{Task, TaskPriority};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -321,10 +320,7 @@ impl CheckFlowOrchestrator {
     }
 
     /// Step 4: Evaluate each criterion and detect factors.
-    fn step_evaluate_and_detect(
-        &self,
-        ctx: &mut CheckFlowContext,
-    ) -> IntegrationResult<()> {
+    fn step_evaluate_and_detect(&self, ctx: &mut CheckFlowContext) -> IntegrationResult<()> {
         ctx.transition(CheckFlowState::FactorDetection);
 
         // Build evaluation context from observations
@@ -335,8 +331,7 @@ impl CheckFlowOrchestrator {
         let mut warnings: Vec<String> = Vec::new();
 
         for criterion in &ctx.criteria {
-            let result =
-                enginer_risk_engine::evaluate(&criterion.expression, &eval_ctx);
+            let result = enginer_risk_engine::evaluate(&criterion.expression, &eval_ctx);
             match result {
                 Ok(value) => {
                     if let enginer_risk_engine::Value::Boolean { value: true } = value {
@@ -405,12 +400,12 @@ impl CheckFlowOrchestrator {
     /// Step 6: Create assessment.
     fn step_assess(&self, ctx: &mut CheckFlowContext) -> IntegrationResult<()> {
         ctx.transition(CheckFlowState::Assessing);
-        let score_result = ctx
-            .score_result
-            .as_ref()
-            .ok_or_else(|| IntegrationError::InvalidState {
-                message: "score result missing".to_string(),
-            })?;
+        let score_result =
+            ctx.score_result
+                .as_ref()
+                .ok_or_else(|| IntegrationError::InvalidState {
+                    message: "score result missing".to_string(),
+                })?;
 
         // Check if we should skip (existing assessment + not forced)
         if !ctx.input.force {
@@ -419,7 +414,9 @@ impl CheckFlowOrchestrator {
                 .load_latest_assessment(&ctx.input.target_entity_id)
             {
                 if existing.is_current() {
-                    ctx.add_warning("assessment already exists, skipping (use force=true to override)");
+                    ctx.add_warning(
+                        "assessment already exists, skipping (use force=true to override)",
+                    );
                     ctx.assessment = Some(existing);
                     return Ok(());
                 }
@@ -457,12 +454,12 @@ impl CheckFlowOrchestrator {
     /// Step 7: Make decision based on score and level.
     fn step_decide(&self, ctx: &mut CheckFlowContext) -> IntegrationResult<()> {
         ctx.transition(CheckFlowState::Deciding);
-        let score_result = ctx
-            .score_result
-            .as_ref()
-            .ok_or_else(|| IntegrationError::InvalidState {
-                message: "score result missing".to_string(),
-            })?;
+        let score_result =
+            ctx.score_result
+                .as_ref()
+                .ok_or_else(|| IntegrationError::InvalidState {
+                    message: "score result missing".to_string(),
+                })?;
 
         let decision = Decision::system(
             &ctx.input.target_entity_id,
@@ -485,10 +482,7 @@ impl CheckFlowOrchestrator {
     }
 
     /// Step 8: Start workflow and create tasks if escalation is needed.
-    fn step_workflow_and_tasks(
-        &self,
-        ctx: &mut CheckFlowContext,
-    ) -> IntegrationResult<()> {
+    fn step_workflow_and_tasks(&self, ctx: &mut CheckFlowContext) -> IntegrationResult<()> {
         // Extract decision kind and details first to avoid borrow conflicts
         let (decision_kind, risk_level_str, score) = {
             let decision = ctx
@@ -505,10 +499,7 @@ impl CheckFlowOrchestrator {
         };
 
         // Start workflow if decision is Escalate or Reject
-        if matches!(
-            decision_kind,
-            DecisionKind::Escalate | DecisionKind::Reject
-        ) {
+        if matches!(decision_kind, DecisionKind::Escalate | DecisionKind::Reject) {
             ctx.transition(CheckFlowState::WorkflowStart);
 
             let mut variables = HashMap::new();
@@ -520,22 +511,12 @@ impl CheckFlowOrchestrator {
                 "check_kind".to_string(),
                 serde_json::json!(ctx.input.check_kind),
             );
-            variables.insert(
-                "risk_level".to_string(),
-                serde_json::json!(risk_level_str),
-            );
-            variables.insert(
-                "score".to_string(),
-                serde_json::json!(score),
-            );
+            variables.insert("risk_level".to_string(), serde_json::json!(risk_level_str));
+            variables.insert("score".to_string(), serde_json::json!(score));
 
             let workflow_instance_id = self
                 .workflow_port
-                .start_workflow(
-                    "request_processing",
-                    &ctx.input.target_entity_id,
-                    variables,
-                )
+                .start_workflow("request_processing", &ctx.input.target_entity_id, variables)
                 .map_err(|e| IntegrationError::Workflow { message: e })?;
 
             ctx.workflow_instance_id = Some(workflow_instance_id.clone());
@@ -620,7 +601,12 @@ impl CheckFlowOrchestrator {
     }
 
     /// Audit: check completed.
-    fn audit_check_completed(&self, ctx: &CheckFlowContext, check_id: &str, result: &CheckFlowResult) {
+    fn audit_check_completed(
+        &self,
+        ctx: &CheckFlowContext,
+        check_id: &str,
+        result: &CheckFlowResult,
+    ) {
         let mut entry = AuditEntry::new(
             0,
             "",
@@ -644,23 +630,18 @@ impl CheckFlowOrchestrator {
 
     /// Build evaluation context from observations.
     fn build_evaluation_context(&self, ctx: &CheckFlowContext) -> EvaluationContext {
-        let mut predicate_values: HashMap<String, Vec<enginer_risk_engine::Value>> =
-            HashMap::new();
+        let mut predicate_values: HashMap<String, Vec<enginer_risk_engine::Value>> = HashMap::new();
 
         // Extract predicate values from mapping result
         if let Some(mapping) = &ctx.mapping_result {
             for mapped in &mapping.mapped_predicates {
                 let value = match &mapped.source_field {
-                    f if f.contains("inn") => {
-                        Some(enginer_risk_engine::Value::Text {
-                            value: "1234567890".to_string(),
-                        })
-                    }
-                    f if f.contains("ogrn") => {
-                        Some(enginer_risk_engine::Value::Text {
-                            value: "1234567890123".to_string(),
-                        })
-                    }
+                    f if f.contains("inn") => Some(enginer_risk_engine::Value::Text {
+                        value: "1234567890".to_string(),
+                    }),
+                    f if f.contains("ogrn") => Some(enginer_risk_engine::Value::Text {
+                        value: "1234567890123".to_string(),
+                    }),
                     _ => None,
                 };
                 if let Some(v) = value {
@@ -709,11 +690,7 @@ impl CheckFlowOrchestrator {
             observation_count: ctx.observations.len(),
             criteria_evaluated: ctx.criteria.len(),
             factors_detected: ctx.factors.len(),
-            final_score: ctx
-                .score_result
-                .as_ref()
-                .map(|s| s.score)
-                .unwrap_or(0.0),
+            final_score: ctx.score_result.as_ref().map(|s| s.score).unwrap_or(0.0),
             risk_level: ctx
                 .score_result
                 .as_ref()

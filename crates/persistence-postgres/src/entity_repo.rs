@@ -4,7 +4,9 @@
 //! DbExecutor job) before these run. Identifiers come from the trusted catalog
 //! only; user values are always bind parameters.
 
-use enginer_application::ports::{EntityRepository, IdentityKeyRepository, IdentityPolicyRepository};
+use enginer_application::ports::{
+    EntityRepository, IdentityKeyRepository, IdentityPolicyRepository,
+};
 use enginer_domain::{
     DomainError, Entity, EntityClass, EntityId, EntityStatus, IdentityKey, IdentityKeyStatus,
     IdentityPolicy, PublicEntityId, TenantId, TypeId,
@@ -29,17 +31,19 @@ impl EntityRepository for PgEntityRepository {
     fn insert(&self, entity: &Entity) -> BoxFuture<'_, Result<(), DomainError>> {
         let entity = entity.clone();
         Box::pin(async move {
+            let mut tx = crate::rls::tenant_tx(&self.pool, entity.tenant_id).await?;
             let class_i16 = entity_class_to_i16(entity.entity_class);
             sqlx::query(
                 "INSERT INTO core.entity
-                 (tenant_id, entity_id, public_id, entity_class, created_at, created_by,
+                 (tenant_id, entity_id, public_id, type_id, entity_class, created_at, created_by,
                   retired_at, retired_by, retire_reason, head_revision, canonical_entity_id,
                   classification_id, business_unit_id)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)",
             )
             .bind(entity.tenant_id.raw())
             .bind(entity.entity_id.raw())
             .bind(entity.public_id.raw())
+            .bind(entity.type_id.raw())
             .bind(class_i16)
             .bind(entity.created_at)
             .bind(entity.created_by)
@@ -50,9 +54,12 @@ impl EntityRepository for PgEntityRepository {
             .bind(entity.canonical_entity_id.map(|e| e.raw()))
             .bind(entity.classification_id)
             .bind(entity.business_unit_id)
-            .execute(&*self.pool)
+            .execute(&mut *tx)
             .await
             .map_err(|e| DomainError::invariant(format!("entity insert: {e}")))?;
+            tx.commit()
+                .await
+                .map_err(|e| DomainError::invariant(format!("tx commit: {e}")))?;
             Ok(())
         })
     }
@@ -63,6 +70,7 @@ impl EntityRepository for PgEntityRepository {
         public_id: PublicEntityId,
     ) -> BoxFuture<'_, Result<Option<Entity>, DomainError>> {
         Box::pin(async move {
+            let mut tx = crate::rls::tenant_tx(&self.pool, tenant).await?;
             let row: Option<(
                 i64,
                 uuid::Uuid,
@@ -86,7 +94,7 @@ impl EntityRepository for PgEntityRepository {
             )
             .bind(tenant.raw())
             .bind(public_id.raw())
-            .fetch_optional(&*self.pool)
+            .fetch_optional(&mut *tx)
             .await
             .map_err(|e| DomainError::not_found(format!("entity find: {e}")))?;
             Ok(row.map(|r| row_to_entity(tenant, r)))
@@ -99,6 +107,7 @@ impl EntityRepository for PgEntityRepository {
         entity_id: EntityId,
     ) -> BoxFuture<'_, Result<Option<Entity>, DomainError>> {
         Box::pin(async move {
+            let mut tx = crate::rls::tenant_tx(&self.pool, tenant).await?;
             let row: Option<(
                 i64,
                 uuid::Uuid,
@@ -122,7 +131,7 @@ impl EntityRepository for PgEntityRepository {
             )
             .bind(tenant.raw())
             .bind(entity_id.raw())
-            .fetch_optional(&*self.pool)
+            .fetch_optional(&mut *tx)
             .await
             .map_err(|e| DomainError::not_found(format!("entity find: {e}")))?;
             Ok(row.map(|r| row_to_entity(tenant, r)))
@@ -132,6 +141,7 @@ impl EntityRepository for PgEntityRepository {
     fn update(&self, entity: &Entity) -> BoxFuture<'_, Result<(), DomainError>> {
         let entity = entity.clone();
         Box::pin(async move {
+            let mut tx = crate::rls::tenant_tx(&self.pool, entity.tenant_id).await?;
             sqlx::query(
                 "UPDATE core.entity
                  SET head_revision = $3, retired_at = $4, retired_by = $5,
@@ -145,9 +155,12 @@ impl EntityRepository for PgEntityRepository {
             .bind(entity.retired_by)
             .bind(&entity.retire_reason)
             .bind(entity.canonical_entity_id.map(|e| e.raw()))
-            .execute(&*self.pool)
+            .execute(&mut *tx)
             .await
             .map_err(|e| DomainError::invariant(format!("entity update: {e}")))?;
+            tx.commit()
+                .await
+                .map_err(|e| DomainError::invariant(format!("tx commit: {e}")))?;
             Ok(())
         })
     }
@@ -164,6 +177,7 @@ impl EntityRepository for PgEntityRepository {
         let alias_value = alias_value.to_string();
         let reason = reason.to_string();
         Box::pin(async move {
+            let mut tx = crate::rls::tenant_tx(&self.pool, tenant).await?;
             sqlx::query(
                 "INSERT INTO core.entity_alias
                  (tenant_id, alias_kind, alias_value, canonical_entity_id, reason)
@@ -175,9 +189,12 @@ impl EntityRepository for PgEntityRepository {
             .bind(&alias_value)
             .bind(canonical_entity_id.raw())
             .bind(&reason)
-            .execute(&*self.pool)
+            .execute(&mut *tx)
             .await
             .map_err(|e| DomainError::invariant(format!("alias insert: {e}")))?;
+            tx.commit()
+                .await
+                .map_err(|e| DomainError::invariant(format!("tx commit: {e}")))?;
             Ok(())
         })
     }
@@ -267,6 +284,7 @@ impl IdentityKeyRepository for PgIdentityKeyRepository {
     ) -> BoxFuture<'_, Result<Option<IdentityKey>, DomainError>> {
         let key = key.to_string();
         Box::pin(async move {
+            let mut tx = crate::rls::tenant_tx(&self.pool, tenant).await?;
             let row: Option<(i64, i16)> = sqlx::query_as(
                 "SELECT entity_id, status FROM core.identity_key
                  WHERE tenant_id = $1 AND type_id = $2 AND policy_id = $3 AND key = $4",
@@ -275,7 +293,7 @@ impl IdentityKeyRepository for PgIdentityKeyRepository {
             .bind(type_id.raw())
             .bind(policy_id)
             .bind(&key)
-            .fetch_optional(&*self.pool)
+            .fetch_optional(&mut *tx)
             .await
             .map_err(|e| DomainError::not_found(format!("identity key find: {e}")))?;
             Ok(row.map(|(eid, status_i16)| IdentityKey {
@@ -295,6 +313,7 @@ impl IdentityKeyRepository for PgIdentityKeyRepository {
     fn insert(&self, key: &IdentityKey) -> BoxFuture<'_, Result<(), DomainError>> {
         let key = key.clone();
         Box::pin(async move {
+            let mut tx = crate::rls::tenant_tx(&self.pool, key.tenant_id).await?;
             let status_i16 = match key.status {
                 IdentityKeyStatus::Active => 0i16,
                 IdentityKeyStatus::Retired => 1,
@@ -311,9 +330,12 @@ impl IdentityKeyRepository for PgIdentityKeyRepository {
             .bind(&key.key)
             .bind(key.entity_id.raw())
             .bind(status_i16)
-            .execute(&*self.pool)
+            .execute(&mut *tx)
             .await
             .map_err(|e| DomainError::invariant(format!("identity key insert: {e}")))?;
+            tx.commit()
+                .await
+                .map_err(|e| DomainError::invariant(format!("tx commit: {e}")))?;
             Ok(())
         })
     }
@@ -329,6 +351,7 @@ impl IdentityKeyRepository for PgIdentityKeyRepository {
             IdentityKeyStatus::Retired => 1,
         };
         Box::pin(async move {
+            let mut tx = crate::rls::tenant_tx(&self.pool, tenant).await?;
             sqlx::query(
                 "UPDATE core.identity_key SET status = $3
                  WHERE tenant_id = $1 AND entity_id = $2",
@@ -336,9 +359,12 @@ impl IdentityKeyRepository for PgIdentityKeyRepository {
             .bind(tenant.raw())
             .bind(entity_id.raw())
             .bind(status_i16)
-            .execute(&*self.pool)
+            .execute(&mut *tx)
             .await
             .map_err(|e| DomainError::invariant(format!("identity key status: {e}")))?;
+            tx.commit()
+                .await
+                .map_err(|e| DomainError::invariant(format!("tx commit: {e}")))?;
             Ok(())
         })
     }
@@ -363,18 +389,26 @@ impl IdentityPolicyRepository for PgIdentityPolicyRepository {
         type_id: TypeId,
     ) -> BoxFuture<'_, Result<Vec<IdentityPolicy>, DomainError>> {
         Box::pin(async move {
-            let rows: Vec<(uuid::Uuid, String, Vec<uuid::Uuid>, String, String, String, String)> =
-                sqlx::query_as(
-                    "SELECT policy_id, scope, key_component_predicate_ids, normalizer_version,
+            let mut tx = crate::rls::tenant_tx(&self.pool, tenant).await?;
+            let rows: Vec<(
+                uuid::Uuid,
+                String,
+                Vec<uuid::Uuid>,
+                String,
+                String,
+                String,
+                String,
+            )> = sqlx::query_as(
+                "SELECT policy_id, scope, key_component_predicate_ids, normalizer_version,
                             match_mode, collision_action, resurrection_policy
                      FROM meta.identity_policy
                      WHERE tenant_id = $1 AND type_id = $2",
-                )
-                .bind(tenant.raw())
-                .bind(type_id.raw())
-                .fetch_all(&*self.pool)
-                .await
-                .map_err(|e| DomainError::not_found(format!("identity policy read: {e}")))?;
+            )
+            .bind(tenant.raw())
+            .bind(type_id.raw())
+            .fetch_all(&mut *tx)
+            .await
+            .map_err(|e| DomainError::not_found(format!("identity policy read: {e}")))?;
             Ok(rows
                 .into_iter()
                 .map(|r| IdentityPolicy {
@@ -382,7 +416,11 @@ impl IdentityPolicyRepository for PgIdentityPolicyRepository {
                     tenant_id: tenant,
                     type_id,
                     scope: r.1,
-                    key_component_predicate_ids: r.2.into_iter().map(enginer_domain::PredicateId).collect(),
+                    key_component_predicate_ids: r
+                        .2
+                        .into_iter()
+                        .map(enginer_domain::PredicateId)
+                        .collect(),
                     normalizer_version: r.3,
                     match_mode: match r.4.as_str() {
                         "fuzzy" => enginer_domain::IdentityMode::Fuzzy,

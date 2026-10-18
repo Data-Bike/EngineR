@@ -160,7 +160,7 @@
 import { capability } from '~/middleware/capability';
 
 definePageMeta({
-  middleware: ['auth', capability('admin.view')],
+  middleware: ['auth', capability('admin.pages.access')],
 });
 
 const { t } = useI18n();
@@ -189,15 +189,12 @@ const editing = ref(false);
 const saving = ref(false);
 const filterType = ref('all');
 const filterDirection = ref('all');
+const schemaTypes = ref<Array<{ id: string; display_name: string }>>([]);
 
-const typeOptions = computed(() => [
-  { label: t('types.person', 'Физическое лицо'), value: 'person' },
-  { label: t('types.legal_entity', 'Юридическое лицо'), value: 'legal_entity' },
-  { label: t('types.address', 'Адрес'), value: 'address' },
-  { label: t('types.contact_point', 'Контакт'), value: 'contact_point' },
-  { label: t('types.document', 'Документ'), value: 'document' },
-  { label: t('types.holding_view', 'Холдинг'), value: 'holding_view' },
-]);
+const typeOptions = computed(() => schemaTypes.value.map((schemaType) => ({
+  label: schemaType.display_name,
+  value: schemaType.id,
+})));
 
 const filterTypeOptions = computed(() => [
   { label: t('admin.all_types', 'Все типы'), value: 'all' },
@@ -252,11 +249,6 @@ const formData = ref<Predicate>({
   inverse_label: '',
 });
 
-const predicateTypeSelect = computed({
-  get: () => formData.value.is_edge ? 'edge' : 'scalar',
-  set: (val: string) => { formData.value.is_edge = val === 'edge'; },
-});
-
 const filteredPredicates = computed(() => {
   return predicates.value.filter(p => {
     if (filterType.value && filterType.value !== 'all' && p.domain_type !== filterType.value) return false;
@@ -271,7 +263,7 @@ function directionLabel(dir: string): string {
   return dir;
 }
 
-function directionColor(dir: string): string {
+function directionColor(dir: string): 'success' | 'primary' {
   if (dir === 'symmetric') return 'success';
   return 'primary';
 }
@@ -279,7 +271,14 @@ function directionColor(dir: string): string {
 async function fetchPredicates() {
   loading.value = true;
   try {
-    const res = await api.schemas.listPredicates();
+    const [res, typesResponse] = await Promise.all([
+      api.schemas.listPredicates(),
+      api.schemas.listTypes(),
+    ]);
+    schemaTypes.value = (typesResponse.data ?? []).map((schemaType: any) => ({
+      id: schemaType.id ?? schemaType.type_id ?? '',
+      display_name: schemaType.display_name ?? schemaType.id ?? '',
+    }));
 
     const SCALAR_KINDS = new Set(['text', 'date', 'integer', 'decimal', 'boolean', 'money', 'uuid', 'uri', 'string', 'number']);
 
@@ -293,7 +292,7 @@ async function fetchPredicates() {
         direction: p.direction ?? 'directed',
         domain_type: p.domain_type_id ?? p.domain_type ?? p.domain ?? '',
         range_type: isEdge ? range : '',
-        scalar_kind: isEdge ? 'text' : range,
+        scalar_kind: p.scalar_kind || (isEdge ? 'text' : range),
         min_cardinality: p.min_cardinality ?? p.cardinality_min ?? 0,
         max_cardinality: p.max_cardinality ?? p.cardinality_max ?? 1,
         participates_in_identity: p.participates_in_identity ?? p.identity ?? false,
@@ -333,28 +332,55 @@ function editPredicate(pred: Predicate) {
   showDialog.value = true;
 }
 
+const { applySchemaMutation } = useSchemaMutation();
+
+function entryFromForm(): Record<string, unknown> {
+  const base: Record<string, unknown> = {
+    stable_alias: formData.value.alias,
+    label: formData.value.label,
+    direction: formData.value.direction,
+    min_cardinality: formData.value.min_cardinality,
+    max_cardinality: formData.value.max_cardinality,
+    participates_in_identity: formData.value.participates_in_identity,
+    confidentiality_class: formData.value.confidentiality_class,
+    inverse_label: formData.value.inverse_label,
+  };
+  if (formData.value.is_edge) {
+    base.is_edge = true;
+    base.domain = formData.value.domain_type;
+    base.range = formData.value.range_type;
+  } else {
+    base.is_edge = false;
+    base.scalar_kind = formData.value.scalar_kind;
+  }
+  return base;
+}
+
 async function savePredicate() {
   saving.value = true;
+  const alias = formData.value.alias;
+  const wasEditing = editing.value;
   try {
-    const payload = {
-      alias: formData.value.alias,
-      label: formData.value.label,
-      is_edge: formData.value.is_edge,
-      direction: formData.value.direction,
-      domain_type: formData.value.domain_type,
-      range_type: formData.value.range_type,
-      scalar_kind: formData.value.scalar_kind,
-      min_cardinality: formData.value.min_cardinality,
-      max_cardinality: formData.value.max_cardinality,
-      participates_in_identity: formData.value.participates_in_identity,
-      confidentiality_class: formData.value.confidentiality_class,
-      inverse_label: formData.value.inverse_label,
-    };
-    if (editing.value) {
-      await api.schemas.updatePredicate(formData.value.alias, payload);
-    } else {
-      await api.schemas.createPredicate(payload);
-    }
+    await applySchemaMutation({
+      name: wasEditing
+        ? `${t('common.edit')}: ${alias}`
+        : `${t('admin.create_predicate')}: ${alias}`,
+      reason: wasEditing ? `predicate ${alias} updated` : `predicate ${alias} added`,
+      changes: [{
+        kind: wasEditing ? 'update' : 'add',
+        resource_kind: 'predicate',
+        resource_id: alias,
+        summary: formData.value.label || alias,
+      }],
+      mutate(_types, predicates) {
+        const entry = entryFromForm();
+        const idx = predicates.findIndex(
+          (item) => (item.stable_alias ?? item.alias) === alias,
+        );
+        if (idx >= 0) predicates[idx] = { ...predicates[idx], ...entry };
+        else predicates.push(entry);
+      },
+    });
     showDialog.value = false;
     toast.add({ title: t('admin.predicate_saved'), color: 'success' });
     await fetchPredicates();
@@ -367,7 +393,23 @@ async function savePredicate() {
 
 async function deletePredicate(pred: Predicate) {
   try {
-    await api.schemas.deletePredicate(pred.alias);
+    await applySchemaMutation({
+      name: `${t('common.delete')}: ${pred.alias}`,
+      reason: `predicate ${pred.alias} retired`,
+      changes: [{
+        kind: 'retire',
+        resource_kind: 'predicate',
+        resource_id: pred.alias,
+        summary: pred.label || pred.alias,
+        breaking: true,
+      }],
+      mutate(_types, predicates) {
+        const idx = predicates.findIndex(
+          (item) => (item.stable_alias ?? item.alias) === pred.alias,
+        );
+        if (idx >= 0) predicates.splice(idx, 1);
+      },
+    });
     toast.add({ title: t('admin.predicate_deleted'), color: 'success' });
     await fetchPredicates();
   } catch (e: unknown) {

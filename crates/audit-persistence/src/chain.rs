@@ -5,8 +5,8 @@
 //! persist the latest hash for verification.
 
 use crate::error::{AuditPersistenceError, AuditPersistenceResult};
-use blake2::Blake2bVar;
 use blake2::digest::{Update, VariableOutput};
+use blake2::Blake2bVar;
 
 /// Chain state: tracks the last sequence and hash for the next entry.
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -21,7 +21,8 @@ impl Default for ChainState {
     fn default() -> Self {
         Self {
             last_sequence: 0,
-            last_hash: "0000000000000000000000000000000000000000000000000000000000000000".to_string(),
+            last_hash: "0000000000000000000000000000000000000000000000000000000000000000"
+                .to_string(),
         }
     }
 }
@@ -68,8 +69,9 @@ impl ChainHasher {
         resource_id: Option<&str>,
         effect: Option<&str>,
     ) -> AuditPersistenceResult<String> {
-        let mut hasher = Blake2bVar::new(32)
-            .map_err(|e| AuditPersistenceError::Hash { message: e.to_string() })?;
+        let mut hasher = Blake2bVar::new(32).map_err(|e| AuditPersistenceError::Hash {
+            message: e.to_string(),
+        })?;
         // Sequence (big-endian for consistent ordering)
         hasher.update(&sequence.to_be_bytes());
         // Previous hash (links the chain)
@@ -96,8 +98,11 @@ impl ChainHasher {
         }
 
         let mut result = vec![0u8; 32];
-        hasher.finalize_variable(&mut result)
-            .map_err(|e| AuditPersistenceError::Hash { message: e.to_string() })?;
+        hasher
+            .finalize_variable(&mut result)
+            .map_err(|e| AuditPersistenceError::Hash {
+                message: e.to_string(),
+            })?;
         Ok(hex::encode(&result))
     }
 
@@ -325,14 +330,31 @@ mod tests {
     fn chain_hasher_verify_chain_valid() {
         let ts1 = chrono::Utc::now();
         let ts2 = ts1 + chrono::Duration::seconds(1);
-        let genesis =
-            "0000000000000000000000000000000000000000000000000000000000000000";
+        let genesis = "0000000000000000000000000000000000000000000000000000000000000000";
         let hash1 = ChainHasher::compute_hash(
-            0, genesis, ts1, "t", "u", "a", "decision", "entity", None, Some("allow"),
+            0,
+            genesis,
+            ts1,
+            "t",
+            "u",
+            "a",
+            "decision",
+            "entity",
+            None,
+            Some("allow"),
         )
         .unwrap();
         let hash2 = ChainHasher::compute_hash(
-            1, &hash1, ts2, "t", "u", "a", "decision", "entity", None, Some("deny"),
+            1,
+            &hash1,
+            ts2,
+            "t",
+            "u",
+            "a",
+            "decision",
+            "entity",
+            None,
+            Some("deny"),
         )
         .unwrap();
 
@@ -372,14 +394,31 @@ mod tests {
     fn chain_hasher_verify_chain_tampered() {
         let ts1 = chrono::Utc::now();
         let ts2 = ts1 + chrono::Duration::seconds(1);
-        let genesis =
-            "0000000000000000000000000000000000000000000000000000000000000000";
+        let genesis = "0000000000000000000000000000000000000000000000000000000000000000";
         let hash1 = ChainHasher::compute_hash(
-            0, genesis, ts1, "t", "u", "a", "decision", "entity", None, Some("allow"),
+            0,
+            genesis,
+            ts1,
+            "t",
+            "u",
+            "a",
+            "decision",
+            "entity",
+            None,
+            Some("allow"),
         )
         .unwrap();
         let hash2 = ChainHasher::compute_hash(
-            1, &hash1, ts2, "t", "u", "a", "decision", "entity", None, Some("deny"),
+            1,
+            &hash1,
+            ts2,
+            "t",
+            "u",
+            "a",
+            "decision",
+            "entity",
+            None,
+            Some("deny"),
         )
         .unwrap();
 
@@ -422,15 +461,32 @@ mod tests {
     fn chain_hasher_verify_chain_broken_link() {
         let ts1 = chrono::Utc::now();
         let ts2 = ts1 + chrono::Duration::seconds(1);
-        let genesis =
-            "0000000000000000000000000000000000000000000000000000000000000000";
+        let genesis = "0000000000000000000000000000000000000000000000000000000000000000";
         let hash1 = ChainHasher::compute_hash(
-            0, genesis, ts1, "t", "u", "a", "decision", "entity", None, Some("allow"),
+            0,
+            genesis,
+            ts1,
+            "t",
+            "u",
+            "a",
+            "decision",
+            "entity",
+            None,
+            Some("allow"),
         )
         .unwrap();
         // Use a different previous_hash for entry 2 (broken link)
         let hash2 = ChainHasher::compute_hash(
-            1, "wrong_hash", ts2, "t", "u", "a", "decision", "entity", None, Some("deny"),
+            1,
+            "wrong_hash",
+            ts2,
+            "t",
+            "u",
+            "a",
+            "decision",
+            "entity",
+            None,
+            Some("deny"),
         )
         .unwrap();
 
@@ -469,10 +525,18 @@ mod tests {
     #[test]
     fn chain_hasher_verify_chain_sequence_gap() {
         let ts1 = chrono::Utc::now();
-        let genesis =
-            "0000000000000000000000000000000000000000000000000000000000000000";
+        let genesis = "0000000000000000000000000000000000000000000000000000000000000000";
         let hash1 = ChainHasher::compute_hash(
-            0, genesis, ts1, "t", "u", "a", "decision", "entity", None, Some("allow"),
+            0,
+            genesis,
+            ts1,
+            "t",
+            "u",
+            "a",
+            "decision",
+            "entity",
+            None,
+            Some("allow"),
         )
         .unwrap();
 

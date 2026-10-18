@@ -20,12 +20,12 @@
  */
 
 import { ApiClient, type ApiClientConfig, type ParsedResponse, type RequestOptions } from './client/ApiClient.js';
-import { EntityEndpoints, SchemaEndpoints, SecurityEndpoints, HealthEndpoints, ConnectorEndpoints, CheckEndpoints, FileEndpoints, AuditEndpoints, ReportEndpoints, DashboardEndpoints, RequestEndpoints, MonitorEndpoints } from './endpoints/index.js';
+import { EntityEndpoints, SchemaEndpoints, SecurityEndpoints, HealthEndpoints, ConnectorEndpoints, CheckEndpoints, FileEndpoints, AuditEndpoints, ReportEndpoints, DashboardEndpoints, RequestEndpoints, MonitorEndpoints, UserEndpoints } from './endpoints/index.js';
 
 export * from './types/index.js';
 export { ApiClient, type ApiClientConfig, type ParsedResponse, type RequestOptions };
 export { ApiClientError, type ApiError, type ApiErrorCode, httpStatusForCode } from './types/error.js';
-export { EntityEndpoints, SchemaEndpoints, SecurityEndpoints, HealthEndpoints, ConnectorEndpoints, CheckEndpoints, FileEndpoints, AuditEndpoints, ReportEndpoints, DashboardEndpoints, RequestEndpoints, MonitorEndpoints, type HealthResponse } from './endpoints/index.js';
+export { EntityEndpoints, SchemaEndpoints, SecurityEndpoints, HealthEndpoints, ConnectorEndpoints, CheckEndpoints, FileEndpoints, AuditEndpoints, ReportEndpoints, DashboardEndpoints, RequestEndpoints, MonitorEndpoints, UserEndpoints, type HealthResponse } from './endpoints/index.js';
 
 /** The full EngineR API client: all endpoint groups in one object. */
 export interface EnginerClient {
@@ -55,6 +55,8 @@ export interface EnginerClient {
   readonly requests: RequestEndpoints;
   /** Monitoring. */
   readonly monitors: MonitorEndpoints;
+  /** User administration + activity (users.manage). */
+  readonly users: UserEndpoints;
 }
 
 /**
@@ -79,5 +81,6 @@ export function createEnginerClient(config: ApiClientConfig): EnginerClient {
     dashboard: new DashboardEndpoints(http),
     requests: new RequestEndpoints(http),
     monitors: new MonitorEndpoints(http),
+    users: new UserEndpoints(http),
   };
 }

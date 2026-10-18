@@ -1,5 +1,7 @@
 <template>
-  <div class="p-4 sm:p-6 space-y-6 max-w-full overflow-x-hidden">
+  <!-- Child routes (e.g. /entities/:publicId/edit) render in place of the card. -->
+  <NuxtPage v-if="isChildRoute" />
+  <div v-else class="p-4 sm:p-6 space-y-6 max-w-full overflow-x-hidden">
     <!-- Loading state -->
     <div v-if="loading" class="text-center py-12 text-[var(--ui-text-muted)]">
       {{ t('entity.loading') }}
@@ -19,8 +21,11 @@
       <div class="flex items-start justify-between">
         <div>
           <h1 class="text-2xl font-bold">
-            {{ entity.public_id }}
+            {{ entity.display_name ?? entity.public_id }}
           </h1>
+          <p v-if="entity.display_name" class="mt-1 font-mono text-xs text-[var(--ui-text-muted)]">
+            {{ entity.public_id }}
+          </p>
           <div class="flex items-center gap-2 mt-2">
             <UBadge :color="entity.status === 'active' ? 'success' : 'neutral'">
               {{ t(`entity.status.${entity.status}`) }}
@@ -31,6 +36,14 @@
           </div>
         </div>
         <div class="flex gap-2">
+          <UButton
+            v-if="entity.status === 'active'"
+            icon="i-lucide-pencil"
+            variant="outline"
+            :to="`/entities/${entity.public_id}/edit`"
+          >
+            {{ t('entity.edit') }}
+          </UButton>
           <UButton
             v-if="entity.status === 'active'"
             icon="i-lucide-archive"
@@ -86,10 +99,11 @@
 </template>
 
 <script setup lang="ts">
+import { capability } from '~/middleware/capability';
 import type { Entity } from '@enginer/api-client';
 
 definePageMeta({
-  middleware: 'auth',
+  middleware: ['auth', capability('entity.read')],
 });
 
 const { t } = useI18n();
@@ -98,6 +112,9 @@ const toast = useToast();
 const api = useApi();
 
 const publicId = computed(() => route.params.publicId as string);
+// True while a nested route (e.g. `edit`) matched underneath this page —
+// then <NuxtPage> renders the child instead of the card.
+const isChildRoute = computed(() => route.matched.length > 1);
 const entity = ref<Entity | null>(null);
 const loading = ref(false);
 const error = ref<string | null>(null);
@@ -146,5 +163,12 @@ async function doRetire() {
   }
 }
 
-onMounted(fetchEntity);
+onMounted(() => {
+  if (!isChildRoute.value) fetchEntity();
+});
+// Coming back from a child route (e.g. /edit) the card data may be missing or
+// stale — refetch instead of showing an empty card.
+watch(isChildRoute, (child) => {
+  if (!child) fetchEntity();
+});
 </script>

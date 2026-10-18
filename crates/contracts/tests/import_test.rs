@@ -27,7 +27,10 @@ fn parse_date_iso_passthrough() {
 
 #[test]
 fn parse_money_removes_currency() {
-    assert_eq!(parse_cell("10 000,50", CellParser::Money).unwrap(), "10000.50");
+    assert_eq!(
+        parse_cell("10 000,50", CellParser::Money).unwrap(),
+        "10000.50"
+    );
 }
 
 #[test]
@@ -95,7 +98,10 @@ fn parse_ogrn_rejects_wrong_length() {
 
 #[test]
 fn parse_kpp_9_digits() {
-    assert_eq!(parse_cell("773101001", CellParser::Kpp).unwrap(), "773101001");
+    assert_eq!(
+        parse_cell("773101001", CellParser::Kpp).unwrap(),
+        "773101001"
+    );
 }
 
 #[test]

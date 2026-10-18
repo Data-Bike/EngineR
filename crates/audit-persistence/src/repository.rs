@@ -285,7 +285,8 @@ pub trait AuditRepository: Send + Sync {
     fn checkpoint(&self, tenant_id: &str) -> AuditPersistenceResult<ChainCheckpoint>;
 
     /// Get the latest checkpoint for a tenant.
-    fn latest_checkpoint(&self, tenant_id: &str) -> AuditPersistenceResult<Option<ChainCheckpoint>>;
+    fn latest_checkpoint(&self, tenant_id: &str)
+        -> AuditPersistenceResult<Option<ChainCheckpoint>>;
 
     /// Verify the chain integrity for a tenant (returns true if valid).
     fn verify_chain(&self, tenant_id: &str) -> AuditPersistenceResult<bool>;
@@ -294,10 +295,7 @@ pub trait AuditRepository: Send + Sync {
     fn retention_policy(&self, tenant_id: &str) -> AuditPersistenceResult<RetentionPolicyRecord>;
 
     /// Set the retention policy for a tenant.
-    fn set_retention_policy(
-        &self,
-        policy: &RetentionPolicyRecord,
-    ) -> AuditPersistenceResult<()>;
+    fn set_retention_policy(&self, policy: &RetentionPolicyRecord) -> AuditPersistenceResult<()>;
 }
 
 /// In-memory audit repository (for testing).
@@ -305,8 +303,7 @@ pub struct InMemoryAuditRepository {
     records: std::sync::Mutex<Vec<AuditRecord>>,
     chain_states: std::sync::Mutex<std::collections::HashMap<String, ChainState>>,
     checkpoints: std::sync::Mutex<Vec<ChainCheckpoint>>,
-    retention_policies:
-        std::sync::Mutex<std::collections::HashMap<String, RetentionPolicyRecord>>,
+    retention_policies: std::sync::Mutex<std::collections::HashMap<String, RetentionPolicyRecord>>,
 }
 
 impl InMemoryAuditRepository {
@@ -367,12 +364,16 @@ impl AuditRepository for InMemoryAuditRepository {
                     .map_or(true, |k| &r.resource_kind == k)
             })
             .filter(|r| {
-                query
-                    .resource_id
-                    .as_ref()
-                    .map_or(true, |id| r.resource_id.as_ref().is_some_and(|rid| rid == id))
+                query.resource_id.as_ref().map_or(true, |id| {
+                    r.resource_id.as_ref().is_some_and(|rid| rid == id)
+                })
             })
-            .filter(|r| query.effect.as_ref().map_or(true, |e| r.effect.as_ref().is_some_and(|re| re == e)))
+            .filter(|r| {
+                query
+                    .effect
+                    .as_ref()
+                    .map_or(true, |e| r.effect.as_ref().is_some_and(|re| re == e))
+            })
             .filter(|r| query.from.map_or(true, |f| r.occurred_at >= f))
             .filter(|r| query.to.map_or(true, |t| r.occurred_at <= t))
             .filter(|r| query.cursor.map_or(true, |c| r.sequence > c))
@@ -457,10 +458,7 @@ impl AuditRepository for InMemoryAuditRepository {
             }))
     }
 
-    fn set_retention_policy(
-        &self,
-        policy: &RetentionPolicyRecord,
-    ) -> AuditPersistenceResult<()> {
+    fn set_retention_policy(&self, policy: &RetentionPolicyRecord) -> AuditPersistenceResult<()> {
         let mut policies = self.retention_policies.lock().unwrap();
         policies.insert(policy.tenant_id.clone(), policy.clone());
         Ok(())
@@ -472,13 +470,15 @@ impl AuditRepository for InMemoryAuditRepository {
 /// Uses RLS for tenant isolation via `app.tenant_id` setting.
 /// Audit rows are insert-only; no UPDATE/DELETE from the app role.
 pub struct PgAuditRepository {
-    executor: Arc<enginer_db_runtime::AsyncStdDbExecutor>,
+    _executor: Arc<enginer_db_runtime::AsyncStdDbExecutor>,
 }
 
 impl PgAuditRepository {
     /// Create a new PostgreSQL audit repository.
     pub fn new(executor: Arc<enginer_db_runtime::AsyncStdDbExecutor>) -> Self {
-        Self { executor }
+        Self {
+            _executor: executor,
+        }
     }
 }
 
@@ -538,29 +538,25 @@ impl AuditRepository for PgAuditRepository {
         // The PG implementation requires async execution via the DbExecutor.
         // This is wired in the full deployment with the async runtime.
         Err(AuditPersistenceError::Database {
-            message: "PG implementation requires async runtime (not wired in tests)"
-                .to_string(),
+            message: "PG implementation requires async runtime (not wired in tests)".to_string(),
         })
     }
 
     fn query(&self, _query: &AuditQuery) -> AuditPersistenceResult<Vec<AuditRecord>> {
         Err(AuditPersistenceError::Database {
-            message: "PG implementation requires async runtime (not wired in tests)"
-                .to_string(),
+            message: "PG implementation requires async runtime (not wired in tests)".to_string(),
         })
     }
 
     fn chain_state(&self, _tenant_id: &str) -> AuditPersistenceResult<ChainState> {
         Err(AuditPersistenceError::Database {
-            message: "PG implementation requires async runtime (not wired in tests)"
-                .to_string(),
+            message: "PG implementation requires async runtime (not wired in tests)".to_string(),
         })
     }
 
     fn checkpoint(&self, _tenant_id: &str) -> AuditPersistenceResult<ChainCheckpoint> {
         Err(AuditPersistenceError::Database {
-            message: "PG implementation requires async runtime (not wired in tests)"
-                .to_string(),
+            message: "PG implementation requires async runtime (not wired in tests)".to_string(),
         })
     }
 
@@ -569,32 +565,25 @@ impl AuditRepository for PgAuditRepository {
         _tenant_id: &str,
     ) -> AuditPersistenceResult<Option<ChainCheckpoint>> {
         Err(AuditPersistenceError::Database {
-            message: "PG implementation requires async runtime (not wired in tests)"
-                .to_string(),
+            message: "PG implementation requires async runtime (not wired in tests)".to_string(),
         })
     }
 
     fn verify_chain(&self, _tenant_id: &str) -> AuditPersistenceResult<bool> {
         Err(AuditPersistenceError::Database {
-            message: "PG implementation requires async runtime (not wired in tests)"
-                .to_string(),
+            message: "PG implementation requires async runtime (not wired in tests)".to_string(),
         })
     }
 
     fn retention_policy(&self, _tenant_id: &str) -> AuditPersistenceResult<RetentionPolicyRecord> {
         Err(AuditPersistenceError::Database {
-            message: "PG implementation requires async runtime (not wired in tests)"
-                .to_string(),
+            message: "PG implementation requires async runtime (not wired in tests)".to_string(),
         })
     }
 
-    fn set_retention_policy(
-        &self,
-        _policy: &RetentionPolicyRecord,
-    ) -> AuditPersistenceResult<()> {
+    fn set_retention_policy(&self, _policy: &RetentionPolicyRecord) -> AuditPersistenceResult<()> {
         Err(AuditPersistenceError::Database {
-            message: "PG implementation requires async runtime (not wired in tests)"
-                .to_string(),
+            message: "PG implementation requires async runtime (not wired in tests)".to_string(),
         })
     }
 }
@@ -617,9 +606,7 @@ mod tests {
         assert!(!record.entry_hash.is_empty());
         assert_eq!(repo.count(), 1);
 
-        let results = repo
-            .query(&AuditQuery::for_tenant("tenant-A"))
-            .unwrap();
+        let results = repo.query(&AuditQuery::for_tenant("tenant-A")).unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].actor, "user-001");
     }
@@ -651,12 +638,22 @@ mod tests {
     #[test]
     fn in_memory_query_with_filters() {
         let repo = InMemoryAuditRepository::new();
-        repo.insert(&make_entry("t", "alice", "entity.read", AuditKind::Decision))
-            .unwrap();
+        repo.insert(&make_entry(
+            "t",
+            "alice",
+            "entity.read",
+            AuditKind::Decision,
+        ))
+        .unwrap();
         repo.insert(&make_entry("t", "bob", "entity.write", AuditKind::Decision))
             .unwrap();
-        repo.insert(&make_entry("t", "alice", "entity.read", AuditKind::DeniedRequest))
-            .unwrap();
+        repo.insert(&make_entry(
+            "t",
+            "alice",
+            "entity.read",
+            AuditKind::DeniedRequest,
+        ))
+        .unwrap();
 
         let results = repo
             .query(&AuditQuery::for_tenant("t").with_actor("alice"))
@@ -685,8 +682,13 @@ mod tests {
     fn in_memory_query_with_cursor() {
         let repo = InMemoryAuditRepository::new();
         for i in 0..5 {
-            repo.insert(&make_entry("t", "u", &format!("a{}", i), AuditKind::Decision))
-                .unwrap();
+            repo.insert(&make_entry(
+                "t",
+                "u",
+                &format!("a{}", i),
+                AuditKind::Decision,
+            ))
+            .unwrap();
         }
 
         // First page: limit 2
@@ -714,8 +716,13 @@ mod tests {
     fn in_memory_checkpoint() {
         let repo = InMemoryAuditRepository::new();
         for i in 0..3 {
-            repo.insert(&make_entry("t", "u", &format!("a{}", i), AuditKind::Decision))
-                .unwrap();
+            repo.insert(&make_entry(
+                "t",
+                "u",
+                &format!("a{}", i),
+                AuditKind::Decision,
+            ))
+            .unwrap();
         }
         let cp = repo.checkpoint("t").unwrap();
         assert_eq!(cp.sequence, 3); // last_sequence after 3 inserts (0,1,2 → next=3)

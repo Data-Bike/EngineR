@@ -1,24 +1,30 @@
 <template>
   <UInputMenu
-    :model-value="{ label: modelValue, value: modelValue }"
+    :model-value="selectedItem"
+    v-model:search-term="searchTerm"
     :items="results"
     :loading="loading"
-    :placeholder="t('entity.search')"
+    :placeholder="placeholder ?? t('entity.search_placeholder')"
     :disabled="disabled"
-    :search="search"
+    value-key="value"
+    label-key="label"
+    ignore-filter
+    trailing-icon="i-lucide-search"
     class="w-full"
     @update:model-value="onSelect"
+    @focus="ensureInitialOptions"
   />
 </template>
 
 <script setup lang="ts">
-import { ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 
 const props = defineProps<{
   modelValue: string;
   targetTypeId?: string;
   disabled?: boolean;
+  placeholder?: string;
 }>();
 
 const emit = defineEmits<{
@@ -28,42 +34,80 @@ const emit = defineEmits<{
 const { t } = useI18n();
 const api = useApi();
 
-const loading = ref(false);
-const results = ref<{ label: string; value: string }[]>([]);
+interface Option {
+  label: string;
+  value: string;
+}
 
-async function search(query: string): Promise<{ label: string; value: string }[]> {
-  if (!query.trim() || !props.targetTypeId) return [];
+const loading = ref(false);
+const results = ref<Option[]>([]);
+const searchTerm = ref('');
+const knownLabels = ref<Record<string, string>>({});
+const initialized = ref(false);
+let debounceTimer: ReturnType<typeof setTimeout> | undefined;
+let requestSeq = 0;
+
+const selectedItem = computed<Option | undefined>(() => {
+  if (!props.modelValue) return undefined;
+  const label = knownLabels.value[props.modelValue]
+    ?? results.value.find((item) => item.value === props.modelValue)?.label
+    ?? props.modelValue;
+  return { label, value: props.modelValue };
+});
+
+async function fetchOptions(query: string): Promise<void> {
+  const seq = ++requestSeq;
   loading.value = true;
   try {
-    const res = await api.entities.query({
-      query: {
-        from: { type_id: props.targetTypeId, alias: 'e' },
-        select: [{ field: { system: 'public_id' }, alias: 'public_id' }],
-        where: {
-          comparison: {
-            field: { system: 'public_id' },
-            op: 'prefix',
-            value: query,
-          },
-        },
-        sort: [{ field: { system: 'public_id' }, direction: 'asc' }],
-        page: { size: 10 },
-      },
+    const res = await api.entities.list({
+      type: props.targetTypeId || undefined,
+      search: query.trim() || undefined,
+      limit: 20,
     });
-    results.value = (res.data.rows as Array<{ public_id: string }>).map((r) => ({
-      label: r.public_id,
+    if (seq !== requestSeq) return;
+    results.value = res.data.map((r) => ({
+      label: `${r.display_name ?? r.public_id}${r.type_id ? ` · ${r.type_id}` : ''}`,
       value: r.public_id,
     }));
-    return results.value;
+    for (const item of results.value) knownLabels.value[item.value] = item.label;
   } catch {
-    return [];
+    if (seq === requestSeq) results.value = [];
   } finally {
-    loading.value = false;
+    if (seq === requestSeq) loading.value = false;
   }
 }
 
-function onSelect(item: { label: string; value: string } | string) {
-  const value = typeof item === 'string' ? item : item.value;
+function ensureInitialOptions() {
+  if (initialized.value) return;
+  initialized.value = true;
+  fetchOptions('');
+}
+
+watch(searchTerm, (term) => {
+  initialized.value = true;
+  if (debounceTimer) clearTimeout(debounceTimer);
+  debounceTimer = setTimeout(() => fetchOptions(term), 250);
+});
+
+// Resolve the label of a pre-selected value so the field does not show a bare id.
+watch(
+  () => props.modelValue,
+  async (value) => {
+    if (!value || knownLabels.value[value]) return;
+    try {
+      const res = await api.entities.get(value);
+      knownLabels.value[value] = res.data.display_name ?? value;
+    } catch {
+      // keep the raw id as label
+    }
+  },
+  { immediate: true },
+);
+
+function onSelect(item: Option | string | undefined) {
+  const value = typeof item === 'string' ? item : item?.value ?? '';
   emit('update:model-value', value);
 }
+
+onMounted(ensureInitialOptions);
 </script>

@@ -82,6 +82,7 @@ pub enum IdentityKeyStatus {
 /// Compute the canonical key string from normalized component values, in
 /// policy order. Components are joined by the unit separator `\u{1f}` so that
 /// `(a, b)` and `(ab, )` never collide.
+#[must_use]
 pub fn compute_identity_key(components: &[String]) -> String {
     components.join("\u{1f}")
 }
@@ -92,7 +93,7 @@ mod tests {
 
     #[test]
     fn key_separator_prevents_collision() {
-        let a = compute_identity_key(&["ab".to_string(), "".to_string()]);
+        let a = compute_identity_key(&["ab".to_string(), String::new()]);
         let b = compute_identity_key(&["a".to_string(), "b".to_string()]);
         assert_ne!(a, b);
     }

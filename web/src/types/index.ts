@@ -14,10 +14,13 @@ export {
   type EvidenceItem,
   type RiskFactor,
   type RiskAssessment,
+  type RiskDecision,
   type WorkflowTask,
   type MonitorSchedule,
   type MonitorResult,
   type ReportInstance,
+  type ReportFormat,
+  type ReportStatus,
 } from './skr.js';
 export * from './connector.js';
 export * from './check.js';

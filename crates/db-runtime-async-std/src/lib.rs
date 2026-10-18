@@ -61,7 +61,9 @@ impl From<sqlx::Error> for DbError {
                 let msg = db.message().to_string();
                 match db.code().as_deref() {
                     // unique_violation / deadlock_detected / serialization_failure
-                    Some("23505") | Some("40P01") | Some("40001") => Self::Conflict { message: msg },
+                    Some("23505") | Some("40P01") | Some("40001") => {
+                        Self::Conflict { message: msg }
+                    }
                     // data_exception (22000-22099) and most of 22xxx
                     Some(c) if c.starts_with("220") => Self::CorruptData { message: msg },
                     _ => Self::Other { message: msg },

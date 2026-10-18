@@ -153,8 +153,8 @@ fn circuit_breaker_success_resets() {
 
 #[test]
 fn backoff_delay_exponential() {
-    use std::time::Duration;
     use enginer_connectors::rate_limit::backoff_delay;
+    use std::time::Duration;
     assert_eq!(backoff_delay(0, 100, 10000), Duration::from_millis(100));
     assert_eq!(backoff_delay(1, 100, 10000), Duration::from_millis(200));
     assert_eq!(backoff_delay(2, 100, 10000), Duration::from_millis(400));
@@ -163,8 +163,8 @@ fn backoff_delay_exponential() {
 
 #[test]
 fn backoff_delay_capped() {
-    use std::time::Duration;
     use enginer_connectors::rate_limit::backoff_delay;
+    use std::time::Duration;
     assert_eq!(backoff_delay(10, 100, 1000), Duration::from_millis(1000));
 }
 

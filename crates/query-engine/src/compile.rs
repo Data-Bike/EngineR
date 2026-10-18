@@ -60,9 +60,7 @@ pub fn compile(ast: &QueryAst) -> Result<CompiledQuery, QueryError> {
                 // LATERAL join to core.statement for this predicate.
                 let alias = format!("p{}", output_aliases.len());
                 let placeholder = next_placeholder(&mut binds);
-                sql.push_str(&format!(
-                    ", {alias}.object AS {alias}_obj"
-                ));
+                sql.push_str(&format!(", {alias}.object AS {alias}_obj"));
                 // We'll add the LATERAL join in the FROM clause; record the
                 // predicate id bind now.
                 let _ = placeholder;
@@ -448,7 +446,9 @@ fn system_column(system: &SystemField) -> String {
         SystemField::PublicId => "e.public_id".to_string(),
         SystemField::EntityId => "e.entity_id".to_string(),
         SystemField::CreatedAt => "e.created_at".to_string(),
-        SystemField::Status => "CASE WHEN e.retired_at IS NULL THEN 'active' ELSE 'retired' END".to_string(),
+        SystemField::Status => {
+            "CASE WHEN e.retired_at IS NULL THEN 'active' ELSE 'retired' END".to_string()
+        }
         SystemField::Revision => "e.head_revision".to_string(),
     }
 }
@@ -490,7 +490,10 @@ mod tests {
                 },
                 direction: SortDirection::Asc,
             }],
-            page: KeysetPage { size: 50, after: None },
+            page: KeysetPage {
+                size: 50,
+                after: None,
+            },
             as_of: None,
         };
         let compiled = compile(&ast).unwrap();
@@ -532,7 +535,10 @@ mod tests {
                 valid_at: None,
             }),
             sort: vec![],
-            page: KeysetPage { size: 10, after: None },
+            page: KeysetPage {
+                size: 10,
+                after: None,
+            },
             as_of: None,
         };
         let compiled = compile(&ast).unwrap();
@@ -581,7 +587,10 @@ mod tests {
                 })),
             ])),
             sort: vec![],
-            page: KeysetPage { size: 10, after: None },
+            page: KeysetPage {
+                size: 10,
+                after: None,
+            },
             as_of: None,
         };
         let compiled = compile(&ast).unwrap();
@@ -612,7 +621,10 @@ mod tests {
                 valid_at: None,
             }),
             sort: vec![],
-            page: KeysetPage { size: 10, after: None },
+            page: KeysetPage {
+                size: 10,
+                after: None,
+            },
             as_of: None,
         };
         let compiled = compile(&ast).unwrap();
@@ -621,11 +633,38 @@ mod tests {
         // User values must be binds, not literals in the SQL text.
         // The IN list should contain placeholders, not bare numbers.
         let in_part = compiled.sql.sql.split("IN (").nth(1).unwrap();
-        assert!(in_part.contains("$"), "IN values must be placeholders: {in_part}");
+        assert!(
+            in_part.contains("$"),
+            "IN values must be placeholders: {in_part}"
+        );
         // The binds vector must contain all three values.
-        assert_eq!(compiled.sql.binds.iter().filter(|b| **b == serde_json::json!(1)).count(), 1);
-        assert_eq!(compiled.sql.binds.iter().filter(|b| **b == serde_json::json!(2)).count(), 1);
-        assert_eq!(compiled.sql.binds.iter().filter(|b| **b == serde_json::json!(3)).count(), 1);
+        assert_eq!(
+            compiled
+                .sql
+                .binds
+                .iter()
+                .filter(|b| **b == serde_json::json!(1))
+                .count(),
+            1
+        );
+        assert_eq!(
+            compiled
+                .sql
+                .binds
+                .iter()
+                .filter(|b| **b == serde_json::json!(2))
+                .count(),
+            1
+        );
+        assert_eq!(
+            compiled
+                .sql
+                .binds
+                .iter()
+                .filter(|b| **b == serde_json::json!(3))
+                .count(),
+            1
+        );
     }
 
     #[test]
@@ -646,7 +685,10 @@ mod tests {
                 valid_at: None,
             }),
             sort: vec![],
-            page: KeysetPage { size: 10, after: None },
+            page: KeysetPage {
+                size: 10,
+                after: None,
+            },
             as_of: None,
         };
         let compiled = compile(&ast).unwrap();
@@ -683,7 +725,10 @@ mod tests {
                 },
             ])),
             sort: vec![],
-            page: KeysetPage { size: 10, after: None },
+            page: KeysetPage {
+                size: 10,
+                after: None,
+            },
             as_of: None,
         };
         let compiled = compile(&ast).unwrap();
@@ -707,7 +752,10 @@ mod tests {
                 filter: None,
             }),
             sort: vec![],
-            page: KeysetPage { size: 10, after: None },
+            page: KeysetPage {
+                size: 10,
+                after: None,
+            },
             as_of: None,
         };
         let compiled = compile(&ast).unwrap();
@@ -731,7 +779,10 @@ mod tests {
                 filter: None,
             }),
             sort: vec![],
-            page: KeysetPage { size: 10, after: None },
+            page: KeysetPage {
+                size: 10,
+                after: None,
+            },
             as_of: None,
         };
         let compiled = compile(&ast).unwrap();
@@ -768,7 +819,10 @@ mod tests {
                 },
             ])),
             sort: vec![],
-            page: KeysetPage { size: 10, after: None },
+            page: KeysetPage {
+                size: 10,
+                after: None,
+            },
             as_of: None,
         };
         let compiled = compile(&ast).unwrap();
@@ -786,7 +840,10 @@ mod tests {
             select: vec![],
             where_expr: None,
             sort: vec![],
-            page: KeysetPage { size: 10, after: None },
+            page: KeysetPage {
+                size: 10,
+                after: None,
+            },
             as_of: None,
         };
         let compiled = compile(&ast).unwrap();
@@ -812,7 +869,10 @@ mod tests {
                 },
                 direction: SortDirection::Desc,
             }],
-            page: KeysetPage { size: 10, after: None },
+            page: KeysetPage {
+                size: 10,
+                after: None,
+            },
             as_of: None,
         };
         let compiled = compile(&ast).unwrap();
@@ -870,7 +930,10 @@ mod tests {
                 },
                 direction: SortDirection::Asc,
             }],
-            page: KeysetPage { size: 1000, after: None },
+            page: KeysetPage {
+                size: 1000,
+                after: None,
+            },
             as_of: None,
         };
 
@@ -921,7 +984,10 @@ mod tests {
                 valid_at: None,
             }),
             sort: vec![],
-            page: KeysetPage { size: 10, after: None },
+            page: KeysetPage {
+                size: 10,
+                after: None,
+            },
             as_of: None,
         };
         let result = compile(&ast);
@@ -950,7 +1016,10 @@ mod tests {
                 valid_at: None,
             }),
             sort: vec![],
-            page: KeysetPage { size: 10, after: None },
+            page: KeysetPage {
+                size: 10,
+                after: None,
+            },
             as_of: None,
         };
         let result = compile(&ast);

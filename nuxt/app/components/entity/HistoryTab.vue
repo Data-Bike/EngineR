@@ -155,26 +155,31 @@ const compareToFields = ref<{ alias: string; value?: string }[]>([]);
 function selectForCompare(rev: number) {
   if (compareFrom.value === null) {
     compareFrom.value = rev;
+    selectedRev.value = rev;
   } else {
     compareTo.value = rev;
+    compareFromFields.value = fieldsAtRevision(compareFrom.value);
+    compareToFields.value = fieldsAtRevision(rev);
     compareDialogOpen.value = true;
-    // Would fetch both revisions and populate fields
   }
 }
 
-interface ApiRevision {
-  revision: number;
-  timestamp: string;
-  actor: string;
-  operation: 'create' | 'update' | 'retire' | 'merge' | 'relation';
-  changes?: FieldChange[];
-  reason?: string;
+function fieldsAtRevision(revision: number) {
+  const values = new Map<string, string | undefined>();
+  for (const entry of revisions.value
+    .filter((item) => item.revision <= revision)
+    .sort((left, right) => left.revision - right.revision)) {
+    for (const change of entry.changes ?? []) {
+      values.set(change.alias, change.new_value);
+    }
+  }
+  return [...values.entries()].map(([alias, value]) => ({ alias, value }));
 }
 
 async function fetchHistory() {
   try {
     const res = await api.entities.getHistory(props.entityId);
-    revisions.value = res.data ?? [];
+    revisions.value = (res.data ?? []) as RevisionEntry[];
   } catch (e: unknown) {
     toast.add({ title: t('common.error'), description: e instanceof Error ? e.message : String(e), color: 'error' });
     revisions.value = [];

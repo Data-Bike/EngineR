@@ -106,7 +106,9 @@ impl Factor {
         let detected_at = chrono::Utc::now();
         let dedup_key = format!(
             "{}:{}:{}:{}",
-            target_entity_id, criterion_id, criterion_version,
+            target_entity_id,
+            criterion_id,
+            criterion_version,
             detected_at.format("%Y-%m-%d")
         );
         Self {

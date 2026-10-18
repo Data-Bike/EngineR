@@ -1,0 +1,91 @@
+@startuml wh_test_02_test_objects
+' ============================================================
+' Склад ТЕСТ — диаграмма тестовых объектов и связей
+' (создаются через MCP: entities.create + relations.create)
+' ============================================================
+skinparam linetype ortho
+title Склад ТЕСТ — тестовые объекты и связи
+
+package "Склады" {
+  object "WH-01 Склад ТЕСТ Центральный\n5000 м², Москва" as WH1 <<wh_warehouse>>
+  object "WH-02 Склад ТЕСТ Северный\n2500 м², СПб" as WH2 <<wh_warehouse>>
+}
+
+package "Зоны" {
+  object "Z-RCV приёмка" as Z1 <<wh_zone>>
+  object "Z-STO-A хранение" as Z2 <<wh_zone>>
+  object "Z-SHIP отгрузка" as Z3 <<wh_zone>>
+  object "Z-COLD холод" as Z4 <<wh_zone>>
+}
+
+package "Товары" {
+  object "SKU-001 Гвозди 100мм (кг)" as P1 <<wh_product>>
+  object "SKU-002 Краска белая (л)" as P2 <<wh_product>>
+  object "SKU-003 Доска 50х150 (м³)" as P3 <<wh_product>>
+  object "SKU-004 Клей ПВА (кг)" as P4 <<wh_product>>
+}
+
+package "Остатки" {
+  object "STK-1: 1500 кг, партия B-1" as S1 <<wh_stock>>
+  object "STK-2: 320 л, партия B-2" as S2 <<wh_stock>>
+  object "STK-3: 12.5 м³, партия B-3" as S3 <<wh_stock>>
+}
+
+package "Документы-объекты" {
+  object "INB-001 приход (проведена)" as IN1 <<wh_inbound>>
+  object "INB-002 приход (черновик)" as IN2 <<wh_inbound>>
+  object "OUT-001 расход (резерв)" as OUT1 <<wh_outbound>>
+  object "INV-001 инвентаризация (-3)" as INV1 <<wh_inventory>>
+}
+
+package "Контрагенты и персонал" {
+  object "ООО ТЕСТ Поставка" as SUP <<legal_entity>>
+  object "АО ТЕСТ Покупатель" as CUST <<legal_entity>>
+  object "Сидоров К.Т. (кладовщик)" as KEP <<person>>
+}
+
+' зоны → склады
+Z1 --> WH1 : wh_located_in
+Z2 --> WH1 : wh_located_in
+Z3 --> WH1 : wh_located_in
+Z4 --> WH2 : wh_located_in
+
+' остатки
+S1 --> P1 : wh_stock_product
+S1 --> Z2 : wh_stock_zone
+S2 --> P2 : wh_stock_product
+S2 --> Z2 : wh_stock_zone
+S3 --> P3 : wh_stock_product
+S3 --> Z1 : wh_stock_zone
+
+' поставки
+P1 --> SUP : wh_supplied_by
+P2 --> SUP : wh_supplied_by
+P3 --> SUP : wh_supplied_by
+
+' приход
+IN1 --> SUP : wh_inbound_from
+IN1 --> WH1 : wh_inbound_to
+IN1 --> P1 : wh_inbound_item
+IN1 --> P2 : wh_inbound_item
+IN2 --> SUP : wh_inbound_from
+IN2 --> WH1 : wh_inbound_to
+IN2 --> P4 : wh_inbound_item
+
+' расход
+OUT1 --> CUST : wh_outbound_to
+OUT1 --> WH1 : wh_outbound_from
+OUT1 --> P1 : wh_outbound_item
+OUT1 --> P3 : wh_outbound_item
+
+' инвентаризация и персонал
+INV1 --> WH1 : wh_counted_in
+KEP --> WH1 : wh_keeper
+
+note right of WH1
+  Объекты создаются кейсами WH2/WH5–WH7
+  через entities.create / relations.create;
+  доп. связи (zone_rcv→wh1, stk_paint) —
+  кейсами WH3
+end note
+@enduml

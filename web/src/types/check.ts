@@ -16,8 +16,19 @@ export interface CheckRequestBody {
 /** Check response. */
 export interface CheckResponse {
   check_id: string;
+  request_id: string;
+  target_entity_id: string;
+  target_display_name: string;
+  kind: string;
   status: string;
-  created_at: string;
+  started_at: string;
+  completed_at: string | null;
+  evidence: Array<Record<string, unknown>>;
+  risk_level: string | null;
+  step_up_required: boolean;
+  data_denied: boolean;
+  /** Compatibility alias used by older API consumers. */
+  created_at?: string;
 }
 
 /** Evidence response. */
@@ -55,19 +66,39 @@ export type CheckStatus = (typeof CheckStatus)[keyof typeof CheckStatus];
 export interface AssessmentResponse {
   assessment_id: string;
   target_entity_id: string;
-  final_score: number;
-  level: RiskLevel;
+  target_display_name: string;
+  score: number;
+  risk_level: RiskLevel;
+  overall_level: RiskLevel;
+  decision: string;
   status: string;
-  generated_at: string;
+  created_at: string;
+  assessor: string;
+  assessed_at: string;
+  rationale: string | null;
+  approval_pending: boolean;
   factors: FactorSummary[];
+  /** Compatibility aliases used by the orchestration API. */
+  final_score?: number;
+  level?: RiskLevel;
+  generated_at?: string;
 }
 
 /** Factor summary. */
 export interface FactorSummary {
   factor_id: string;
+  entity_public_id: string;
   criterion_id: string;
-  severity: string;
-  status: string;
+  label: string;
+  level: RiskLevel;
+  resolved: boolean;
+  detected_at: string;
+  resolved_at: string | null;
+  source_checks: string[];
+  explanation: string;
+  /** Compatibility aliases used by the criteria engine API. */
+  severity?: string;
+  status?: string;
 }
 
 /** Risk level (docs/14 §10). */
@@ -85,6 +116,9 @@ export type RiskLevel = (typeof RiskLevel)[keyof typeof RiskLevel];
 export interface TriggerAssessmentBody {
   model_id?: string;
   force: boolean;
+  desired_level?: RiskLevel;
+  decision?: string;
+  rationale?: string;
 }
 
 // --- Workflow ---
@@ -112,15 +146,34 @@ export interface TransitionBody {
 
 // --- Task ---
 
+/** Workflow task kinds used by the entity task UI. */
+export const TaskKind = {
+  RequestProcessing: 'request_processing',
+  CheckExecution: 'check_execution',
+  RiskAssessment: 'risk_assessment',
+  MonitoringReview: 'monitoring_review',
+  ReportGeneration: 'report_generation',
+  Approval: 'approval',
+  Notification: 'notification',
+} as const;
+
+export type TaskKind = (typeof TaskKind)[keyof typeof TaskKind];
+
 /** Task response (docs/13 §8). */
 export interface TaskResponse {
   task_id: string;
+  entity_public_id: string;
   title: string;
-  kind: string;
+  kind: TaskKind;
   status: TaskStatus;
-  priority: TaskPriority;
-  assignee_id: string | null;
-  due_date: string;
+  priority: number;
+  assignee: string | null;
+  due_date: string | null;
+  created_at: string;
+  updated_at: string;
+  description: string | null;
+  sub_tasks: string[];
+  blocking: boolean;
 }
 
 /** Task statuses. */

@@ -5,11 +5,19 @@
  */
 
 /** System fields queryable without a statement join. */
-export type SystemField = 'public_id' | 'entity_id' | 'created_at' | 'status' | 'revision';
+export type SystemField =
+  | 'public_id'
+  | 'entity_id'
+  | 'display_name'
+  | 'type_id'
+  | 'created_at'
+  | 'status'
+  | 'revision';
 
 /** A field reference: predicate id (data) or system field. */
 export type FieldRef =
   | { predicate_id: string }
+  | { predicate: string }
   | { system: SystemField };
 
 /** Comparison operator (docs/07 §3). */
@@ -87,20 +95,20 @@ export interface FromClause {
 /** The root query AST (docs/07 §2). */
 export interface QueryAst {
   from: FromClause;
-  select: SelectField[];
+  select?: SelectField[];
   where?: WhereExpr;
   search?: string;
   filters?: Record<string, string | string[]>;
-  sort: SortKey[];
+  sort?: SortKey[];
   page: KeysetPage;
   as_of?: string;
 }
 
-/** Query request body (docs/06 §9). For the mock/legacy API the body is the AST directly. */
+/** Query request body (docs/06 §9). The public API accepts the AST directly. */
 export interface QueryBody extends QueryAst {}
 
 /** Query response (docs/06 §9). */
 export interface QueryResponse {
-  rows: Record<string, unknown>[];
+  rows: Array<Record<string, unknown> & { public_id: string }>;
   cursor?: string;
 }

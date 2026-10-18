@@ -162,35 +162,27 @@ function decisionColor(decision: RiskDecision): BadgeColor {
     escalate: 'warning',
     review: 'neutral',
   };
-  return colors[decision];
-}
-
-interface AssessmentResponse {
-  factors: RiskFactor[];
-  score?: number;
-  risk_level?: string;
-  decision?: string;
-  status?: string;
-  assessor?: string;
-  assessed_at?: string;
-  rationale?: string;
-  approval_pending?: boolean;
+  return colors[decision] ?? 'neutral';
 }
 
 async function fetchRisks() {
   try {
     const res = await api.checks.getAssessment(props.entityId);
     if (res.data) {
-      factors.value = res.data.factors ?? [];
+      factors.value = (res.data.factors ?? []).map((factor) => ({
+        ...factor,
+        level: factor.level as RiskFactor['level'],
+        resolved_at: factor.resolved_at ?? undefined,
+      }));
       currentAssessment.value = {
         assessment_id: res.data.assessment_id ?? '',
         entity_public_id: props.entityId,
         overall_level: (res.data.risk_level ?? 'low') as RiskAssessment['overall_level'],
-        factors: res.data.factors ?? [],
+        factors: factors.value,
         assessor: res.data.assessor ?? '',
         assessed_at: res.data.assessed_at ?? '',
         decision: (res.data.decision ?? 'review') as RiskAssessment['decision'],
-        rationale: res.data.rationale ?? null,
+        rationale: res.data.rationale ?? undefined,
         approval_pending: res.data.approval_pending ?? false,
       };
     } else {
@@ -218,8 +210,10 @@ async function submitAssessment() {
   submitting.value = true;
   try {
     await api.checks.triggerAssessment(props.entityId, {
-      model_id: selectedModel.value,
       force: true,
+      desired_level: newLevel.value,
+      decision: newDecision.value,
+      rationale: newRationale.value || undefined,
     });
     toast.add({ title: t('entity.risks.new_assessment'), color: 'success' });
     showAssessment.value = false;

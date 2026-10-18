@@ -4,9 +4,7 @@
 //! row and record the successor id (immutable history, ADR-004).
 
 use enginer_application::ports::StatementRepository;
-use enginer_domain::{
-    DomainError, EntityId, Statement, StatementId, StatementStatus, TenantId,
-};
+use enginer_domain::{DomainError, EntityId, Statement, StatementId, StatementStatus, TenantId};
 use futures::future::BoxFuture;
 use sqlx::postgres::PgPool;
 use std::sync::Arc;
@@ -27,6 +25,7 @@ impl StatementRepository for PgStatementRepository {
     fn insert(&self, stmt: &Statement) -> BoxFuture<'_, Result<(), DomainError>> {
         let stmt = stmt.clone();
         Box::pin(async move {
+            let mut tx = crate::rls::tenant_tx(&self.pool, stmt.tenant_id).await?;
             let object_json = serde_json::to_value(&stmt.object)
                 .map_err(|e| DomainError::invariant(format!("statement object encode: {e}")))?;
             let status_str = status_to_str(stmt.status);
@@ -42,7 +41,11 @@ impl StatementRepository for PgStatementRepository {
             .bind(stmt.subject.raw())
             .bind(stmt.predicate.raw())
             .bind(&object_json)
-            .bind(if stmt.object.is_edge() { "entity" } else { "scalar" })
+            .bind(if stmt.object.is_edge() {
+                "entity"
+            } else {
+                "scalar"
+            })
             .bind(stmt.validity.0.valid_from)
             .bind(stmt.validity.0.valid_to)
             .bind(stmt.recorded.0)
@@ -53,9 +56,12 @@ impl StatementRepository for PgStatementRepository {
             .bind(stmt.fingerprint.to_hex())
             .bind(stmt.supersedes_statement_id.map(|s| s.raw()))
             .bind(stmt.revoked_by_statement_id.map(|s| s.raw()))
-            .execute(&*self.pool)
+            .execute(&mut *tx)
             .await
             .map_err(|e| DomainError::invariant(format!("statement insert: {e}")))?;
+            tx.commit()
+                .await
+                .map_err(|e| DomainError::invariant(format!("tx commit: {e}")))?;
             Ok(())
         })
     }
@@ -67,6 +73,7 @@ impl StatementRepository for PgStatementRepository {
         as_of: chrono::DateTime<chrono::Utc>,
     ) -> BoxFuture<'_, Result<Vec<Statement>, DomainError>> {
         Box::pin(async move {
+            let mut tx = crate::rls::tenant_tx(&self.pool, tenant).await?;
             let rows: Vec<(
                 i64,
                 uuid::Uuid,
@@ -94,10 +101,13 @@ impl StatementRepository for PgStatementRepository {
             .bind(tenant.raw())
             .bind(subject.raw())
             .bind(as_of)
-            .fetch_all(&*self.pool)
+            .fetch_all(&mut *tx)
             .await
             .map_err(|e| DomainError::not_found(format!("statement read: {e}")))?;
-            Ok(rows.into_iter().map(|r| row_to_statement(tenant, subject, r)).collect())
+            Ok(rows
+                .into_iter()
+                .map(|r| row_to_statement(tenant, subject, r))
+                .collect())
         })
     }
 
@@ -107,6 +117,7 @@ impl StatementRepository for PgStatementRepository {
         id: StatementId,
     ) -> BoxFuture<'_, Result<Option<Statement>, DomainError>> {
         Box::pin(async move {
+            let mut tx = crate::rls::tenant_tx(&self.pool, tenant).await?;
             let row: Option<(
                 i64,
                 uuid::Uuid,
@@ -132,7 +143,7 @@ impl StatementRepository for PgStatementRepository {
             )
             .bind(tenant.raw())
             .bind(id.raw())
-            .fetch_optional(&*self.pool)
+            .fetch_optional(&mut *tx)
             .await
             .map_err(|e| DomainError::not_found(format!("statement find: {e}")))?;
             Ok(row.map(|r| row_to_statement(tenant, EntityId(0), r)))
@@ -146,6 +157,7 @@ impl StatementRepository for PgStatementRepository {
         by: StatementId,
     ) -> BoxFuture<'_, Result<(), DomainError>> {
         Box::pin(async move {
+            let mut tx = crate::rls::tenant_tx(&self.pool, tenant).await?;
             sqlx::query(
                 "UPDATE core.statement SET status = 'superseded', revoked_by_statement_id = $3
                  WHERE tenant_id = $1 AND statement_id = $2",
@@ -153,9 +165,12 @@ impl StatementRepository for PgStatementRepository {
             .bind(tenant.raw())
             .bind(old.raw())
             .bind(by.raw())
-            .execute(&*self.pool)
+            .execute(&mut *tx)
             .await
             .map_err(|e| DomainError::invariant(format!("statement supersede: {e}")))?;
+            tx.commit()
+                .await
+                .map_err(|e| DomainError::invariant(format!("tx commit: {e}")))?;
             Ok(())
         })
     }
@@ -167,6 +182,7 @@ impl StatementRepository for PgStatementRepository {
         by: StatementId,
     ) -> BoxFuture<'_, Result<(), DomainError>> {
         Box::pin(async move {
+            let mut tx = crate::rls::tenant_tx(&self.pool, tenant).await?;
             sqlx::query(
                 "UPDATE core.statement SET status = 'revoked', revoked_by_statement_id = $3
                  WHERE tenant_id = $1 AND statement_id = $2",
@@ -174,9 +190,12 @@ impl StatementRepository for PgStatementRepository {
             .bind(tenant.raw())
             .bind(id.raw())
             .bind(by.raw())
-            .execute(&*self.pool)
+            .execute(&mut *tx)
             .await
             .map_err(|e| DomainError::invariant(format!("statement revoke: {e}")))?;
+            tx.commit()
+                .await
+                .map_err(|e| DomainError::invariant(format!("tx commit: {e}")))?;
             Ok(())
         })
     }
@@ -221,13 +240,12 @@ fn row_to_statement(
         Option<i64>,
     ),
 ) -> Statement {
-    let object: enginer_domain::StatementObject =
-        serde_json::from_value(r.2).unwrap_or(enginer_domain::StatementObject::Scalar(
-            enginer_domain::CanonicalScalar::Text {
-                value_nfc: String::new(),
-                language_tag: None,
-            },
-        ));
+    let object: enginer_domain::StatementObject = serde_json::from_value(r.2).unwrap_or(
+        enginer_domain::StatementObject::Scalar(enginer_domain::CanonicalScalar::Text {
+            value_nfc: String::new(),
+            language_tag: None,
+        }),
+    );
     let provenance: enginer_domain::ProvenanceRef =
         serde_json::from_value(r.7).unwrap_or(enginer_domain::ProvenanceRef::user(None));
     let confidence: f32 = r.8.parse().unwrap_or(1.0);

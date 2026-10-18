@@ -3,10 +3,10 @@
 #![cfg(test)]
 
 use enginer_workflow::{
-    ActionKind, AssignmentStrategy, EscalationTimer, Job, JobState, MisfirePolicy,
-    Reaction, ReactionConfig, ReactionTrigger, ReactionTriggerKind, Schedule, ScheduleConfig,
-    StateMachine, StateMachineDefinition, State, StateTransition, Task, TaskPriority,
-    TaskStatus, TimerKind,
+    ActionKind, AssignmentStrategy, EscalationTimer, Job, JobState, MisfirePolicy, Reaction,
+    ReactionConfig, ReactionTrigger, ReactionTriggerKind, Schedule, ScheduleConfig, State,
+    StateMachine, StateMachineDefinition, StateTransition, Task, TaskPriority, TaskStatus,
+    TimerKind,
 };
 
 // --- State machine tests ---
@@ -16,13 +16,41 @@ fn make_request_workflow() -> StateMachineDefinition {
         definition_id: "request_processing".to_string(),
         version: "1.0.0".to_string(),
         states: vec![
-            State { name: "new".to_string(), terminal: false, initial: true },
-            State { name: "in_review".to_string(), terminal: false, initial: false },
-            State { name: "checks_running".to_string(), terminal: false, initial: false },
-            State { name: "assessment".to_string(), terminal: false, initial: false },
-            State { name: "decision".to_string(), terminal: false, initial: false },
-            State { name: "completed".to_string(), terminal: true, initial: false },
-            State { name: "cancelled".to_string(), terminal: true, initial: false },
+            State {
+                name: "new".to_string(),
+                terminal: false,
+                initial: true,
+            },
+            State {
+                name: "in_review".to_string(),
+                terminal: false,
+                initial: false,
+            },
+            State {
+                name: "checks_running".to_string(),
+                terminal: false,
+                initial: false,
+            },
+            State {
+                name: "assessment".to_string(),
+                terminal: false,
+                initial: false,
+            },
+            State {
+                name: "decision".to_string(),
+                terminal: false,
+                initial: false,
+            },
+            State {
+                name: "completed".to_string(),
+                terminal: true,
+                initial: false,
+            },
+            State {
+                name: "cancelled".to_string(),
+                terminal: true,
+                initial: false,
+            },
         ],
         transitions: vec![
             StateTransition {
@@ -93,7 +121,9 @@ fn state_machine_starts_in_initial_state() {
 fn state_machine_transition() {
     let def = make_request_workflow();
     let mut sm = StateMachine::new(&def, "inst-001").unwrap();
-    let record = sm.transition(&def, "in_review", "start_review", "user-001").unwrap();
+    let record = sm
+        .transition(&def, "in_review", "start_review", "user-001")
+        .unwrap();
     assert_eq!(sm.current_state, "in_review");
     assert_eq!(record.from, "new");
     assert_eq!(record.to, "in_review");
@@ -122,11 +152,16 @@ fn state_machine_trigger_mismatch() {
 fn state_machine_reaches_terminal() {
     let def = make_request_workflow();
     let mut sm = StateMachine::new(&def, "inst-001").unwrap();
-    sm.transition(&def, "in_review", "start_review", "user-001").unwrap();
-    sm.transition(&def, "checks_running", "start_checks", "user-001").unwrap();
-    sm.transition(&def, "assessment", "checks_completed", "user-001").unwrap();
-    sm.transition(&def, "decision", "assessment_done", "user-001").unwrap();
-    sm.transition(&def, "completed", "decision_made", "user-001").unwrap();
+    sm.transition(&def, "in_review", "start_review", "user-001")
+        .unwrap();
+    sm.transition(&def, "checks_running", "start_checks", "user-001")
+        .unwrap();
+    sm.transition(&def, "assessment", "checks_completed", "user-001")
+        .unwrap();
+    sm.transition(&def, "decision", "assessment_done", "user-001")
+        .unwrap();
+    sm.transition(&def, "completed", "decision_made", "user-001")
+        .unwrap();
     assert_eq!(sm.current_state, "completed");
     assert!(sm.terminated);
     assert!(sm.is_terminal());
@@ -136,7 +171,8 @@ fn state_machine_reaches_terminal() {
 fn state_machine_cancel_from_new() {
     let def = make_request_workflow();
     let mut sm = StateMachine::new(&def, "inst-001").unwrap();
-    sm.transition(&def, "cancelled", "cancel", "user-001").unwrap();
+    sm.transition(&def, "cancelled", "cancel", "user-001")
+        .unwrap();
     assert_eq!(sm.current_state, "cancelled");
     assert!(sm.terminated);
 }
@@ -145,7 +181,8 @@ fn state_machine_cancel_from_new() {
 fn state_machine_no_transition_after_terminal() {
     let def = make_request_workflow();
     let mut sm = StateMachine::new(&def, "inst-001").unwrap();
-    sm.transition(&def, "cancelled", "cancel", "user-001").unwrap();
+    sm.transition(&def, "cancelled", "cancel", "user-001")
+        .unwrap();
     let result = sm.transition(&def, "in_review", "start_review", "user-001");
     assert!(result.is_err());
 }
@@ -191,7 +228,8 @@ fn job_new_is_queued() {
 fn job_lifecycle_success() {
     let deadline = chrono::Utc::now() + chrono::Duration::hours(1);
     let mut job = Job::new("tenant-001", "check", "connectors", deadline);
-    job.lease("worker-001", chrono::Duration::minutes(10)).unwrap();
+    job.lease("worker-001", chrono::Duration::minutes(10))
+        .unwrap();
     assert_eq!(job.state, JobState::Leased);
     assert_eq!(job.status.lease_owner.as_deref(), Some("worker-001"));
     job.start().unwrap();
@@ -208,7 +246,8 @@ fn job_lifecycle_success() {
 fn job_lifecycle_fail() {
     let deadline = chrono::Utc::now() + chrono::Duration::hours(1);
     let mut job = Job::new("tenant-001", "check", "connectors", deadline);
-    job.lease("worker-001", chrono::Duration::minutes(10)).unwrap();
+    job.lease("worker-001", chrono::Duration::minutes(10))
+        .unwrap();
     job.start().unwrap();
     job.fail("network error").unwrap();
     assert_eq!(job.state, JobState::Failed);
@@ -229,7 +268,8 @@ fn job_cancel() {
 fn job_cancel_after_irreversible() {
     let deadline = chrono::Utc::now() + chrono::Duration::hours(1);
     let mut job = Job::new("tenant-001", "check", "connectors", deadline);
-    job.lease("worker-001", chrono::Duration::minutes(10)).unwrap();
+    job.lease("worker-001", chrono::Duration::minutes(10))
+        .unwrap();
     job.start().unwrap();
     job.mark_irreversible();
     let result = job.cancel();
@@ -241,7 +281,8 @@ fn job_cancel_after_irreversible() {
 fn job_wait_and_resume() {
     let deadline = chrono::Utc::now() + chrono::Duration::hours(1);
     let mut job = Job::new("tenant-001", "check", "connectors", deadline);
-    job.lease("worker-001", chrono::Duration::minutes(10)).unwrap();
+    job.lease("worker-001", chrono::Duration::minutes(10))
+        .unwrap();
     job.start().unwrap();
     job.wait_external().unwrap();
     assert_eq!(job.state, JobState::WaitingExternal);
@@ -253,7 +294,8 @@ fn job_wait_and_resume() {
 fn job_wait_user_and_resume() {
     let deadline = chrono::Utc::now() + chrono::Duration::hours(1);
     let mut job = Job::new("tenant-001", "check", "connectors", deadline);
-    job.lease("worker-001", chrono::Duration::minutes(10)).unwrap();
+    job.lease("worker-001", chrono::Duration::minutes(10))
+        .unwrap();
     job.start().unwrap();
     job.wait_user().unwrap();
     assert_eq!(job.state, JobState::WaitingUser);
@@ -265,9 +307,11 @@ fn job_wait_user_and_resume() {
 fn job_partial_success() {
     let deadline = chrono::Utc::now() + chrono::Duration::hours(1);
     let mut job = Job::new("tenant-001", "import", "imports", deadline);
-    job.lease("worker-001", chrono::Duration::minutes(10)).unwrap();
+    job.lease("worker-001", chrono::Duration::minutes(10))
+        .unwrap();
     job.start().unwrap();
-    job.partially_succeed(serde_json::json!({"imported": 95, "failed": 5})).unwrap();
+    job.partially_succeed(serde_json::json!({"imported": 95, "failed": 5}))
+        .unwrap();
     assert_eq!(job.state, JobState::PartiallySucceeded);
     assert!(job.is_terminal());
 }
@@ -277,7 +321,8 @@ fn job_lease_increments_attempts() {
     let deadline = chrono::Utc::now() + chrono::Duration::hours(1);
     let mut job = Job::new("tenant-001", "check", "connectors", deadline);
     assert_eq!(job.status.attempts, 0);
-    job.lease("worker-001", chrono::Duration::minutes(10)).unwrap();
+    job.lease("worker-001", chrono::Duration::minutes(10))
+        .unwrap();
     assert_eq!(job.status.attempts, 1);
 }
 
@@ -286,7 +331,14 @@ fn job_lease_increments_attempts() {
 #[test]
 fn task_new_is_pending() {
     let due = chrono::Utc::now() + chrono::Duration::days(3);
-    let task = Task::new("wf-001", "tenant-001", "Review request", "review", TaskPriority::Normal, due);
+    let task = Task::new(
+        "wf-001",
+        "tenant-001",
+        "Review request",
+        "review",
+        TaskPriority::Normal,
+        due,
+    );
     assert_eq!(task.status, TaskStatus::Pending);
     assert!(!task.is_terminal());
 }
@@ -294,7 +346,14 @@ fn task_new_is_pending() {
 #[test]
 fn task_assign_to_user() {
     let due = chrono::Utc::now() + chrono::Duration::days(3);
-    let mut task = Task::new("wf-001", "tenant-001", "Review", "review", TaskPriority::Normal, due);
+    let mut task = Task::new(
+        "wf-001",
+        "tenant-001",
+        "Review",
+        "review",
+        TaskPriority::Normal,
+        due,
+    );
     task.assign_to_user("user-001");
     assert_eq!(task.status, TaskStatus::Assigned);
     assert_eq!(task.assignee_id.as_deref(), Some("user-001"));
@@ -304,7 +363,14 @@ fn task_assign_to_user() {
 #[test]
 fn task_assign_to_group() {
     let due = chrono::Utc::now() + chrono::Duration::days(3);
-    let mut task = Task::new("wf-001", "tenant-001", "Review", "review", TaskPriority::Normal, due);
+    let mut task = Task::new(
+        "wf-001",
+        "tenant-001",
+        "Review",
+        "review",
+        TaskPriority::Normal,
+        due,
+    );
     task.assign_to_group("group-001");
     assert_eq!(task.status, TaskStatus::Assigned);
     assert_eq!(task.group_id.as_deref(), Some("group-001"));
@@ -314,7 +380,14 @@ fn task_assign_to_group() {
 #[test]
 fn task_accept_and_complete() {
     let due = chrono::Utc::now() + chrono::Duration::days(3);
-    let mut task = Task::new("wf-001", "tenant-001", "Review", "review", TaskPriority::Normal, due);
+    let mut task = Task::new(
+        "wf-001",
+        "tenant-001",
+        "Review",
+        "review",
+        TaskPriority::Normal,
+        due,
+    );
     task.assign_to_user("user-001");
     task.accept().unwrap();
     assert_eq!(task.status, TaskStatus::InProgress);
@@ -327,7 +400,14 @@ fn task_accept_and_complete() {
 #[test]
 fn task_cancel() {
     let due = chrono::Utc::now() + chrono::Duration::days(3);
-    let mut task = Task::new("wf-001", "tenant-001", "Review", "review", TaskPriority::Normal, due);
+    let mut task = Task::new(
+        "wf-001",
+        "tenant-001",
+        "Review",
+        "review",
+        TaskPriority::Normal,
+        due,
+    );
     task.cancel().unwrap();
     assert_eq!(task.status, TaskStatus::Cancelled);
     assert!(task.is_terminal());
@@ -336,7 +416,14 @@ fn task_cancel() {
 #[test]
 fn task_mark_overdue() {
     let due = chrono::Utc::now() - chrono::Duration::days(1); // past
-    let mut task = Task::new("wf-001", "tenant-001", "Review", "review", TaskPriority::Urgent, due);
+    let mut task = Task::new(
+        "wf-001",
+        "tenant-001",
+        "Review",
+        "review",
+        TaskPriority::Urgent,
+        due,
+    );
     assert!(task.is_overdue());
     task.mark_overdue();
     assert_eq!(task.status, TaskStatus::Overdue);
@@ -345,7 +432,14 @@ fn task_mark_overdue() {
 #[test]
 fn task_escalate() {
     let due = chrono::Utc::now() + chrono::Duration::days(3);
-    let mut task = Task::new("wf-001", "tenant-001", "Review", "review", TaskPriority::High, due);
+    let mut task = Task::new(
+        "wf-001",
+        "tenant-001",
+        "Review",
+        "review",
+        TaskPriority::High,
+        due,
+    );
     task.escalate();
     assert_eq!(task.status, TaskStatus::Escalated);
 }
@@ -511,7 +605,8 @@ fn reaction_config_inactive_cannot_fire() {
         threshold: None,
         target_type: None,
     };
-    let mut config = ReactionConfig::new("reaction-001", trigger, ActionKind::CreateTask, "dedup-001");
+    let mut config =
+        ReactionConfig::new("reaction-001", trigger, ActionKind::CreateTask, "dedup-001");
     config.active = false;
     assert!(!config.can_fire(None));
 }
@@ -529,7 +624,10 @@ fn reaction_instance_new() {
     assert_eq!(reaction.target_entity_id, "ent-001");
     assert_eq!(reaction.action, ActionKind::Escalate);
     assert!(!reaction.idempotency_key.is_empty());
-    assert_eq!(reaction.result, enginer_workflow::reaction::ReactionResult::Success);
+    assert_eq!(
+        reaction.result,
+        enginer_workflow::reaction::ReactionResult::Success
+    );
 }
 
 #[test]
@@ -543,7 +641,10 @@ fn reaction_instance_fail() {
     let config = ReactionConfig::new("reaction-001", trigger, ActionKind::SendEmail, "dedup-001");
     let mut reaction = Reaction::new(&config, "ent-001", "criterion_triggered");
     reaction.fail("SMTP error");
-    assert_eq!(reaction.result, enginer_workflow::reaction::ReactionResult::Failed);
+    assert_eq!(
+        reaction.result,
+        enginer_workflow::reaction::ReactionResult::Failed
+    );
     assert_eq!(reaction.error.as_deref(), Some("SMTP error"));
 }
 
@@ -558,7 +659,10 @@ fn reaction_instance_skip() {
     let config = ReactionConfig::new("reaction-001", trigger, ActionKind::CreateTask, "dedup-001");
     let mut reaction = Reaction::new(&config, "ent-001", "criterion_triggered");
     reaction.skip();
-    assert_eq!(reaction.result, enginer_workflow::reaction::ReactionResult::Skipped);
+    assert_eq!(
+        reaction.result,
+        enginer_workflow::reaction::ReactionResult::Skipped
+    );
 }
 
 #[test]
@@ -569,8 +673,16 @@ fn reaction_instance_pending_approval() {
         threshold: Some("90.0".to_string()),
         target_type: None,
     };
-    let config = ReactionConfig::new("reaction-001", trigger, ActionKind::RequestApproval, "dedup-001");
+    let config = ReactionConfig::new(
+        "reaction-001",
+        trigger,
+        ActionKind::RequestApproval,
+        "dedup-001",
+    );
     let mut reaction = Reaction::new(&config, "ent-001", "threshold_exceeded");
     reaction.pending_approval();
-    assert_eq!(reaction.result, enginer_workflow::reaction::ReactionResult::PendingApproval);
+    assert_eq!(
+        reaction.result,
+        enginer_workflow::reaction::ReactionResult::PendingApproval
+    );
 }

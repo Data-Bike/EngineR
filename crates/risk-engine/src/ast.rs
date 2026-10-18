@@ -123,10 +123,7 @@ pub enum ExprKind {
         as_of: Box<Expr>,
     },
     /// Duration between two dates.
-    Duration {
-        from: Box<Expr>,
-        to: Box<Expr>,
-    },
+    Duration { from: Box<Expr>, to: Box<Expr> },
     /// String exact match.
     StringExact {
         predicate_alias: String,
@@ -154,9 +151,7 @@ pub enum ExprKind {
         max_age_days: i64,
     },
     /// Source trust rank check.
-    SourceTrust {
-        min_trust_rank: u8,
-    },
+    SourceTrust { min_trust_rank: u8 },
     /// Source conflict: multiple sources disagree.
     SourceConflict { predicate_alias: String },
     /// Arithmetic binary operation.
@@ -166,15 +161,9 @@ pub enum ExprKind {
         right: Box<Expr>,
     },
     /// Logical: all/any children.
-    Logical {
-        op: LogicalOp,
-        children: Vec<Expr>,
-    },
+    Logical { op: LogicalOp, children: Vec<Expr> },
     /// Unary: not/exists/count.
-    Unary {
-        op: UnaryOp,
-        operand: Box<Expr>,
-    },
+    Unary { op: UnaryOp, operand: Box<Expr> },
     /// Lookup in versioned dictionary.
     DictionaryLookup {
         dictionary_id: String,
@@ -182,9 +171,7 @@ pub enum ExprKind {
         key_expr: Box<Expr>,
     },
     /// Previous assessment change: compare with previous assessment.
-    PreviousAssessmentChange {
-        criterion_id: String,
-    },
+    PreviousAssessmentChange { criterion_id: String },
 }
 
 /// A typed expression in the criterion DSL.
@@ -266,10 +253,7 @@ impl Expr {
 ///
 /// The evaluator is pure: it takes an expression and a context and returns
 /// a value. No side effects, no I/O (docs/14 §8).
-pub fn evaluate(
-    expr: &Expr,
-    ctx: &EvaluationContext,
-) -> Result<Value, crate::error::RiskError> {
+pub fn evaluate(expr: &Expr, ctx: &EvaluationContext) -> Result<Value, crate::error::RiskError> {
     match &expr.kind {
         ExprKind::Literal { value } => Ok(value.clone()),
         ExprKind::Compare { op, left, right } => {
@@ -315,7 +299,9 @@ pub fn evaluate(
             predicate_alias,
             expected,
         } => {
-            let actual = ctx.predicate_values.get(predicate_alias)
+            let actual = ctx
+                .predicate_values
+                .get(predicate_alias)
                 .and_then(|vals| vals.first())
                 .and_then(|v| match v {
                     Value::Text { value } => Some(value.clone()),
@@ -329,18 +315,17 @@ pub fn evaluate(
             predicate_alias,
             expected_set,
         } => {
-            let actual = ctx.predicate_values.get(predicate_alias)
+            let actual = ctx
+                .predicate_values
+                .get(predicate_alias)
                 .and_then(|vals| vals.first())
                 .and_then(|v| match v {
                     Value::Text { value } => Some(normalize(value)),
                     _ => None,
                 });
-            let normalized_set: Vec<String> =
-                expected_set.iter().map(|s| normalize(s)).collect();
+            let normalized_set: Vec<String> = expected_set.iter().map(|s| normalize(s)).collect();
             Ok(Value::Boolean {
-                value: actual
-                    .map(|a| normalized_set.contains(&a))
-                    .unwrap_or(false),
+                value: actual.map(|a| normalized_set.contains(&a)).unwrap_or(false),
             })
         }
         ExprKind::RelationExists { .. } => {
@@ -355,13 +340,9 @@ pub fn evaluate(
             source_connector_type_id,
             max_age_days,
         } => {
-            let fresh = ctx
-                .observations
-                .iter()
-                .any(|obs| {
-                    obs.connector_type_id == *source_connector_type_id
-                        && obs.age_days <= *max_age_days
-                });
+            let fresh = ctx.observations.iter().any(|obs| {
+                obs.connector_type_id == *source_connector_type_id && obs.age_days <= *max_age_days
+            });
             Ok(Value::Boolean { value: fresh })
         }
         ExprKind::SourceTrust { min_trust_rank } => {
@@ -504,10 +485,12 @@ fn evaluate_compare(
             ComparisonOp::Le => l <= r,
             ComparisonOp::Gt => l > r,
             ComparisonOp::Ge => l >= r,
-            _ => return Err(crate::error::RiskError::TypeMismatch {
-                expected: "comparable".to_string(),
-                got: "incompatible_op".to_string(),
-            }),
+            _ => {
+                return Err(crate::error::RiskError::TypeMismatch {
+                    expected: "comparable".to_string(),
+                    got: "incompatible_op".to_string(),
+                })
+            }
         },
         (Value::Text { value: l }, Value::Text { value: r }) => match op {
             ComparisonOp::Eq => l == r,
@@ -515,10 +498,12 @@ fn evaluate_compare(
             ComparisonOp::Prefix => r.starts_with(l.as_str()) || l.starts_with(r.as_str()),
             ComparisonOp::Contains => l.contains(r.as_str()) || r.contains(l.as_str()),
             ComparisonOp::NormalizedEq => normalize(l) == normalize(r),
-            _ => return Err(crate::error::RiskError::TypeMismatch {
-                expected: "text-comparable".to_string(),
-                got: "incompatible_op".to_string(),
-            }),
+            _ => {
+                return Err(crate::error::RiskError::TypeMismatch {
+                    expected: "text-comparable".to_string(),
+                    got: "incompatible_op".to_string(),
+                })
+            }
         },
         (Value::Decimal { value: l }, Value::Decimal { value: r }) => {
             let ld: f64 = l.parse().unwrap_or(0.0);
@@ -530,19 +515,23 @@ fn evaluate_compare(
                 ComparisonOp::Le => ld <= rd,
                 ComparisonOp::Gt => ld > rd,
                 ComparisonOp::Ge => ld >= rd,
-                _ => return Err(crate::error::RiskError::TypeMismatch {
-                    expected: "decimal-comparable".to_string(),
-                    got: "incompatible_op".to_string(),
-                }),
+                _ => {
+                    return Err(crate::error::RiskError::TypeMismatch {
+                        expected: "decimal-comparable".to_string(),
+                        got: "incompatible_op".to_string(),
+                    })
+                }
             }
         }
         (Value::Boolean { value: l }, Value::Boolean { value: r }) => match op {
             ComparisonOp::Eq => l == r,
             ComparisonOp::Ne => l != r,
-            _ => return Err(crate::error::RiskError::TypeMismatch {
-                expected: "boolean-comparable".to_string(),
-                got: "incompatible_op".to_string(),
-            }),
+            _ => {
+                return Err(crate::error::RiskError::TypeMismatch {
+                    expected: "boolean-comparable".to_string(),
+                    got: "incompatible_op".to_string(),
+                })
+            }
         },
         _ => {
             return Err(crate::error::RiskError::TypeMismatch {
@@ -566,7 +555,9 @@ fn evaluate_range(
     let hi = to_decimal(max)?;
     let above = if inclusive_min { v >= lo } else { v > lo };
     let below = if inclusive_max { v <= hi } else { v < hi };
-    Ok(Value::Boolean { value: above && below })
+    Ok(Value::Boolean {
+        value: above && below,
+    })
 }
 
 fn evaluate_age(date: &Value, as_of: &Value) -> Result<Value, crate::error::RiskError> {
@@ -576,10 +567,18 @@ fn evaluate_age(date: &Value, as_of: &Value) -> Result<Value, crate::error::Risk
             got: type_name(date).to_string(),
         });
     };
-    let date = chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d")
-        .map_err(|e: chrono::ParseError| crate::error::RiskError::Evaluation { message: e.to_string() })?;
-    let as_of = chrono::NaiveDate::parse_from_str(a, "%Y-%m-%d")
-        .map_err(|e: chrono::ParseError| crate::error::RiskError::Evaluation { message: e.to_string() })?;
+    let date =
+        chrono::NaiveDate::parse_from_str(d, "%Y-%m-%d").map_err(|e: chrono::ParseError| {
+            crate::error::RiskError::Evaluation {
+                message: e.to_string(),
+            }
+        })?;
+    let as_of =
+        chrono::NaiveDate::parse_from_str(a, "%Y-%m-%d").map_err(|e: chrono::ParseError| {
+            crate::error::RiskError::Evaluation {
+                message: e.to_string(),
+            }
+        })?;
     let age = as_of.signed_duration_since(date).num_days();
     Ok(Value::DurationDays { value: age })
 }
@@ -591,10 +590,18 @@ fn evaluate_duration(from: &Value, to: &Value) -> Result<Value, crate::error::Ri
             got: type_name(from).to_string(),
         });
     };
-    let from = chrono::NaiveDate::parse_from_str(f, "%Y-%m-%d")
-        .map_err(|e: chrono::ParseError| crate::error::RiskError::Evaluation { message: e.to_string() })?;
-    let to = chrono::NaiveDate::parse_from_str(t, "%Y-%m-%d")
-        .map_err(|e: chrono::ParseError| crate::error::RiskError::Evaluation { message: e.to_string() })?;
+    let from =
+        chrono::NaiveDate::parse_from_str(f, "%Y-%m-%d").map_err(|e: chrono::ParseError| {
+            crate::error::RiskError::Evaluation {
+                message: e.to_string(),
+            }
+        })?;
+    let to =
+        chrono::NaiveDate::parse_from_str(t, "%Y-%m-%d").map_err(|e: chrono::ParseError| {
+            crate::error::RiskError::Evaluation {
+                message: e.to_string(),
+            }
+        })?;
     let dur = to.signed_duration_since(from).num_days();
     Ok(Value::DurationDays { value: dur })
 }
@@ -652,7 +659,11 @@ fn to_decimal(v: &Value) -> Result<f64, crate::error::RiskError> {
     match v {
         Value::Decimal { value } => value
             .parse::<f64>()
-            .map_err(|e: std::num::ParseFloatError| crate::error::RiskError::Evaluation { message: e.to_string() }),
+            .map_err(
+                |e: std::num::ParseFloatError| crate::error::RiskError::Evaluation {
+                    message: e.to_string(),
+                },
+            ),
         Value::Integer { value } => Ok(*value as f64),
         Value::DurationDays { value } => Ok(*value as f64),
         _ => Err(crate::error::RiskError::TypeMismatch {

@@ -14,7 +14,7 @@
           >
             <div class="flex items-center justify-between">
               <div>
-                <p class="font-medium">{{ match.public_id }}</p>
+                <p class="font-medium">{{ match.display_name ?? match.public_id }}</p>
                 <p class="text-sm text-[var(--ui-text-muted)]">{{ match.type_id }}</p>
               </div>
               <div class="flex gap-2">
@@ -44,7 +44,7 @@
           >
             <div class="flex items-center justify-between">
               <div>
-                <p class="font-medium">{{ match.public_id }}</p>
+                <p class="font-medium">{{ match.display_name ?? match.public_id }}</p>
                 <p class="text-sm text-[var(--ui-text-muted)]">
                   {{ match.type_id }} · {{ t('entity.duplicate.score') }}: {{ match.score }}
                 </p>
@@ -84,6 +84,7 @@ import { useI18n } from 'vue-i18n';
 
 interface DuplicateMatch {
   public_id: string;
+  display_name?: string;
   type_id: string;
   match_type: 'exact' | 'fuzzy';
   score?: number;

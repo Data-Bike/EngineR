@@ -5,16 +5,14 @@
 //! caller's responsibility. This makes the engine trivially testable and
 //! deterministic — the same inputs always produce the same decision.
 
-use enginer_domain::{DecisionId, PolicyId, PrincipalId, TenantId};
+use chrono::{DateTime, Duration, Utc};
+use enginer_domain::{DecisionId, PrincipalId, TenantId};
 use enginer_security_domain::{
-    decision::{
-        DataObligations, DecisionEffect, Obligations, QueryObligations, SecurityDecision,
-    },
+    decision::{DataObligations, DecisionEffect, Obligations, QueryObligations, SecurityDecision},
     policy::{PolicyRule, PolicyRuleEffect},
     principal::{GroupClass, PrincipalGroupMembership},
     CapabilityAction,
 };
-use chrono::{DateTime, Duration, Utc};
 use thiserror::Error;
 
 /// PDP error (fail closed).
@@ -64,6 +62,12 @@ pub struct PdpSnapshot {
 }
 
 impl PdpSnapshot {
+    /// Clock-skew tolerance for grant activation: `valid_from` may be stamped
+    /// by a writer whose clock leads the evaluator's by a small delta
+    /// (containers, NTP drift). Two minutes is far below any scheduled-grant
+    /// granularity yet absorbs realistic skew.
+    pub const VALID_FROM_SKEW: Duration = Duration::minutes(2);
+
     /// Empty snapshot (default-deny for everyone).
     pub fn empty(policy_revision: i64) -> Self {
         Self {
@@ -83,7 +87,10 @@ impl PdpSnapshot {
         self.memberships
             .iter()
             .filter(|m| m.principal_id == principal && m.group_class == class)
-            .filter(|m| m.valid_from <= time && m.valid_to.map_or(true, |to| to >= time))
+            .filter(|m| {
+                m.valid_from <= time + Self::VALID_FROM_SKEW
+                    && m.valid_to.map_or(true, |to| to >= time)
+            })
             .map(|m| m.group_id.raw())
             .collect()
     }
@@ -117,14 +124,18 @@ impl PdpEngine {
                 r.tenant_id == req.tenant_id
                     && r.action == action_str
                     && cap_groups.contains(&r.group_id.raw())
-                    && r.valid_from <= req.time
+                    && r.valid_from <= req.time + PdpSnapshot::VALID_FROM_SKEW
                     && r.valid_to.map_or(true, |to| to >= req.time)
             })
             .collect();
 
         // Deny-overrides (ADR-011).
-        let has_deny = applicable.iter().any(|r| r.effect == PolicyRuleEffect::Deny);
-        let has_allow = applicable.iter().any(|r| r.effect == PolicyRuleEffect::Allow);
+        let has_deny = applicable
+            .iter()
+            .any(|r| r.effect == PolicyRuleEffect::Deny);
+        let has_allow = applicable
+            .iter()
+            .any(|r| r.effect == PolicyRuleEffect::Allow);
 
         let effect = if has_deny || !has_allow {
             // default deny when no explicit allow, or any deny
@@ -215,7 +226,11 @@ mod tests {
         }
     }
 
-    fn membership(principal: PrincipalId, group: GroupId, class: GroupClass) -> PrincipalGroupMembership {
+    fn membership(
+        principal: PrincipalId,
+        group: GroupId,
+        class: GroupClass,
+    ) -> PrincipalGroupMembership {
         PrincipalGroupMembership {
             principal_id: principal,
             group_id: group,

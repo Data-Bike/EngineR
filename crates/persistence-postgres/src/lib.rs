@@ -12,9 +12,7 @@ pub mod schema_repo;
 pub mod security_repo;
 pub mod statement_repo;
 
-pub use entity_repo::{
-    PgEntityRepository, PgIdentityKeyRepository, PgIdentityPolicyRepository,
-};
+pub use entity_repo::{PgEntityRepository, PgIdentityKeyRepository, PgIdentityPolicyRepository};
 pub use rls::{RlsContext, RlsContextError};
 pub use schema_repo::PgSchemaRepository;
 pub use security_repo::PgSecuritySnapshotProvider;

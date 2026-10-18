@@ -4,7 +4,7 @@
 //! newtype wrapping either a `uuid::Uuid` (public/stable IDs) or a `i64`
 //! (internal compact bigint used in physical indexes, docs/10 §3).
 //!
-//! Public IDs use UUIDv7 (time-ordered) for API stability; internal bigints are
+//! Public IDs use `UUIDv7` (time-ordered) for API stability; internal bigints are
 //! never exposed over the API (docs/06 §1).
 
 use serde::{Deserialize, Serialize};
@@ -108,7 +108,7 @@ id_newtype!(
 impl_id_display_fromstr!(TenantId, Uuid, "tenant");
 
 id_newtype!(
-    /// Stable public entity identifier (UUIDv7). Exposed over the API.
+    /// Stable public entity identifier (`UUIDv7`). Exposed over the API.
     PublicEntityId,
     Uuid,
     Uuid::now_v7()
@@ -269,6 +269,7 @@ impl_id_display_fromstr!(LocaleTag, String, "loc");
 
 impl LocaleTag {
     /// The default/fallback locale.
+    #[must_use]
     pub fn en_us() -> Self {
         Self("en-US".to_string())
     }
@@ -284,6 +285,7 @@ impl_id_display_fromstr!(TimeZoneId, String, "tz");
 
 impl TimeZoneId {
     /// UTC time zone.
+    #[must_use]
     pub fn utc() -> Self {
         Self("UTC".to_string())
     }
@@ -298,11 +300,13 @@ id_newtype!(
 
 impl ContentHash {
     /// Hex encoding for transport / logging.
+    #[must_use]
     pub fn to_hex(self) -> String {
         hex::encode(self.0)
     }
 
     /// Construct from a 32-byte array.
+    #[must_use]
     pub fn from_bytes(bytes: [u8; 32]) -> Self {
         Self(bytes)
     }

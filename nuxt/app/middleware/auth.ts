@@ -11,7 +11,10 @@ export default defineNuxtRouteMiddleware(async (to) => {
 
   const store = useAuthStore();
 
-  if (!store.isAuthenticated && !store.loading) {
+  // fetchContext is singleflight: an in-flight call (e.g. app.vue onMounted)
+  // is awaited instead of skipped, so a valid session is never bounced to
+  // /login by a cold-load race.
+  if (!store.isAuthenticated) {
     await store.fetchContext();
   }
 
@@ -19,6 +22,15 @@ export default defineNuxtRouteMiddleware(async (to) => {
     return navigateTo({
       path: '/login',
       query: { redirect: to.fullPath },
+    });
+  }
+
+  // URL access rules (system.url, UI paths): deny prefixes and allowlists
+  // block route rendering entirely — no blank page, no leaked layout.
+  if (!store.canUrl(to.path)) {
+    throw createError({
+      statusCode: 403,
+      statusMessage: 'URL access denied',
     });
   }
 });

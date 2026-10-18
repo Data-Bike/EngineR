@@ -31,7 +31,6 @@ import type { Entity } from '@enginer/api-client';
 const props = defineProps<{ entity: Entity }>();
 
 const { t } = useI18n();
-const toast = useToast();
 const api = useApi();
 
 const viewFields = ref<Record<string, string>>({});

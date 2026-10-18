@@ -26,9 +26,12 @@ export interface StagedUploadState {
 
 const DEFAULT_CHUNK_SIZE = 1024 * 1024; // 1 MB
 
-async function computeHash(file: File, _algorithm: string): Promise<string> {
-  // Mock hash: in production this should use crypto.subtle.digest.
-  return `sha256-${file.size}-${file.name}`;
+async function computeHash(file: File, algorithm: string): Promise<string> {
+  const webCryptoAlgorithm = algorithm.toLowerCase().replace('-', '') === 'sha256'
+    ? 'SHA-256'
+    : algorithm;
+  const digest = await crypto.subtle.digest(webCryptoAlgorithm, await file.arrayBuffer());
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
 export function useStagedUpload() {

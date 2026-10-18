@@ -15,10 +15,7 @@
 //! rewritten AST into parameterized SQL. Security WHERE is never glued on as a
 //! string after compilation (docs/07 §4).
 
-use crate::ast::{
-    FieldRef, Operator, QueryAst, QueryError, SystemField,
-    WhereExpr,
-};
+use crate::ast::{FieldRef, Operator, QueryAst, QueryError, SystemField, WhereExpr};
 #[cfg(test)]
 use crate::ast::{SelectField, SortKey};
 use enginer_security_domain::decision::QueryObligations;
@@ -217,7 +214,10 @@ mod tests {
                 },
                 direction: SortDirection::Asc,
             }],
-            page: KeysetPage { size: 500, after: None },
+            page: KeysetPage {
+                size: 500,
+                after: None,
+            },
             as_of: None,
         }
     }

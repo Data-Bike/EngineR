@@ -8,12 +8,14 @@ import type {
   CreateEntityBody,
   CreateEntityResponse,
   Entity,
+  EntityGraphResponse,
   MergeEntityBody,
   MergeEntityResponse,
   QueryBody,
   QueryResponse,
   RetireEntityBody,
   RetireEntityResponse,
+  UpdateEntityBody,
 } from '../types/index.js';
 
 /** Entity API endpoint methods. */
@@ -23,6 +25,16 @@ export class EntityEndpoints {
   /** POST /entities — create entity (docs/06 §6). */
   async create(body: CreateEntityBody, idempotencyKey?: string): Promise<ParsedResponse<CreateEntityResponse>> {
     return this.client.post<CreateEntityResponse>('/entities', body, { idempotencyKey });
+  }
+
+  /** GET /entities — list entities (type filter + prefix search). */
+  async list(options?: {
+    type?: string;
+    search?: string;
+    limit?: number;
+    cursor?: string;
+  }): Promise<ParsedResponse<Entity[]>> {
+    return this.client.get<Entity[]>('/entities', { query: options });
   }
 
   /** GET /entities/{publicId} — get entity. */
@@ -36,8 +48,11 @@ export class EntityEndpoints {
   }
 
   /** GET /entities/{publicId}/relations — list entity relations. */
-  async getRelations(publicId: string): Promise<ParsedResponse<unknown[]>> {
-    return this.client.get<unknown[]>(`/entities/${publicId}/relations`);
+  async getRelations(
+    publicId: string,
+    options?: { direction?: 'outgoing' | 'incoming' | 'both'; as_of?: string },
+  ): Promise<ParsedResponse<unknown[]>> {
+    return this.client.get<unknown[]>(`/entities/${publicId}/relations`, { query: options });
   }
 
   /** POST /entities/{publicId}/relations — add a relation. */
@@ -51,7 +66,7 @@ export class EntityEndpoints {
   }
 
   /** PUT /entities/{publicId} — update entity statements. */
-  async update(publicId: string, body: unknown): Promise<ParsedResponse<Entity>> {
+  async update(publicId: string, body: UpdateEntityBody): Promise<ParsedResponse<Entity>> {
     return this.client.put<Entity>(`/entities/${publicId}`, body);
   }
 
@@ -71,7 +86,10 @@ export class EntityEndpoints {
   }
 
   /** POST /entities/{publicId}/graph — expand entity graph (docs/17 §7). */
-  async getGraph(publicId: string, body: { max_depth: number; direction: string }): Promise<ParsedResponse<{ nodes: unknown[]; edges: unknown[] }>> {
-    return this.client.post<{ nodes: unknown[]; edges: unknown[] }>(`/entities/${publicId}/graph`, body);
+  async getGraph(
+    publicId: string,
+    body: { max_depth: number; direction: string; as_of?: string; locale?: string },
+  ): Promise<ParsedResponse<EntityGraphResponse>> {
+    return this.client.post<EntityGraphResponse>(`/entities/${publicId}/graph`, body);
   }
 }

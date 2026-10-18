@@ -5,9 +5,8 @@
 use enginer_reporting::{
     escape_formula_injection, Dataset, DatasetColumn, DatasetColumnType, DatasetQuery,
     DatasetSnapshot, DatasetStatus, ExportFormat, FieldFormat, RenderContext, RenderOutput,
-    RenderStatus, ReportAudience, ReportDefinition, ReportSection, ReportStatus,
-    SummaryDefinition, TableDefinition, TemplateDefinition, TemplateFormat, TemplateLocale,
-    TemplateVersion,
+    RenderStatus, ReportAudience, ReportDefinition, ReportSection, ReportStatus, SummaryDefinition,
+    TableDefinition, TemplateDefinition, TemplateFormat, TemplateLocale, TemplateVersion,
 };
 
 // --- Dataset tests ---
@@ -134,13 +133,11 @@ fn make_report_definition() -> ReportDefinition {
         row_limit: Some(1000),
         confidentiality: "restricted".to_string(),
         watermark: true,
-        allowed_audiences: vec![
-            ReportAudience {
-                audience_type: "group".to_string(),
-                audience_id: "risk-team".to_string(),
-                can_reexport: false,
-            },
-        ],
+        allowed_audiences: vec![ReportAudience {
+            audience_type: "group".to_string(),
+            audience_id: "risk-team".to_string(),
+            can_reexport: false,
+        }],
         requires_snapshot: true,
         status: ReportStatus::Active,
         owner: "team-001".to_string(),

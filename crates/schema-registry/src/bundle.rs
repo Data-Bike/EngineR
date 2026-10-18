@@ -7,7 +7,9 @@
 //! The core never imports a crate of the package: the bundle is data, not code.
 
 use enginer_domain::{
-    schema::{EntityClass, PredicateDefinition, PredicateDirection, TypeDefinition, TypePredicateSlot},
+    schema::{
+        EntityClass, PredicateDefinition, PredicateDirection, TypeDefinition, TypePredicateSlot,
+    },
     PredicateId, ScalarKind, TenantId, TypeId,
 };
 use std::collections::HashSet;
@@ -83,12 +85,27 @@ impl LoadedBundle {
         parse_types(&types_json, &mut types, &mut seen_type_ids, "types.json")?;
         // Predicates for core types are in predicates.json
         let preds_json = load_json(dir, "predicates.json")?;
-        parse_predicates(&preds_json, &mut predicates, &mut seen_pred_ids, "predicates.json")?;
+        parse_predicates(
+            &preds_json,
+            &mut predicates,
+            &mut seen_pred_ids,
+            "predicates.json",
+        )?;
 
         // Load domain-types.json (domain types + their predicates inline)
         let domain_json = load_json(dir, "domain-types.json")?;
-        parse_types(&domain_json, &mut types, &mut seen_type_ids, "domain-types.json")?;
-        parse_predicates(&domain_json, &mut predicates, &mut seen_pred_ids, "domain-types.json")?;
+        parse_types(
+            &domain_json,
+            &mut types,
+            &mut seen_type_ids,
+            "domain-types.json",
+        )?;
+        parse_predicates(
+            &domain_json,
+            &mut predicates,
+            &mut seen_pred_ids,
+            "domain-types.json",
+        )?;
 
         // Validate referential integrity
         validate_references(&types, &predicates)?;
@@ -104,8 +121,7 @@ impl LoadedBundle {
     /// Convert the loaded bundle into a `SchemaDraft` for validation/publish.
     pub fn to_schema_draft(&self, tenant: TenantId) -> crate::draft::SchemaDraft {
         let mut draft = crate::draft::SchemaDraft::new(
-            tenant,
-            None, // no parent revision
+            tenant, None, // no parent revision
         );
         draft.semantic_version = self.version.clone();
         for ty in &self.types {
@@ -194,22 +210,21 @@ fn parse_types(
     seen_ids: &mut HashSet<uuid::Uuid>,
     context: &str,
 ) -> Result<(), BundleLoadError> {
-    let arr = v
-        .get("types")
-        .and_then(|t| t.as_array())
-        .ok_or_else(|| BundleLoadError::MissingField {
-            field: "types".to_string(),
-            context: context.to_string(),
-        })?;
+    let arr =
+        v.get("types")
+            .and_then(|t| t.as_array())
+            .ok_or_else(|| BundleLoadError::MissingField {
+                field: "types".to_string(),
+                context: context.to_string(),
+            })?;
 
     for ty in arr {
-        let type_id_raw = ty
-            .get("type_id")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| BundleLoadError::MissingField {
+        let type_id_raw = ty.get("type_id").and_then(|v| v.as_str()).ok_or_else(|| {
+            BundleLoadError::MissingField {
                 field: "type_id".to_string(),
                 context: format!("{} type", context),
-            })?;
+            }
+        })?;
         let type_uuid = parse_uuid(type_id_raw, context)?;
         if !seen_ids.insert(type_uuid) {
             return Err(BundleLoadError::DuplicateId {
@@ -225,14 +240,13 @@ fn parse_types(
                 context: format!("{} type", context),
             })?
             .to_string();
-        let entity_class = parse_entity_class(
-            ty.get("entity_class")
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| BundleLoadError::MissingField {
+        let entity_class =
+            parse_entity_class(ty.get("entity_class").and_then(|v| v.as_str()).ok_or_else(
+                || BundleLoadError::MissingField {
                     field: "entity_class".to_string(),
                     context: format!("{} type {}", context, stable_alias),
-                })?,
-        )?;
+                },
+            )?)?;
         let predicate_slots = ty
             .get("predicates")
             .and_then(|p| p.as_array())
@@ -261,14 +275,8 @@ fn parse_types(
                                 .get("max_cardinality")
                                 .and_then(|v| v.as_u64())
                                 .map(|n| n as u32),
-                            order: slot
-                                .get("order")
-                                .and_then(|v| v.as_u64())
-                                .map(|n| n as u32),
-                            group: slot
-                                .get("group")
-                                .and_then(|v| v.as_str())
-                                .map(String::from),
+                            order: slot.get("order").and_then(|v| v.as_u64()).map(|n| n as u32),
+                            group: slot.get("group").and_then(|v| v.as_str()).map(String::from),
                         })
                     })
                     .collect::<Result<Vec<_>, BundleLoadError>>()

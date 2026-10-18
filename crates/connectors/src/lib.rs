@@ -28,7 +28,7 @@ pub use descriptor::{ConnectorCapabilities, ConnectorDescriptor, ConnectorKind, 
 pub use error::{ConnectorError, ConnectorResult};
 pub use instance::{ConnectorInstance, ConnectorInstanceConfig, RetentionPolicy, TrustRank};
 pub use observation::{
-    IdentityResolution, MappingResult, MappedPredicate, ObservationStatus, ProvenanceMeta,
+    IdentityResolution, MappedPredicate, MappingResult, ObservationStatus, ProvenanceMeta,
     RawPayloadPolicy, SourceObservation, UnmappedField,
 };
 pub use rate_limit::{CircuitBreaker, CircuitBreakerState, RateLimiter, RateLimiterConfig};

@@ -81,7 +81,10 @@
           </template>
           <div class="space-y-4">
             <UFormField :label="t('requests.form.target')">
-              <UInput v-model="newRequest.target_entity_id" placeholder="ent-..." class="w-full" />
+              <EntityAutocomplete
+                v-model="newRequest.target_entity_id"
+                :placeholder="t('entity.search_placeholder')"
+              />
             </UFormField>
             <UFormField :label="t('requests.form.product')">
               <UInput v-model="newRequest.requested_product" class="w-full" />
@@ -96,7 +99,13 @@
           <template #footer>
             <div class="flex justify-end gap-2">
               <UButton variant="outline" @click="showNewDialog = false">{{ t('common.cancel') }}</UButton>
-              <UButton @click="submitNewRequest" :loading="submitting">{{ t('common.submit') }}</UButton>
+              <UButton
+                :disabled="!canSubmitRequest"
+                :loading="submitting"
+                @click="submitNewRequest"
+              >
+                {{ t('common.submit') }}
+              </UButton>
             </div>
           </template>
         </UCard>
@@ -106,11 +115,12 @@
 </template>
 
 <script setup lang="ts">
+import { capability } from '~/middleware/capability';
 import { ref, reactive, computed, onMounted } from 'vue';
 import { useI18n } from 'vue-i18n';
 import StatCard from '~/components/common/StatCard.vue';
 
-definePageMeta({ middleware: 'auth' });
+definePageMeta({ middleware: ['auth', capability('entity.read')] });
 
 const { t } = useI18n();
 const toast = useToast();
@@ -142,6 +152,11 @@ const newRequest = reactive({
   due_date: '',
 });
 
+const canSubmitRequest = computed(() => (
+  newRequest.target_entity_id.trim().length > 0
+  && newRequest.requested_product.trim().length > 0
+));
+
 const statusOptions = [
   { label: t('requests.filter.all_statuses'), value: 'all' },
   { label: t('requests.status.pending'), value: 'pending' },
@@ -167,7 +182,9 @@ const filteredRequests = computed(() => {
   return requests.value.filter((r) => r.status === filters.status);
 });
 
-function statusColor(status: string): string {
+type BadgeColor = 'success' | 'info' | 'warning' | 'error' | 'neutral';
+
+function statusColor(status: string): BadgeColor {
   switch (status) {
     case 'completed': return 'success';
     case 'in_progress': return 'info';
@@ -176,7 +193,7 @@ function statusColor(status: string): string {
   }
 }
 
-function urgencyColor(urgency: string): string {
+function urgencyColor(urgency: string): BadgeColor {
   switch (urgency) {
     case 'urgent': return 'error';
     case 'high': return 'warning';
@@ -206,10 +223,15 @@ async function fetchRequests() {
 }
 
 async function submitNewRequest() {
+  if (!canSubmitRequest.value) return;
   submitting.value = true;
   try {
     await api.requests.create(newRequest);
     showNewDialog.value = false;
+    newRequest.target_entity_id = '';
+    newRequest.requested_product = '';
+    newRequest.urgency = 'normal';
+    newRequest.due_date = '';
     toast.add({ title: t('requests.new_success'), color: 'success' });
     await fetchRequests();
   } catch (err) {

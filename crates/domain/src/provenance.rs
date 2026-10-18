@@ -68,6 +68,7 @@ impl ProvenanceRef {
     }
 
     /// Provenance for a connector/source observation.
+    #[must_use]
     pub fn source(source: SourceRef, fetched_at: DateTime<Utc>) -> Self {
         Self {
             source: Some(source),

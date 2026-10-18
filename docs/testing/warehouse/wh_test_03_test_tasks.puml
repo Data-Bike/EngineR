@@ -1,0 +1,103 @@
+@startuml wh_test_03_test_tasks
+' ============================================================
+' Склад ТЕСТ — карта тестовых задач (все выполняются через MCP)
+' ============================================================
+skinparam linetype ortho
+title Склад ТЕСТ — карта тестовых задач MCP
+
+package "WH1 Схема" {
+  [schema.published: wh_* типы видны] as T1
+  [schema.types / type_get / type_view] as T2
+  [schema.predicates: wh_* edges+scalars] as T3
+  [revision_get складской ревизии] as T4
+  [негатив: ghost alias] as T5
+}
+
+package "WH2 Объекты (CRUD)" {
+  [create warehouse/zone/product/stock] as O1
+  [get/list/history] as O2
+  [update полей: qty, name, status] as O3
+  [dedup SKU + identity_mode reject] as O4
+  [retire остатка + статус retired] as O5
+  [негатив: ghost type] as O6
+}
+
+package "WH3 Связи" {
+  [create зона→склад, stock→товар/зону] as R1
+  [list outgoing/incoming/as_of] as R2
+  [delete связи] as R3
+  [негатив: ghost/bad predicate] as R4
+}
+
+package "WH4 Поиск" {
+  [query по типу wh_*] as Q1
+  [search текст: имя/SKU/код] as Q2
+  [filters: wh_category] as Q3
+  [where: eq/contains/gt/and] as Q4
+  [page/cursor] as Q5
+  [graph: depth, direction, predicate] as Q6
+}
+
+package "WH5 Приёмка" {
+  [накладная + поставщик/склад/позиции] as IN1
+  [оприходование остатка в зону] as IN2
+  [статус «проведена»] as IN3
+  [workflow request_processing] as IN4
+  [упаковочный лист (documents)] as IN5
+  [graph-проверка связей] as IN6
+}
+
+package "WH6 Отгрузка" {
+  [расходная + получатель/склад/позиции] as OU1
+  [списание остатка] as OU2
+  [задача комплектации: create→start→complete] as OU3
+  [статус «отгружена» + history] as OU4
+  [отчёт по складу (reports)] as OU5
+}
+
+package "WH7 Инвентаризация" {
+  [акт + склад + расхождение] as IV1
+  [check на складе (kyc)] as IV2
+  [факторы + assessment] as IV3
+  [задача пересчёта] as IV4
+  [акт-скан (documents)] as IV5
+  [monitors.list] as IV6
+}
+
+package "WH8 Процессы" {
+  [workflow check_execution на складе] as P1
+  [transition valid/invalid/ghost] as P2
+  [request на товар] as P3
+  [task cancel] as P4
+  [checks.evidence] as P5
+}
+
+package "WH9 Администрирование" {
+  [users.create wh-operator] as AD1
+  [permissions.group wh_readers + principals] as AD2
+  [token create/list/revoke] as AD3
+  [вызовы токеном оператора] as AD4
+  [revoked → 401/isError] as AD5
+  [users.delete] as AD6
+  [audit.query] as AD7
+}
+
+package "WH10/WH11 Негативы и покрытие" {
+  [traversal/ghost/malformed id] as N1
+  [missing/unknown args → tool_err] as N2
+  [нет/мусорный токен → 401] as N3
+  [неизвестный tool/method] as N4
+  [top-up листовых tools ≥10] as N5
+}
+
+T1 --> O1 : схема опубликована
+O1 --> R1 : объекты для связей
+R1 --> Q1 : граф для поиска
+O2 --> IN1
+IN1 --> OU1 : остатки прихода
+IN3 --> IV1 : проведённый приход
+OU2 --> IV1 : расхождения
+IN4 --> P1
+AD2 --> AD4 : роль оператора
+N1 ..> O6 : общие негативы
+@enduml

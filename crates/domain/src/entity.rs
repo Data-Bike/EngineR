@@ -47,6 +47,7 @@ pub struct Entity {
 
 impl Entity {
     /// Construct a new active entity.
+    #[must_use]
     pub fn new(
         tenant_id: TenantId,
         entity_id: EntityId,
@@ -80,11 +81,16 @@ impl Entity {
     }
 
     /// True if the entity is retired.
+    #[must_use]
     pub fn is_retired(&self) -> bool {
         self.status == EntityStatus::Retired
     }
 
     /// Retire the entity (idempotent if already retired with same reason).
+    ///
+    /// # Errors
+    ///
+    /// Reserved for lifecycle invariant failures introduced by stricter policies.
     pub fn retire(
         &mut self,
         by: Option<uuid::Uuid>,
@@ -104,6 +110,10 @@ impl Entity {
     }
 
     /// Restore a retired entity.
+    ///
+    /// # Errors
+    ///
+    /// Reserved for lifecycle invariant failures introduced by stricter policies.
     pub fn restore(&mut self, now: DateTime<Utc>) -> Result<(), crate::DomainError> {
         if !self.is_retired() {
             return Ok(()); // idempotent
@@ -118,6 +128,10 @@ impl Entity {
     }
 
     /// Mark this entity as merged into `canonical`. Idempotent on repeat.
+    ///
+    /// # Errors
+    ///
+    /// Returns an invariant error when an entity is merged into itself.
     pub fn mark_merged_into(&mut self, canonical: EntityId) -> Result<(), crate::DomainError> {
         if canonical == self.entity_id {
             return Err(crate::DomainError::invariant(
@@ -231,6 +245,9 @@ mod tests {
         let r1 = e.revision;
         e.mark_merged_into(second).unwrap();
         assert_eq!(e.canonical_entity_id, Some(second));
-        assert!(e.revision.0 > r1.0, "merging into different canonical must bump");
+        assert!(
+            e.revision.0 > r1.0,
+            "merging into different canonical must bump"
+        );
     }
 }

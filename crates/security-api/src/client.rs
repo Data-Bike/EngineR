@@ -8,8 +8,8 @@ use crate::contract::{
     ActionDecisionRequest, ActionDecisionResponse, QueryDecisionRequest, QueryDecisionResponse,
 };
 use enginer_domain::{PrincipalId, TenantId};
-use enginer_security_pdp::{AuthorizationRequest, AuthorizationResource, PdpEngine, PdpSnapshot};
 use enginer_security_domain::CapabilityAction;
+use enginer_security_pdp::{AuthorizationRequest, AuthorizationResource, PdpEngine, PdpSnapshot};
 use std::sync::Arc;
 
 /// Error from a security client (fail closed).
@@ -72,8 +72,8 @@ impl SecurityClient for LocalSecurityClient {
         let principal = PrincipalId(req.context.principal_id);
         let snap = self.snapshot.snapshot(tenant, principal, None)?;
 
-        let action = parse_capability(&req.action)
-            .ok_or_else(|| SecurityClientError::ContextInvalid {
+        let action =
+            parse_capability(&req.action).ok_or_else(|| SecurityClientError::ContextInvalid {
                 message: format!("unknown capability: {}", req.action),
             })?;
         let pdp_req = AuthorizationRequest {
@@ -89,12 +89,11 @@ impl SecurityClient for LocalSecurityClient {
                 selected_predicate_ids: Vec::new(),
             },
         };
-        let dec = self
-            .engine
-            .evaluate_action(&snap, &pdp_req)
-            .map_err(|e| SecurityClientError::ContextInvalid {
+        let dec = self.engine.evaluate_action(&snap, &pdp_req).map_err(|e| {
+            SecurityClientError::ContextInvalid {
                 message: format!("{e:?}"),
-            })?;
+            }
+        })?;
 
         Ok(ActionDecisionResponse {
             decision_id: dec.decision_id.raw(),
@@ -133,12 +132,11 @@ impl SecurityClient for LocalSecurityClient {
                 selected_predicate_ids: req.selected_predicate_ids.clone(),
             },
         };
-        let dec = self
-            .engine
-            .evaluate_action(&snap, &pdp_req)
-            .map_err(|e| SecurityClientError::ContextInvalid {
+        let dec = self.engine.evaluate_action(&snap, &pdp_req).map_err(|e| {
+            SecurityClientError::ContextInvalid {
                 message: format!("{e:?}"),
-            })?;
+            }
+        })?;
         Ok(QueryDecisionResponse {
             decision_id: dec.decision_id.raw(),
             effect: dec.effect.into(),
@@ -150,29 +148,5 @@ impl SecurityClient for LocalSecurityClient {
 }
 
 fn parse_capability(s: &str) -> Option<CapabilityAction> {
-    use CapabilityAction::*;
-    Some(match s {
-        "login.use_ui" => LoginUseUi,
-        "entity.create" => EntityCreate,
-        "entity.edit" => EntityEdit,
-        "entity.retire" => EntityRetire,
-        "entity.merge" => EntityMerge,
-        "query.advanced" => QueryAdvanced,
-        "query.aggregate" => QueryAggregate,
-        "check.run" => CheckRun,
-        "monitor.manage" => MonitorManage,
-        "report.run" => ReportRun,
-        "report.export" => ReportExport,
-        "bulk.import" => BulkImport,
-        "bulk.export" => BulkExport,
-        "bulk.mutate" => BulkMutate,
-        "schema.draft" => SchemaDraft,
-        "schema.publish" => SchemaPublish,
-        "security.manage" => SecurityManage,
-        "security.simulate" => SecuritySimulate,
-        "connector.manage" => ConnectorManage,
-        "audit.read" => AuditRead,
-        "admin.pages.access" => AdminPagesAccess,
-        _ => return None,
-    })
+    CapabilityAction::parse(s)
 }

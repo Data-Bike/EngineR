@@ -18,9 +18,7 @@ pub mod timer;
 
 pub use error::{WorkflowError, WorkflowResult};
 pub use job::{Job, JobState, JobStatus};
-pub use reaction::{
-    ActionKind, Reaction, ReactionConfig, ReactionTrigger, ReactionTriggerKind,
-};
+pub use reaction::{ActionKind, Reaction, ReactionConfig, ReactionTrigger, ReactionTriggerKind};
 pub use state_machine::{
     State, StateMachine, StateMachineDefinition, StateTransition, TransitionGuard,
 };

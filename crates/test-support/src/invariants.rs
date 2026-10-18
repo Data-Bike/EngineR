@@ -6,27 +6,27 @@
 
 #![forbid(unsafe_code)]
 
+use chrono::{Duration, Utc};
 use enginer_domain::{
     ids::{GroupId, PolicyId, PrincipalId, TenantId},
     schema::{EntityClass, PredicateDefinition, PredicateDirection, TypeDefinition},
     DomainError, PredicateId, SchemaRevisionState, TypeId,
 };
-use enginer_identity::{normalize_email, normalize_phone, normalize_text, normalize_text_search_key};
+use enginer_identity::{
+    normalize_email, normalize_phone, normalize_text, normalize_text_search_key,
+};
 use enginer_schema_registry::{SchemaDraft, ValidationReport};
+use enginer_security_api::{
+    client::{LocalSecurityClient, SecurityClient, SecurityClientError, SnapshotProvider},
+    contract::{ActionDecisionRequest, QueryDecisionRequest, SecurityContextDto},
+};
 use enginer_security_domain::{
     capabilities::CapabilityAction,
     decision::DecisionEffect,
     policy::{PolicyRule, PolicyRuleEffect, ResourceSelector},
     principal::{GroupClass, PrincipalGroupMembership},
 };
-use enginer_security_api::{
-    client::{LocalSecurityClient, SecurityClient, SecurityClientError, SnapshotProvider},
-    contract::{
-        ActionDecisionRequest, QueryDecisionRequest, SecurityContextDto,
-    },
-};
 use enginer_security_pdp::PdpSnapshot;
-use chrono::{Duration, Utc};
 use std::sync::Arc;
 
 /// Invariant: normalization is idempotent (docs/04 §13).
@@ -73,7 +73,10 @@ fn security_default_deny() {
     };
     let client = LocalSecurityClient::new(Arc::new(StaticSnap(snap)));
     let dec = client.action_decision(req).unwrap();
-    assert_eq!(dec.effect, enginer_security_api::contract::DecisionEffectDto::Deny);
+    assert_eq!(
+        dec.effect,
+        enginer_security_api::contract::DecisionEffectDto::Deny
+    );
 }
 
 /// Invariant: deny overrides allow (ADR-011).
@@ -86,8 +89,18 @@ fn security_deny_overrides_allow() {
         policy_revision: 1,
         memberships: vec![membership(principal, group, GroupClass::Capability)],
         rules: vec![
-            rule(tenant, group, PolicyRuleEffect::Allow, CapabilityAction::EntityCreate.as_str()),
-            rule(tenant, group, PolicyRuleEffect::Deny, CapabilityAction::EntityCreate.as_str()),
+            rule(
+                tenant,
+                group,
+                PolicyRuleEffect::Allow,
+                CapabilityAction::EntityCreate.as_str(),
+            ),
+            rule(
+                tenant,
+                group,
+                PolicyRuleEffect::Deny,
+                CapabilityAction::EntityCreate.as_str(),
+            ),
         ],
     };
     let client = LocalSecurityClient::new(Arc::new(StaticSnap(snap)));
@@ -99,7 +112,10 @@ fn security_deny_overrides_allow() {
         parameters: serde_json::Map::new(),
     };
     let dec = client.action_decision(req).unwrap();
-    assert_eq!(dec.effect, enginer_security_api::contract::DecisionEffectDto::Deny);
+    assert_eq!(
+        dec.effect,
+        enginer_security_api::contract::DecisionEffectDto::Deny
+    );
 }
 
 /// Invariant: capability groups grant capabilities; data groups do NOT
@@ -112,7 +128,12 @@ fn data_group_does_not_grant_capability() {
     let snap = PdpSnapshot {
         policy_revision: 1,
         memberships: vec![membership(principal, data_group, GroupClass::Data)],
-        rules: vec![rule(tenant, data_group, PolicyRuleEffect::Allow, CapabilityAction::EntityCreate.as_str())],
+        rules: vec![rule(
+            tenant,
+            data_group,
+            PolicyRuleEffect::Allow,
+            CapabilityAction::EntityCreate.as_str(),
+        )],
     };
     let client = LocalSecurityClient::new(Arc::new(StaticSnap(snap)));
     let req = ActionDecisionRequest {
@@ -123,7 +144,10 @@ fn data_group_does_not_grant_capability() {
         parameters: serde_json::Map::new(),
     };
     let dec = client.action_decision(req).unwrap();
-    assert_eq!(dec.effect, enginer_security_api::contract::DecisionEffectDto::Deny);
+    assert_eq!(
+        dec.effect,
+        enginer_security_api::contract::DecisionEffectDto::Deny
+    );
 }
 
 /// Invariant: a decision is bound to tenant/principal/session/auth/action/
@@ -216,7 +240,12 @@ fn schema_validation_rejects_dangling_range() {
 fn validation_report_passes_only_without_errors() {
     let mut r = ValidationReport::empty();
     assert!(r.passes());
-    r.add(enginer_schema_registry::Severity::Warning, "W1", "warn", None);
+    r.add(
+        enginer_schema_registry::Severity::Warning,
+        "W1",
+        "warn",
+        None,
+    );
     assert!(r.passes());
     r.add(enginer_schema_registry::Severity::Error, "E1", "err", None);
     assert!(!r.passes());
@@ -242,7 +271,12 @@ fn query_aggregate_requires_aggregate_capability() {
     let snap = PdpSnapshot {
         policy_revision: 1,
         memberships: vec![membership(principal, group, GroupClass::Capability)],
-        rules: vec![rule(tenant, group, PolicyRuleEffect::Allow, CapabilityAction::QueryAdvanced.as_str())],
+        rules: vec![rule(
+            tenant,
+            group,
+            PolicyRuleEffect::Allow,
+            CapabilityAction::QueryAdvanced.as_str(),
+        )],
     };
     let client = LocalSecurityClient::new(Arc::new(StaticSnap(snap)));
     let req = QueryDecisionRequest {
@@ -258,7 +292,10 @@ fn query_aggregate_requires_aggregate_capability() {
     };
     let dec = client.query_decision(req).unwrap();
     // aggregate op requires query.aggregate, which is not granted -> deny.
-    assert_eq!(dec.effect, enginer_security_api::contract::DecisionEffectDto::Deny);
+    assert_eq!(
+        dec.effect,
+        enginer_security_api::contract::DecisionEffectDto::Deny
+    );
 }
 
 /// Invariant: unknown capability string is rejected (fail closed).
@@ -312,7 +349,11 @@ fn ctx_with(tenant: TenantId, principal: PrincipalId) -> SecurityContextDto {
     }
 }
 
-fn membership(principal: PrincipalId, group: GroupId, class: GroupClass) -> PrincipalGroupMembership {
+fn membership(
+    principal: PrincipalId,
+    group: GroupId,
+    class: GroupClass,
+) -> PrincipalGroupMembership {
     PrincipalGroupMembership {
         principal_id: principal,
         group_id: group,

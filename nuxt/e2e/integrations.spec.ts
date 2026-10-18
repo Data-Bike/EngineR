@@ -73,7 +73,7 @@ async function setupIntegrationsMocks(page: import('@playwright/test').Page) {
           timezone: 'Europe/Moscow',
           auth_strength: 'normal',
           groups_revision: 1,
-          capabilities: ['connector.admin', 'entity.read'],
+          capabilities: ['connector.manage', 'entity.read'],
           workspaces: ['default'],
           policy_revision: 1,
         },

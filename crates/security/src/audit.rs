@@ -245,7 +245,8 @@ impl TamperChain {
 
     /// Create a checkpoint at the current sequence.
     pub fn checkpoint(&mut self) {
-        self.checkpoints.push((self.sequence, self.last_hash.clone()));
+        self.checkpoints
+            .push((self.sequence, self.last_hash.clone()));
     }
 
     /// Verify the chain integrity (returns true if all entries are consistent).

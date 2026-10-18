@@ -31,7 +31,10 @@ pub struct RetireEntity {
 }
 
 impl RetireEntity {
-    pub async fn execute(&self, cmd: RetireEntityCommand) -> Result<RetireEntityResult, ApplicationError> {
+    pub async fn execute(
+        &self,
+        cmd: RetireEntityCommand,
+    ) -> Result<RetireEntityResult, ApplicationError> {
         let entity = self
             .entities
             .find_by_public_id(cmd.tenant_id, cmd.public_id)
@@ -100,7 +103,11 @@ mod tests {
             clock,
             outbox: outbox.clone(),
         };
-        RetireHarness { uc, entities, outbox }
+        RetireHarness {
+            uc,
+            entities,
+            outbox,
+        }
     }
 
     fn seed_entity(entities: &MockEntityRepository, tenant: TenantId) -> PublicEntityId {

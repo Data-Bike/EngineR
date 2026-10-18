@@ -158,13 +158,14 @@
 </template>
 
 <script setup lang="ts">
+import { capability } from '~/middleware/capability';
 import { ref, computed, reactive, onMounted } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useApi } from '~/composables/useApi';
 import type { ConnectorInstance } from '@enginer/api-client';
 
 definePageMeta({
-  middleware: 'auth',
+  middleware: ['auth', capability('connector.manage')],
 });
 
 const { t } = useI18n();

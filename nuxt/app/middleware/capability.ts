@@ -4,9 +4,12 @@
  *
  * Usage in pages:
  *   definePageMeta({ middleware: capability('entity.create') })
+ *   definePageMeta({ middleware: capability(['users.manage', 'user.read']) })
+ * An array means "any of" — for surfaces accepting an umbrella grant.
  */
 
-export function capability(cap: string) {
+export function capability(cap: string | string[]) {
+  const required = Array.isArray(cap) ? cap : [cap];
   return defineNuxtRouteMiddleware((to) => {
     const store = useAuthStore();
     if (!store.isAuthenticated) {
@@ -15,7 +18,7 @@ export function capability(cap: string) {
         query: { redirect: to.fullPath },
       });
     }
-    if (!store.hasCapability(cap)) {
+    if (!required.some((c) => store.hasCapability(c))) {
       throw createError({
         statusCode: 403,
         statusMessage: 'Capability denied',

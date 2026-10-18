@@ -3,8 +3,8 @@
 #![cfg(test)]
 
 use enginer_files::{
-    FileScanResult, FileScanStatus, FileSignature, FileScanConfig,
-    ScanFinding, ScanSeverity, StagedUpload, UploadInit, UploadStatus,
+    FileScanConfig, FileScanResult, FileScanStatus, FileSignature, ScanFinding, ScanSeverity,
+    StagedUpload, UploadInit, UploadStatus,
 };
 use std::collections::HashMap;
 
@@ -12,7 +12,8 @@ fn make_upload_init(size: u64, chunk_size: u64) -> UploadInit {
     UploadInit {
         tenant_id: "tenant-001".to_string(),
         filename: "test.xlsx".to_string(),
-        content_type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet".to_string(),
+        content_type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            .to_string(),
         expected_size: size,
         expected_hash: "abc123".to_string(),
         hash_algorithm: "blake2b".to_string(),
@@ -49,27 +50,33 @@ fn staged_upload_receive_chunks() {
     let mut upload = StagedUpload::init(init).unwrap();
     assert_eq!(upload.total_chunks, 3);
 
-    upload.receive_chunk(enginer_files::UploadChunk {
-        index: 0,
-        size: 100,
-        hash: "h0".to_string(),
-        is_last: false,
-    }).unwrap();
+    upload
+        .receive_chunk(enginer_files::UploadChunk {
+            index: 0,
+            size: 100,
+            hash: "h0".to_string(),
+            is_last: false,
+        })
+        .unwrap();
     assert_eq!(upload.status, UploadStatus::Uploading);
 
-    upload.receive_chunk(enginer_files::UploadChunk {
-        index: 1,
-        size: 100,
-        hash: "h1".to_string(),
-        is_last: false,
-    }).unwrap();
+    upload
+        .receive_chunk(enginer_files::UploadChunk {
+            index: 1,
+            size: 100,
+            hash: "h1".to_string(),
+            is_last: false,
+        })
+        .unwrap();
 
-    upload.receive_chunk(enginer_files::UploadChunk {
-        index: 2,
-        size: 100,
-        hash: "h2".to_string(),
-        is_last: true,
-    }).unwrap();
+    upload
+        .receive_chunk(enginer_files::UploadChunk {
+            index: 2,
+            size: 100,
+            hash: "h2".to_string(),
+            is_last: true,
+        })
+        .unwrap();
     assert_eq!(upload.status, UploadStatus::AllChunksReceived);
     assert!(upload.is_complete());
 }
@@ -94,12 +101,14 @@ fn staged_upload_idempotent_chunk() {
 fn staged_upload_chunk_hash_mismatch() {
     let init = make_upload_init(200, 100);
     let mut upload = StagedUpload::init(init).unwrap();
-    upload.receive_chunk(enginer_files::UploadChunk {
-        index: 0,
-        size: 100,
-        hash: "h0".to_string(),
-        is_last: false,
-    }).unwrap();
+    upload
+        .receive_chunk(enginer_files::UploadChunk {
+            index: 0,
+            size: 100,
+            hash: "h0".to_string(),
+            is_last: false,
+        })
+        .unwrap();
     let result = upload.receive_chunk(enginer_files::UploadChunk {
         index: 0,
         size: 100,
@@ -126,22 +135,28 @@ fn staged_upload_chunk_out_of_range() {
 fn staged_upload_complete() {
     let init = make_upload_init(200, 100);
     let mut upload = StagedUpload::init(init).unwrap();
-    upload.receive_chunk(enginer_files::UploadChunk {
-        index: 0,
-        size: 100,
-        hash: "h0".to_string(),
-        is_last: false,
-    }).unwrap();
-    upload.receive_chunk(enginer_files::UploadChunk {
-        index: 1,
-        size: 100,
-        hash: "h1".to_string(),
-        is_last: true,
-    }).unwrap();
-    upload.complete(enginer_files::UploadComplete {
-        final_hash: "abc123".to_string(),
-        total_size: 200,
-    }).unwrap();
+    upload
+        .receive_chunk(enginer_files::UploadChunk {
+            index: 0,
+            size: 100,
+            hash: "h0".to_string(),
+            is_last: false,
+        })
+        .unwrap();
+    upload
+        .receive_chunk(enginer_files::UploadChunk {
+            index: 1,
+            size: 100,
+            hash: "h1".to_string(),
+            is_last: true,
+        })
+        .unwrap();
+    upload
+        .complete(enginer_files::UploadComplete {
+            final_hash: "abc123".to_string(),
+            total_size: 200,
+        })
+        .unwrap();
     assert_eq!(upload.status, UploadStatus::Completed);
     assert!(upload.is_terminal());
     assert!(upload.object_id.is_some());
@@ -152,18 +167,22 @@ fn staged_upload_complete() {
 fn staged_upload_complete_wrong_hash() {
     let init = make_upload_init(200, 100);
     let mut upload = StagedUpload::init(init).unwrap();
-    upload.receive_chunk(enginer_files::UploadChunk {
-        index: 0,
-        size: 100,
-        hash: "h0".to_string(),
-        is_last: false,
-    }).unwrap();
-    upload.receive_chunk(enginer_files::UploadChunk {
-        index: 1,
-        size: 100,
-        hash: "h1".to_string(),
-        is_last: true,
-    }).unwrap();
+    upload
+        .receive_chunk(enginer_files::UploadChunk {
+            index: 0,
+            size: 100,
+            hash: "h0".to_string(),
+            is_last: false,
+        })
+        .unwrap();
+    upload
+        .receive_chunk(enginer_files::UploadChunk {
+            index: 1,
+            size: 100,
+            hash: "h1".to_string(),
+            is_last: true,
+        })
+        .unwrap();
     let result = upload.complete(enginer_files::UploadComplete {
         final_hash: "wrong".to_string(),
         total_size: 200,
@@ -175,15 +194,19 @@ fn staged_upload_complete_wrong_hash() {
 fn staged_upload_abort() {
     let init = make_upload_init(200, 100);
     let mut upload = StagedUpload::init(init).unwrap();
-    upload.receive_chunk(enginer_files::UploadChunk {
-        index: 0,
-        size: 100,
-        hash: "h0".to_string(),
-        is_last: false,
-    }).unwrap();
-    upload.abort(enginer_files::UploadAbort {
-        reason: "user cancelled".to_string(),
-    }).unwrap();
+    upload
+        .receive_chunk(enginer_files::UploadChunk {
+            index: 0,
+            size: 100,
+            hash: "h0".to_string(),
+            is_last: false,
+        })
+        .unwrap();
+    upload
+        .abort(enginer_files::UploadAbort {
+            reason: "user cancelled".to_string(),
+        })
+        .unwrap();
     assert_eq!(upload.status, UploadStatus::Aborted);
     assert!(upload.is_terminal());
     assert!(upload.received_chunks.is_empty());
@@ -193,22 +216,28 @@ fn staged_upload_abort() {
 fn staged_upload_abort_completed_fails() {
     let init = make_upload_init(200, 100);
     let mut upload = StagedUpload::init(init).unwrap();
-    upload.receive_chunk(enginer_files::UploadChunk {
-        index: 0,
-        size: 100,
-        hash: "h0".to_string(),
-        is_last: false,
-    }).unwrap();
-    upload.receive_chunk(enginer_files::UploadChunk {
-        index: 1,
-        size: 100,
-        hash: "h1".to_string(),
-        is_last: true,
-    }).unwrap();
-    upload.complete(enginer_files::UploadComplete {
-        final_hash: "abc123".to_string(),
-        total_size: 200,
-    }).unwrap();
+    upload
+        .receive_chunk(enginer_files::UploadChunk {
+            index: 0,
+            size: 100,
+            hash: "h0".to_string(),
+            is_last: false,
+        })
+        .unwrap();
+    upload
+        .receive_chunk(enginer_files::UploadChunk {
+            index: 1,
+            size: 100,
+            hash: "h1".to_string(),
+            is_last: true,
+        })
+        .unwrap();
+    upload
+        .complete(enginer_files::UploadComplete {
+            final_hash: "abc123".to_string(),
+            total_size: 200,
+        })
+        .unwrap();
     let result = upload.abort(enginer_files::UploadAbort {
         reason: "test".to_string(),
     });
@@ -220,12 +249,14 @@ fn staged_upload_progress() {
     let init = make_upload_init(400, 100);
     let mut upload = StagedUpload::init(init).unwrap();
     assert_eq!(upload.progress(), 0.0);
-    upload.receive_chunk(enginer_files::UploadChunk {
-        index: 0,
-        size: 100,
-        hash: "h0".to_string(),
-        is_last: false,
-    }).unwrap();
+    upload
+        .receive_chunk(enginer_files::UploadChunk {
+            index: 0,
+            size: 100,
+            hash: "h0".to_string(),
+            is_last: false,
+        })
+        .unwrap();
     assert_eq!(upload.progress(), 0.25);
 }
 
@@ -255,14 +286,12 @@ fn scan_result_mark_clean() {
 #[test]
 fn scan_result_mark_rejected() {
     let mut result = FileScanResult::pending("obj-001");
-    let findings = vec![
-        ScanFinding {
-            kind: "macro".to_string(),
-            severity: ScanSeverity::Critical,
-            message: "VBA macro detected".to_string(),
-            location: Some("Sheet1!A1".to_string()),
-        },
-    ];
+    let findings = vec![ScanFinding {
+        kind: "macro".to_string(),
+        severity: ScanSeverity::Critical,
+        message: "VBA macro detected".to_string(),
+        location: Some("Sheet1!A1".to_string()),
+    }];
     result.mark_rejected(None, findings, 200);
     assert_eq!(result.status, FileScanStatus::Rejected);
     assert!(!result.passed());
@@ -278,14 +307,12 @@ fn scan_result_mark_accepted_with_warnings() {
         mime_type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet".to_string(),
         matches_declared: true,
     };
-    let findings = vec![
-        ScanFinding {
-            kind: "formula".to_string(),
-            severity: ScanSeverity::Warning,
-            message: "Formula detected in cell".to_string(),
-            location: Some("Sheet1!B2".to_string()),
-        },
-    ];
+    let findings = vec![ScanFinding {
+        kind: "formula".to_string(),
+        severity: ScanSeverity::Warning,
+        message: "Formula detected in cell".to_string(),
+        location: Some("Sheet1!B2".to_string()),
+    }];
     result.mark_accepted_with_warnings(sig, findings, 100);
     assert_eq!(result.status, FileScanStatus::AcceptedWithWarnings);
     assert!(result.passed());
@@ -318,7 +345,10 @@ fn storage_class_from_str() {
     use enginer_files::storage::StorageClass;
     assert_eq!(StorageClass::from_str("hot"), Some(StorageClass::Hot));
     assert_eq!(StorageClass::from_str("COOL"), Some(StorageClass::Cool));
-    assert_eq!(StorageClass::from_str("archive"), Some(StorageClass::Archive));
+    assert_eq!(
+        StorageClass::from_str("archive"),
+        Some(StorageClass::Archive)
+    );
     assert_eq!(StorageClass::from_str("unknown"), None);
 }
 

@@ -11,9 +11,9 @@
 
 #![forbid(unsafe_code)]
 
+pub mod chain;
 pub mod error;
 pub mod repository;
-pub mod chain;
 
 pub use chain::{ChainHasher, ChainState};
 pub use error::{AuditPersistenceError, AuditPersistenceResult};

@@ -1,16 +1,23 @@
 //! Row-Level Security context (docs/08 §8, docs/10 §17).
 //!
-//! At the start of a transaction the persistence layer safely sets
 //! `app.tenant_id`, `app.principal_id`, `app.purpose` and `app.policy_revision`
-//! via `set_config(..., true)` (transaction-local). RLS policies read only
-//! these transaction-local settings and reject absent context. After the
-//! transaction the connection is returned to the pool only after rollback /
-//! reset (tested to confirm no context leakage between pooled connections).
+//! are installed via `set_config(...)`. Two scoping modes are supported:
+//!
+//! - [`RlsContext::install_tx`] — transaction-local (`is_local = true`). The
+//!   setting disappears automatically on commit/rollback, so nothing can leak
+//!   into other pooled connections. This is the default for data access.
+//! - [`RlsContext::install_conn`] — session level (`is_local = false`) on a
+//!   single pooled connection for statements that cannot run inside an
+//!   explicit transaction. The caller MUST run [`RlsContext::reset_conn`]
+//!   before releasing the connection back to the pool.
+//!
+//! RLS policies read only these settings and reject absent context.
 
 use enginer_domain::{PrincipalId, TenantId};
-use sqlx::postgres::PgPool;
+use sqlx::postgres::{PgConnection, PgPool};
+use sqlx::Transaction;
 
-/// RLS context to install at the start of a transaction.
+/// RLS context to install before running tenant-scoped queries.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RlsContext {
     pub tenant_id: TenantId,
@@ -36,31 +43,65 @@ impl From<sqlx::Error> for RlsContextError {
 }
 
 impl RlsContext {
-    /// Install the RLS context on a connection (transaction-local).
-    ///
-    /// Uses `set_config(name, value, is_local := true)` so the setting is
-    /// scoped to the current transaction and reset on commit/rollback.
-    pub async fn install(&self, pool: &PgPool) -> Result<(), RlsContextError> {
-        let tenant = self.tenant_id.raw().to_string();
-        let principal = self.principal_id.raw().to_string();
-        // set_config returns the new value; we discard it.
-        sqlx::query("SELECT set_config('app.tenant_id', $1, true)")
-            .bind(&tenant)
-            .execute(pool)
-            .await?;
-        sqlx::query("SELECT set_config('app.principal_id', $1, true)")
-            .bind(&principal)
-            .execute(pool)
-            .await?;
-        sqlx::query("SELECT set_config('app.purpose', $1, true)")
-            .bind(&self.purpose)
-            .execute(pool)
-            .await?;
+    async fn set(
+        conn: &mut PgConnection,
+        name: &str,
+        value: String,
+        is_local: bool,
+    ) -> Result<(), RlsContextError> {
+        // The GUC name is a compile-time constant supplied by the callers
+        // below; user input only ever flows through the bind parameter.
+        let stmt = format!("SELECT set_config('app.{name}', $1, {is_local})");
+        sqlx::query(&stmt).bind(value).execute(&mut *conn).await?;
+        Ok(())
+    }
+
+    async fn apply(&self, conn: &mut PgConnection, is_local: bool) -> Result<(), RlsContextError> {
+        Self::set(
+            conn,
+            "tenant_id",
+            self.tenant_id.raw().to_string(),
+            is_local,
+        )
+        .await?;
+        Self::set(
+            conn,
+            "principal_id",
+            self.principal_id.raw().to_string(),
+            is_local,
+        )
+        .await?;
+        Self::set(conn, "purpose", self.purpose.clone(), is_local).await?;
         if let Some(rev) = self.policy_revision {
-            sqlx::query("SELECT set_config('app.policy_revision', $1, true)")
-                .bind(rev.to_string())
-                .execute(pool)
-                .await?;
+            Self::set(conn, "policy_revision", rev.to_string(), is_local).await?;
+        }
+        Ok(())
+    }
+
+    /// Install the context transaction-locally. The settings are reset by
+    /// PostgreSQL on commit/rollback — nothing leaks between pooled
+    /// connections.
+    pub async fn install_tx(
+        &self,
+        tx: &mut Transaction<'_, sqlx::Postgres>,
+    ) -> Result<(), RlsContextError> {
+        self.apply(&mut **tx, true).await
+    }
+
+    /// Install the context at session level on a single pooled connection.
+    /// The caller MUST run [`RlsContext::reset_conn`] before the connection
+    /// returns to the pool, otherwise the tenant context leaks into unrelated
+    /// requests.
+    pub async fn install_conn(&self, conn: &mut PgConnection) -> Result<(), RlsContextError> {
+        self.apply(conn, false).await
+    }
+
+    /// Clear a session-level context previously installed via
+    /// [`RlsContext::install_conn`]. Setting the GUCs to `''` makes every
+    /// tenant-scoped policy evaluate false (fail closed).
+    pub async fn reset_conn(conn: &mut PgConnection) -> Result<(), RlsContextError> {
+        for name in ["tenant_id", "principal_id", "purpose", "policy_revision"] {
+            Self::set(conn, name, String::new(), false).await?;
         }
         Ok(())
     }
@@ -74,4 +115,27 @@ impl RlsContext {
                 .await?;
         Ok(row.0)
     }
+}
+
+/// Begin a transaction with the tenant RLS context installed. All repository
+/// methods must run through this — every tenant-scoped table is under
+/// FORCE RLS, so a query without `app.tenant_id` sees zero rows.
+pub(crate) async fn tenant_tx(
+    pool: &PgPool,
+    tenant: TenantId,
+) -> Result<Transaction<'static, sqlx::Postgres>, enginer_domain::DomainError> {
+    let mut tx = pool
+        .begin()
+        .await
+        .map_err(|e| enginer_domain::DomainError::invariant(format!("tx begin: {e}")))?;
+    RlsContext {
+        tenant_id: tenant,
+        principal_id: PrincipalId(uuid::Uuid::nil()),
+        purpose: "persistence".to_string(),
+        policy_revision: None,
+    }
+    .install_tx(&mut tx)
+    .await
+    .map_err(|e| enginer_domain::DomainError::invariant(format!("rls ctx: {e}")))?;
+    Ok(tx)
 }

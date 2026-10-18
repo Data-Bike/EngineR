@@ -131,7 +131,7 @@ async function setupAuditMocks(page: import('@playwright/test').Page) {
           timezone: 'Europe/Moscow',
           auth_strength: 'normal',
           groups_revision: 1,
-          capabilities: ['audit.view', 'audit.admin', 'entity.read'],
+          capabilities: ['audit.read', 'security.manage', 'entity.read'],
           workspaces: ['default'],
           policy_revision: 1,
         },
@@ -141,7 +141,7 @@ async function setupAuditMocks(page: import('@playwright/test').Page) {
   });
 
   // Mock audit query
-  await page.route('**/api/v1/audit*', (route) => {
+  await page.route('**/api/v1/audit**', (route) => {
     const url = route.request().url();
     const method = route.request().method();
 
@@ -221,7 +221,7 @@ test.describe('Audit page', () => {
   test('displays correct kind badges', async ({ page }) => {
     await page.goto('/audit');
     // Query endpoint may include search params
-    await page.waitForResponse('**/api/v1/audit*');
+    await page.waitForResponse('**/api/v1/audit**');
     // Wait for table rows
     await expect(page.locator('table tbody tr')).toHaveCount(3, { timeout: 10000 });
     // Third column contains kind labels (Russian: decision=Решение, denied_request=Отказ)

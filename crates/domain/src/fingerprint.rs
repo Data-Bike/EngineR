@@ -19,6 +19,7 @@ pub struct FactFingerprint(pub [u8; 32]);
 
 impl FactFingerprint {
     /// Hex encoding.
+    #[must_use]
     pub fn to_hex(self) -> String {
         hex::encode(self.0)
     }
@@ -29,6 +30,7 @@ impl FactFingerprint {
 /// `qualifier_hash` is an opaque 32-byte hash of out-of-band qualifiers
 /// (provenance set id, confidence bucket, etc.) or `None`.
 /// `identity_scope` is the identity policy scope tag or `None`.
+#[must_use]
 pub fn fact_fingerprint(
     tenant: TenantId,
     subject: i64,

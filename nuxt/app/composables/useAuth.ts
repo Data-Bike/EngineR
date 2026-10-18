@@ -8,6 +8,14 @@
 
 import { defineStore } from 'pinia';
 
+/** UI route rules delivered by /me/context (system.url rules, UI paths).
+ * Mirrors dataperm::can_url: longest-prefix match wins, `blanket` means an
+ * unmatched path is denied. */
+export interface UiRules {
+  rules: { path: string; allow: boolean }[];
+  blanket: boolean;
+}
+
 /** User profile from /me/context. */
 export interface UserProfile {
   principal_id: string;
@@ -21,7 +29,14 @@ export interface UserProfile {
   workspaces: string[];
   policy_revision: number;
   csrf_token: string;
+  ui_rules?: UiRules;
 }
+
+// Singleflight for /me/context: app.vue onMounted and the auth middleware can
+// both trigger a fetch on cold load; concurrent calls must share one request,
+// otherwise a middleware arriving mid-fetch sees a still-empty store and
+// bounces a valid session to /login.
+let contextInFlight: Promise<void> | null = null;
 
 /** Auth store — holds session state. */
 export const useAuthStore = defineStore('auth', {
@@ -40,25 +55,30 @@ export const useAuthStore = defineStore('auth', {
   actions: {
     /** Fetch the session context from the server. */
     async fetchContext() {
+      if (contextInFlight) return contextInFlight;
       this.loading = true;
       this.error = null;
-      try {
-        // Use $fetch directly instead of ApiClient to avoid issues with
-        // composables not being ready during middleware execution.
-        const config = useRuntimeConfig();
-        const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
-        const url = `${baseUrl.replace(/\/$/, '')}/me/context`;
-        const response = await $fetch<{ data: UserProfile; meta: unknown }>(url, {
-          credentials: 'include',
-          headers: { Accept: 'application/json' },
-        });
-        this.user = response.data;
-      } catch (e: unknown) {
-        this.user = null;
-        this.error = e instanceof Error ? e.message : String(e);
-      } finally {
-        this.loading = false;
-      }
+      contextInFlight = (async () => {
+        try {
+          // Use $fetch directly instead of ApiClient to avoid issues with
+          // composables not being ready during middleware execution.
+          const config = useRuntimeConfig();
+          const baseUrl = (config.public.apiBaseUrl as string) || '/api/v1';
+          const url = `${baseUrl.replace(/\/$/, '')}/me/context`;
+          const response = await $fetch<{ data: UserProfile; meta: unknown }>(url, {
+            credentials: 'include',
+            headers: { Accept: 'application/json' },
+          });
+          this.user = response.data;
+        } catch (e: unknown) {
+          this.user = null;
+          this.error = e instanceof Error ? e.message : String(e);
+        } finally {
+          this.loading = false;
+          contextInFlight = null;
+        }
+      })();
+      return contextInFlight;
     },
 
     /** Clear session (logout). Calls server logout endpoint to invalidate cookie. */
@@ -85,6 +105,30 @@ export const useAuthStore = defineStore('auth', {
     /** Check if user has a capability (coarse UX check; server re-checks). */
     hasCapability(cap: string): boolean {
       return this.capabilities.includes(cap);
+    },
+
+    /**
+     * Check whether a frontend route path is allowed by the principal's
+     * URL rules — identical semantics to `dataperm::can_url` on the server:
+     * longest-prefix match wins (an allow rule can carve a hole in a broader
+     * deny and vice versa); with `blanket` set, an unmatched path is denied.
+     * The server re-checks every request.
+     */
+    canUrl(path: string): boolean {
+      const uiRules = this.user?.ui_rules;
+      if (!uiRules) return true;
+      const matches = (prefix: string) =>
+        path === prefix ||
+        prefix === '/' ||
+        prefix === '*' ||
+        path.startsWith(prefix + '/');
+      const sorted = [...(uiRules.rules ?? [])].sort(
+        (a, b) => b.path.length - a.path.length,
+      );
+      for (const rule of sorted) {
+        if (matches(rule.path)) return rule.allow;
+      }
+      return !uiRules.blanket;
     },
   },
 });

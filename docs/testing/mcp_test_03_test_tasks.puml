@@ -1,0 +1,87 @@
+@startuml enginer_mcp_test_tasks
+' =============================================================================
+' EngineR — Карта тестовых задач для MCP (tools/call через Streamable HTTP)
+' Каждый лист — группа кейсов; подробный чек-лист: mcp_test_cases.md;
+' прогон: docs/testing/mcp_test_runner.py.
+' ≥10 кейсов на функциональную область (позитив + негатив + границы).
+' =============================================================================
+skinparam shadowing false
+title Тестовые задачи MCP — покрытие функционала
+
+map "ПОИСК И ЧТЕНИЕ" as search #LightBlue {
+  * entities.list — фильтр type, поиск search, пагинация limit/cursor
+  * entities.get — по public_id, 404/400, retired
+  * entities.query — AST-запрос по полям (docs/12)
+  * entities.graph — обход связей, max_depth, direction, predicate
+  * entities.history — ревизии объекта
+  * relations.list — outgoing/incoming/both, as_of
+  * dashboard.stats, context.get — сводка и контекст принципала
+}
+
+map "СОЗДАНИЕ ОБЪЕКТОВ" as create #LightGreen {
+  * entities.create — каждый тип, fields/statements,
+    identity_mode return_existing|fail|merge, schema_revision
+  * relations.create — все edge-предикаты, domain/range, дубли
+  * tasks.create — kind/title/priority/due_date
+  * checks.create — check_kind × target, request_id
+  * requests.create — target + check_kinds + urgency
+  * connectors.create — connector_type_id, config
+  * documents.upload, files.upload_* — вложения
+  * schema.draft_create — наследование опубликованной ревизии
+  * users.create — человек + service account, groups
+}
+
+map "ИЗМЕНЕНИЕ ОБЪЕКТОВ И СВЯЗЕЙ" as update #Wheat {
+  * entities.update — fields, predicate_id+value, revision-conflict
+  * entities.retire — reason, повторный retire
+  * entities.merge — loser_public_id, idempotent, self-merge
+  * relations.delete — отзыв связи
+  * tasks.start/complete/cancel — статусная машина
+  * users.update — display_name/email/password/groups/status
+  * users.delete — блокировка + отзыв токенов
+  * connectors.update — enabled/display_name/config (PATCH)
+  * permissions.group_update — rules/principals/parent
+  * schema.draft_update — типы/предикаты + If-Match ETag
+  * audit.retention_set — retention_days, legal_hold
+}
+
+map "ЗАПУСК ПРОЦЕССОВ" as proc #LightYellow {
+  * workflows.create — definition_id, target_entity_id, variables
+  * workflows.transition — trigger/to, статусная машина
+  * workflows.tasks — задачи инстанса
+  * checks.* — запуск проверки, evidence, статусы
+  * monitors.list/run — запуск монитора
+  * reports.generate/list — шаблон × формат
+  * assessment.create — скоринг/решение
+  * factors.list/resolve — факторы риска
+}
+
+map "АДМИНИСТРИРОВАНИЕ" as admin #MistyRose {
+  * users.list/get — фильтры q/group_id/status/inherited
+  * users.role_groups — роли пользователя (direct+effective)
+  * users.tokens/token_create/token_revoke — lifecycle токенов
+  * users.activity — журнал действий
+  * permissions.groups/group_create/update/delete — роли и наследование
+  * audit.query/checkpoint_*/verify/retention_* — журнал аудита
+  * schema.draft_* / revision_* / publish — версионирование схемы
+}
+
+map "БЕЗОПАСНОСТЬ И ПРАВА" as sec #LightCoral {
+  * Bearer: нет токена → 401; мусорный/отозванный/expired → 401
+  * tools/list фильтруется по capabilities принципала
+  * tools/call без capability → -32602 (denied)
+  * analysts: 29 read-tools, нет admin-tools
+  * path-аргументы: '..', '/', '?', '#' → отказ
+  * unknown arg → -32602; missing required → -32602
+  * data-правила: entity без grant → 404; masked-поля
+  * disable учётки → мгновенный 401 её токенов
+  * CSRF не требуется для Bearer; требуется для cookie
+}
+
+search --> create : объект создан → доступен в поиске
+create --> update : созданный объект редактируется
+create --> proc : сущность — субъект workflow/check/request
+update --> search : правка видна после ре-чтения
+proc --> admin : процессы порождают аудит/задачи
+sec --> admin : права проверяются через роли
+@enduml

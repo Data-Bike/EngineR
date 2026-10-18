@@ -104,6 +104,9 @@
                   <USwitch v-model="field.identity" />
                 </UFormField>
               </div>
+              <UFormField v-if="field.kind === 'entity_reference'" :label="t('admin.range_type')">
+                <USelect v-model="field.target_type_id" :items="typeOptions" class="w-full" />
+              </UFormField>
             </div>
           </div>
 
@@ -125,7 +128,7 @@
 import { capability } from '~/middleware/capability';
 
 definePageMeta({
-  middleware: ['auth', capability('admin.view')],
+  middleware: ['auth', capability('admin.pages.access')],
 });
 
 const { t } = useI18n();
@@ -138,6 +141,7 @@ interface TypeField {
   kind: string;
   required: boolean;
   identity: boolean;
+  target_type_id?: string;
 }
 
 interface SchemaType {
@@ -171,6 +175,11 @@ const fieldKindOptions = [
   { label: 'Entity Reference', value: 'entity_reference' },
   { label: 'Document', value: 'document' },
 ];
+
+const typeOptions = computed(() => types.value.map((schemaType) => ({
+  label: schemaType.display_name,
+  value: schemaType.type_id,
+})));
 
 const formData = ref<SchemaType>({
   type_id: '',
@@ -211,6 +220,7 @@ async function fetchTypes() {
                   kind: f.kind ?? 'text',
                   required: f.required ?? false,
                   identity: f.identity ?? false,
+                  target_type_id: f.target_type_id,
                 });
               }
             }
@@ -262,21 +272,51 @@ function removeField(idx: number) {
   formData.value.fields.splice(idx, 1);
 }
 
+const { applySchemaMutation } = useSchemaMutation();
+
+function entryFromForm(): Record<string, unknown> {
+  return {
+    type_id: formData.value.type_id,
+    stable_alias: formData.value.type_id,
+    entity_class: formData.value.entity_class,
+    label: formData.value.display_name,
+    description: formData.value.description,
+    fields: formData.value.fields.map((field) => ({
+      alias: field.alias,
+      label: field.label,
+      kind: field.kind,
+      required: field.required,
+      identity: field.identity,
+      ...(field.target_type_id ? { target_type_id: field.target_type_id } : {}),
+    })),
+  };
+}
+
 async function saveType() {
   saving.value = true;
+  const typeId = formData.value.type_id;
+  const wasEditing = editing.value;
   try {
-    const payload = {
-      type_id: formData.value.type_id,
-      display_name: formData.value.display_name,
-      description: formData.value.description,
-      entity_class: formData.value.entity_class,
-      fields: formData.value.fields,
-    };
-    if (editing.value) {
-      await api.schemas.updateType(formData.value.type_id, payload);
-    } else {
-      await api.schemas.createType(payload);
-    }
+    await applySchemaMutation({
+      name: wasEditing
+        ? `${t('common.edit')}: ${typeId}`
+        : `${t('admin.create_type')}: ${typeId}`,
+      reason: wasEditing ? `type ${typeId} updated` : `type ${typeId} added`,
+      changes: [{
+        kind: wasEditing ? 'update' : 'add',
+        resource_kind: 'type',
+        resource_id: typeId,
+        summary: formData.value.display_name || typeId,
+      }],
+      mutate(types) {
+        const entry = entryFromForm();
+        const idx = types.findIndex(
+          (item) => (item.type_id ?? item.stable_alias) === typeId,
+        );
+        if (idx >= 0) types[idx] = { ...types[idx], ...entry };
+        else types.push(entry);
+      },
+    });
     showDialog.value = false;
     toast.add({ title: t('admin.type_saved'), color: 'success' });
     await fetchTypes();
@@ -289,7 +329,23 @@ async function saveType() {
 
 async function deleteType(type: SchemaType) {
   try {
-    await api.schemas.deleteType(type.type_id);
+    await applySchemaMutation({
+      name: `${t('common.delete')}: ${type.type_id}`,
+      reason: `type ${type.type_id} retired`,
+      changes: [{
+        kind: 'retire',
+        resource_kind: 'type',
+        resource_id: type.type_id,
+        summary: type.display_name || type.type_id,
+        breaking: true,
+      }],
+      mutate(types) {
+        const idx = types.findIndex(
+          (item) => (item.type_id ?? item.stable_alias) === type.type_id,
+        );
+        if (idx >= 0) types.splice(idx, 1);
+      },
+    });
     toast.add({ title: t('admin.type_deleted'), color: 'success' });
     await fetchTypes();
   } catch (e: unknown) {

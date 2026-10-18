@@ -3,7 +3,15 @@
  */
 
 import type { ApiClient, ParsedResponse } from '../client/ApiClient.js';
-import type { SchemaRevision } from '../types/index.js';
+import type {
+  CreateSchemaDraftBody,
+  SchemaDraftTombstone,
+  SchemaImpactReport,
+  SchemaMigrationStatus,
+  SchemaRevisionRecord,
+  SchemaValidationReport,
+  UpdateSchemaDraftBody,
+} from '../types/index.js';
 
 /** Schema API endpoint methods. */
 export class SchemaEndpoints {
@@ -40,23 +48,28 @@ export class SchemaEndpoints {
   }
 
   /** GET /schemas/drafts — list schema drafts. */
-  async listDrafts(): Promise<ParsedResponse<unknown[]>> {
-    return this.client.get<unknown[]>('/schemas/drafts');
+  async listDrafts(): Promise<ParsedResponse<SchemaRevisionRecord[]>> {
+    return this.client.get<SchemaRevisionRecord[]>('/schemas/drafts');
   }
 
   /** GET /schemas/drafts/{draftId} — get a schema draft. */
-  async getDraft(draftId: string): Promise<ParsedResponse<unknown>> {
-    return this.client.get<unknown>(`/schemas/drafts/${draftId}`);
+  async getDraft(draftId: string): Promise<ParsedResponse<SchemaRevisionRecord>> {
+    return this.client.get<SchemaRevisionRecord>(`/schemas/drafts/${draftId}`);
   }
 
   /** DELETE /schemas/drafts/{draftId} — delete a schema draft. */
-  async deleteDraft(draftId: string): Promise<ParsedResponse<unknown>> {
-    return this.client.delete<unknown>(`/schemas/drafts/${draftId}`);
+  async deleteDraft(draftId: string, ifMatch: string): Promise<ParsedResponse<SchemaDraftTombstone>> {
+    return this.client.delete<SchemaDraftTombstone>(`/schemas/drafts/${draftId}`, { ifMatch });
   }
 
   /** GET /schemas/published — list published schemas. */
-  async listPublished(): Promise<ParsedResponse<unknown[]>> {
-    return this.client.get<unknown[]>('/schemas/published');
+  async listPublished(): Promise<ParsedResponse<SchemaRevisionRecord[]>> {
+    return this.client.get<SchemaRevisionRecord[]>('/schemas/published');
+  }
+
+  /** GET /schemas/revisions/{id} — get an immutable revision. */
+  async getRevision(revisionId: string): Promise<ParsedResponse<SchemaRevisionRecord>> {
+    return this.client.get<SchemaRevisionRecord>(`/schemas/revisions/${revisionId}`);
   }
 
   /** GET /schemas/predicates — list predicates. */
@@ -80,46 +93,41 @@ export class SchemaEndpoints {
   }
 
   /** POST /schemas/drafts — create a schema draft. */
-  async createDraft(body: unknown): Promise<ParsedResponse<unknown>> {
-    return this.client.post<unknown>('/schemas/drafts', body);
+  async createDraft(body: CreateSchemaDraftBody): Promise<ParsedResponse<SchemaRevisionRecord>> {
+    return this.client.post<SchemaRevisionRecord>('/schemas/drafts', body);
   }
 
   /** PUT /schemas/drafts/{id} — update a draft. */
-  async updateDraft(draftId: string, body: unknown, ifMatch?: string): Promise<ParsedResponse<unknown>> {
-    return this.client.put<unknown>(`/schemas/drafts/${draftId}`, body, { ifMatch });
+  async updateDraft(draftId: string, body: UpdateSchemaDraftBody, ifMatch: string): Promise<ParsedResponse<SchemaRevisionRecord>> {
+    return this.client.put<SchemaRevisionRecord>(`/schemas/drafts/${draftId}`, body, { ifMatch });
   }
 
   /** POST /schemas/drafts/{id}/validate — validate a draft. */
-  async validateDraft(draftId: string): Promise<ParsedResponse<unknown>> {
-    return this.client.post<unknown>(`/schemas/drafts/${draftId}/validate`);
+  async validateDraft(draftId: string): Promise<ParsedResponse<SchemaValidationReport>> {
+    return this.client.post<SchemaValidationReport>(`/schemas/drafts/${draftId}/validate`);
   }
 
   /** POST /schemas/drafts/{id}/impact — impact report. */
-  async impactDraft(draftId: string): Promise<ParsedResponse<unknown>> {
-    return this.client.post<unknown>(`/schemas/drafts/${draftId}/impact`);
+  async impactDraft(draftId: string): Promise<ParsedResponse<SchemaImpactReport>> {
+    return this.client.post<SchemaImpactReport>(`/schemas/drafts/${draftId}/impact`);
   }
 
   /** POST /schemas/drafts/{id}/publish — publish a draft. */
-  async publishDraft(draftId: string, ifMatch?: string, reason?: string): Promise<ParsedResponse<SchemaRevision>> {
-    return this.client.post<SchemaRevision>(
+  async publishDraft(draftId: string, ifMatch: string, reason: string): Promise<ParsedResponse<SchemaRevisionRecord>> {
+    return this.client.post<SchemaRevisionRecord>(
       `/schemas/drafts/${draftId}/publish`,
       { reason },
       { ifMatch },
     );
   }
 
-  /** POST /schemas/drafts/{id}/retire — retire a draft. */
-  async retireDraft(draftId: string, reason?: string): Promise<ParsedResponse<unknown>> {
-    return this.client.post<unknown>(`/schemas/drafts/${draftId}/retire`, { reason });
-  }
-
   /** POST /schemas/revisions/{id}/retire — retire a revision. */
-  async retireRevision(revisionId: string, reason: string): Promise<ParsedResponse<unknown>> {
-    return this.client.post<unknown>(`/schemas/revisions/${revisionId}/retire`, { reason });
+  async retireRevision(revisionId: string, reason: string, ifMatch: string): Promise<ParsedResponse<SchemaRevisionRecord>> {
+    return this.client.post<SchemaRevisionRecord>(`/schemas/revisions/${revisionId}/retire`, { reason }, { ifMatch });
   }
 
   /** GET /schemas/revisions/{id}/migration-status. */
-  async migrationStatus(revisionId: string): Promise<ParsedResponse<unknown>> {
-    return this.client.get<unknown>(`/schemas/revisions/${revisionId}/migration-status`);
+  async migrationStatus(revisionId: string): Promise<ParsedResponse<SchemaMigrationStatus>> {
+    return this.client.get<SchemaMigrationStatus>(`/schemas/revisions/${revisionId}/migration-status`);
   }
 }

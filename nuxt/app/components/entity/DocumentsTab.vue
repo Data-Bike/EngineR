@@ -89,7 +89,6 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue';
 import { useI18n } from 'vue-i18n';
-import type { ApiDocument } from '@enginer/api-client';
 
 const props = defineProps<{
   entityId: string;
@@ -177,11 +176,14 @@ async function uploadDoc() {
   if (!newFile.value) return;
   uploading.value = true;
   try {
-    const formData = new FormData();
-    formData.append('file', newFile.value);
-    formData.append('title', newDocTitle.value);
-    formData.append('kind', newDocKind.value);
-    await api.files.uploadEntityDocument(props.entityId, formData);
+    const bytes = Array.from(new Uint8Array(await newFile.value.arrayBuffer()));
+    await api.files.uploadEntityDocument(props.entityId, {
+      title: newDocTitle.value,
+      kind: newDocKind.value,
+      file_name: newFile.value.name,
+      content_type: newFile.value.type || 'application/octet-stream',
+      bytes,
+    });
     toast.add({ title: t('entity.documents.upload'), color: 'success' });
     showUpload.value = false;
     newDocTitle.value = '';
@@ -212,14 +214,20 @@ async function downloadDoc(doc: DocumentItem) {
   }
 }
 
-function previewDoc(_doc: DocumentItem) {
-  // Would open preview modal
+async function previewDoc(doc: DocumentItem) {
+  try {
+    const blob = await api.files.downloadEntityDocument(props.entityId, doc.id);
+    const url = window.URL.createObjectURL(blob);
+    window.open(url, '_blank', 'noopener,noreferrer');
+    window.setTimeout(() => window.URL.revokeObjectURL(url), 60_000);
+  } catch (e: unknown) {
+    toast.add({ title: t('common.error'), description: e instanceof Error ? e.message : String(e), color: 'error' });
+  }
 }
 
 async function removeDoc(doc: DocumentItem) {
   try {
-    const api = useApi();
-    await api.http.delete(`/entities/${props.entityId}/documents/${doc.id}`);
+    await api.files.deleteEntityDocument(props.entityId, doc.id);
     toast.add({ title: t('entity.documents.removed'), color: 'success' });
     await fetchDocuments();
   } catch (e: unknown) {

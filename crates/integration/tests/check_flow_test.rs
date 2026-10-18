@@ -7,16 +7,16 @@
 #![cfg(test)]
 
 use enginer_connectors::{
-    IdentityResolution, MappingResult, MappedPredicate, ObservationStatus,
-    ProvenanceMeta, RawPayloadPolicy, SourceObservation, UnmappedField,
+    IdentityResolution, MappedPredicate, MappingResult, ObservationStatus, ProvenanceMeta,
+    RawPayloadPolicy, SourceObservation, UnmappedField,
 };
 use enginer_integration::{
     AssessmentPort, AuditPort, CheckFlowInput, CheckFlowOrchestrator, CheckFlowState,
     ConnectorPort, CriterionPort, DecisionPort, FactorPort, TaskPort, WorkflowPort,
 };
 use enginer_risk_engine::{
-    Assessment, Criterion, CriterionSeverity, CriterionStatus, Decision, EvidenceSelector,
-    Expr, ExprKind, Factor, Value,
+    Assessment, Criterion, CriterionSeverity, CriterionStatus, Decision, EvidenceSelector, Expr,
+    ExprKind, Factor, Value,
 };
 use enginer_security::AuditEntry;
 use enginer_workflow::Task;
@@ -108,10 +108,7 @@ impl DecisionPort for MockDecisionPort {
         Ok(())
     }
 
-    fn load_latest_decision(
-        &self,
-        _target_entity_id: &str,
-    ) -> Result<Option<Decision>, String> {
+    fn load_latest_decision(&self, _target_entity_id: &str) -> Result<Option<Decision>, String> {
         Ok(self.stored.lock().unwrap().last().cloned())
     }
 }
@@ -390,8 +387,7 @@ fn check_flow_creates_workflow_on_escalation() {
     if let Some(decision) = &result.decision {
         if matches!(
             decision.kind,
-            enginer_risk_engine::DecisionKind::Escalate
-                | enginer_risk_engine::DecisionKind::Reject
+            enginer_risk_engine::DecisionKind::Escalate | enginer_risk_engine::DecisionKind::Reject
         ) {
             assert!(
                 result.workflow_instance_id.is_some(),
@@ -529,7 +525,12 @@ fn check_flow_records_audit_events() {
 
     // Should have 3 audit entries: initiated, decision, completed
     let actions = audit.actions();
-    assert_eq!(actions.len(), 3, "expected 3 audit events, got {:?}", actions);
+    assert_eq!(
+        actions.len(),
+        3,
+        "expected 3 audit events, got {:?}",
+        actions
+    );
     assert!(actions.contains(&"check.run".to_string()));
     assert!(actions.contains(&"check.decision".to_string()));
     assert!(actions.contains(&"check.completed".to_string()));
