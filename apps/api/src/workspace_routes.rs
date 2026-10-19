@@ -336,6 +336,31 @@ pub struct QueryResponseRecord {
     pub truncated: bool,
 }
 
+/// One preview field on a relation target card. `value` is the canonical
+/// wire value of the scalar statement (string, number, object, ...).
+/// Order follows the type's `preview` list in the published schema.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct RelationPreviewField {
+    pub field: String,
+    pub value: serde_json::Value,
+}
+
+/// An edge of a trans-object (junction entity) other than the edge that
+/// brought us to it. Rendered by the UI as the "through" part of a
+/// composite relation (e.g. ФЛ → Должность → {ЮЛ, рабочий телефон}).
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct RelationThroughEdge {
+    pub relation_id: String,
+    pub predicate: String,
+    /// Direction relative to the trans-object ("outgoing"/"incoming").
+    pub direction: String,
+    pub target_entity_id: String,
+    pub target_display_name: String,
+    pub target_type: String,
+    #[serde(default)]
+    pub preview: Vec<RelationPreviewField>,
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct RelationRecord {
     pub relation_id: String,
@@ -348,6 +373,23 @@ pub struct RelationRecord {
     pub valid_to: Option<String>,
     pub source: String,
     pub qualifiers: serde_json::Value,
+    /// Relation group id from the predicate's `group` attribute in the
+    /// published schema ("employment", "contacts", ...); "general" when
+    /// the predicate declares none.
+    #[serde(default)]
+    pub group: String,
+    /// Ordered preview fields of the target entity (the type's `preview`
+    /// view), permission-filtered and masked like regular fields.
+    #[serde(default)]
+    pub preview: Vec<RelationPreviewField>,
+    /// True when the target is a trans-object: its own type declares
+    /// `"trans": true` in the published schema and the object exists to
+    /// carry relation attributes plus onward edges.
+    #[serde(default)]
+    pub trans: bool,
+    /// The trans-object's other edges (one hop). Empty for regular targets.
+    #[serde(default)]
+    pub through: Vec<RelationThroughEdge>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

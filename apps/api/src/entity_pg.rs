@@ -8,7 +8,8 @@
 use crate::authn::AuthContext;
 use crate::workspace_routes::{
     meta, ApiEnvelope, CapabilityGuard, EntityRecord, GraphDataRecord, GraphEdgeRecord,
-    GraphNodeRecord, HistoryChangeRecord, HistoryEntryRecord, QueryResponseRecord, RelationRecord,
+    GraphNodeRecord, HistoryChangeRecord, HistoryEntryRecord, QueryResponseRecord,
+    RelationPreviewField, RelationRecord, RelationThroughEdge,
 };
 use crate::AppState;
 use enginer_db_runtime::{AsyncStdDbExecutor, DbError, Deadline};
@@ -1706,6 +1707,353 @@ pub async fn pg_merge_entity(
 
 // --- Relations (edge statements) ---
 
+/// Presentation metadata extracted from the published schema content:
+/// predicate `group`, type `preview` field lists and `trans` flags.
+/// All keys are optional — schemas without them fall back to a single
+/// "general" group and a heuristic preview.
+struct RelationViewMeta {
+    /// predicate alias -> relation group id
+    groups: HashMap<String, String>,
+    /// ordered group ids from `relation_groups` (for UI section order)
+    group_order: Vec<String>,
+    /// type alias -> ordered preview field aliases
+    previews: HashMap<String, Vec<String>>,
+    /// type aliases declared as trans-objects ("trans": true)
+    trans: HashMap<String, bool>,
+}
+
+impl RelationViewMeta {
+    fn load(content: &Value) -> Self {
+        let mut meta = RelationViewMeta {
+            groups: HashMap::new(),
+            group_order: Vec::new(),
+            previews: HashMap::new(),
+            trans: HashMap::new(),
+        };
+        for p in content
+            .get("predicates")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let alias = p
+                .get("stable_alias")
+                .or_else(|| p.get("alias"))
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            if let Some(g) = p.get("group").and_then(Value::as_str) {
+                if !alias.is_empty() {
+                    meta.groups.insert(alias.to_string(), g.to_string());
+                }
+            }
+        }
+        for t in content
+            .get("types")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let alias = t
+                .get("stable_alias")
+                .or_else(|| t.get("type_id"))
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            if alias.is_empty() {
+                continue;
+            }
+            if let Some(list) = t.get("preview").and_then(Value::as_array) {
+                meta.previews.insert(
+                    alias.to_string(),
+                    list.iter()
+                        .filter_map(Value::as_str)
+                        .map(str::to_string)
+                        .collect(),
+                );
+            }
+            if t.get("trans").and_then(Value::as_bool).unwrap_or(false) {
+                meta.trans.insert(alias.to_string(), true);
+            }
+        }
+        for g in content
+            .get("relation_groups")
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            if let Some(id) = g.get("id").and_then(Value::as_str) {
+                meta.group_order.push(id.to_string());
+            }
+        }
+        meta
+    }
+}
+
+/// Ordered preview fields for a target entity. Uses the type's declared
+/// `preview` list when present; otherwise the first non-display-name
+/// scalar fields (stable order from the type's field list).
+fn preview_fields_for(
+    meta: &RelationViewMeta,
+    type_alias: &str,
+    type_field_order: &HashMap<String, Vec<String>>,
+    fields: &Map<String, Value>,
+) -> Vec<RelationPreviewField> {
+    let declared = meta.previews.get(type_alias);
+    let aliases: Vec<String> = match declared {
+        Some(list) if !list.is_empty() => list.clone(),
+        _ => type_field_order
+            .get(type_alias)
+            .cloned()
+            .unwrap_or_else(|| fields.keys().cloned().collect()),
+    };
+    aliases
+        .into_iter()
+        .filter(|a| a != "display_name")
+        .filter_map(|a| {
+            fields.get(&a).map(|v| RelationPreviewField {
+                field: a,
+                value: v.clone(),
+            })
+        })
+        .take(6)
+        .collect()
+}
+
+/// Presentation metadata from the published schema (predicate groups,
+/// per-type preview lists, trans-object flags) plus the per-type field
+/// order used for heuristic previews.
+async fn load_relation_view_meta(
+    tx: &mut Transaction<'_, Postgres>,
+    tenant: uuid::Uuid,
+) -> Result<(RelationViewMeta, HashMap<String, Vec<String>>), DbError> {
+    let schema_content: Option<Value> = sqlx::query_scalar(
+        "SELECT content FROM meta.schema_revision
+         WHERE tenant_id=$1 AND state='published'",
+    )
+    .bind(tenant)
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(db_err)?;
+    let view_meta = schema_content.as_ref().map_or_else(
+        || RelationViewMeta::load(&json!({})),
+        RelationViewMeta::load,
+    );
+    let type_field_order: HashMap<String, Vec<String>> = schema_content
+        .as_ref()
+        .and_then(|c| c.get("types").and_then(Value::as_array))
+        .map(|types| {
+            types
+                .iter()
+                .filter_map(|t| {
+                    let alias = t
+                        .get("stable_alias")
+                        .or_else(|| t.get("type_id"))
+                        .and_then(Value::as_str)?;
+                    let order: Vec<String> = t
+                        .get("fields")
+                        .and_then(Value::as_array)
+                        .map(|fs| {
+                            fs.iter()
+                                .filter_map(|f| {
+                                    f.get("alias").and_then(Value::as_str).map(str::to_string)
+                                })
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    Some((alias.to_string(), order))
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok((view_meta, type_field_order))
+}
+
+/// Load the onward edges of trans-object targets (one hop) and attach them
+/// to their parent relation records. `trans_ids` maps junction entity ids to
+/// their index in `records`. The same visibility rules apply as for
+/// top-level relations; each record keeps at most 20 through edges.
+#[allow(clippy::too_many_arguments)]
+async fn load_trans_through(
+    tx: &mut Transaction<'_, Postgres>,
+    tenant: uuid::Uuid,
+    perm: &crate::dataperm::DataPerm,
+    root_eid: i64,
+    as_of: Option<chrono::DateTime<chrono::Utc>>,
+    trans_ids: &[(i64, usize)],
+    records: &mut [RelationRecord],
+    view_meta: &RelationViewMeta,
+    type_field_order: &HashMap<String, Vec<String>>,
+) -> Result<(), DbError> {
+    let as_of_clause = if as_of.is_some() {
+        " AND s.valid_from <= $4 AND (s.valid_to IS NULL OR s.valid_to > $4)"
+    } else {
+        ""
+    };
+    let junction_ids: Vec<i64> = trans_ids.iter().map(|(id, _)| *id).collect();
+    let edge_rows: Vec<(i64, String, i64, i64, i64, uuid::Uuid, String)> =
+        sqlx::query_as(&format!(
+            "SELECT s.statement_id, pd.stable_alias, s.subject,
+                    (s.object->>'entity_id')::bigint AS object_id,
+                    te.entity_id, te.public_id,
+                    COALESCE(td.stable_alias, te.type_id::text)
+             FROM core.statement s
+             JOIN meta.predicate_definition pd
+               ON pd.tenant_id=s.tenant_id AND pd.predicate_id=s.predicate
+             JOIN core.entity te
+               ON te.tenant_id=s.tenant_id
+              AND te.entity_id = CASE WHEN s.subject = ANY($2)
+                                      THEN (s.object->>'entity_id')::bigint
+                                      ELSE s.subject END
+             LEFT JOIN meta.type_definition td
+               ON td.tenant_id=te.tenant_id AND td.type_id=te.type_id
+             WHERE s.tenant_id=$1 AND s.object_kind='entity' AND s.status='active'
+               AND (s.subject = ANY($2) OR (s.object->>'entity_id')::bigint = ANY($2))
+               AND te.entity_id <> $3{as_of_clause}
+               LIMIT 200"
+        ))
+        .bind(tenant)
+        .bind(&junction_ids)
+        .bind(root_eid)
+        .bind(as_of.unwrap_or(chrono::DateTime::<chrono::Utc>::UNIX_EPOCH))
+        .fetch_all(&mut **tx)
+        .await
+        .map_err(db_err)?;
+
+    let peers: Vec<i64> = edge_rows.iter().map(|r| r.4).collect();
+    let mut peer_fields = load_fields(tx, tenant, &peers).await?;
+    let rec_idx: HashMap<i64, usize> = trans_ids.iter().copied().collect();
+    for (sid, alias, subj, object_id, peer, peer_public, peer_type) in edge_rows {
+        let junction = if junction_ids.contains(&subj) {
+            subj
+        } else {
+            object_id
+        };
+        let Some(&rec_i) = rec_idx.get(&junction) else {
+            continue;
+        };
+        if records[rec_i].through.len() >= 20 {
+            continue;
+        }
+        let outgoing = subj == junction;
+        if !perm.can_relation_dir(&alias, crate::dataperm::Op::Read, Some(outgoing))
+            || !perm.can_relation_instance(&sid.to_string(), crate::dataperm::Op::Read)
+            || !perm.can_entity(&peer_public.to_string(), crate::dataperm::Op::Read)
+            || !perm.can_type(&[&peer_type], crate::dataperm::Op::Read)
+        {
+            continue;
+        }
+        let mut f = peer_fields.remove(&peer).unwrap_or_default();
+        perm.filter_fields(&[&peer_type], &mut f);
+        perm.mask_fields(&[&peer_type], &mut f);
+        records[rec_i].through.push(RelationThroughEdge {
+            relation_id: sid.to_string(),
+            predicate: alias,
+            direction: if outgoing {
+                "outgoing".to_string()
+            } else {
+                "incoming".to_string()
+            },
+            target_entity_id: peer_public.to_string(),
+            target_display_name: display_name_of(&peer_type, &f, peer),
+            preview: preview_fields_for(view_meta, &peer_type, type_field_order, &f),
+            target_type: peer_type,
+        });
+    }
+    Ok(())
+}
+
+/// One edge row from the relations query: statement id, predicate alias,
+/// subject, peer entity id/public id/type alias, validity window.
+type RelationEdgeRow = (
+    i64,
+    String,
+    i64,
+    i64,
+    uuid::Uuid,
+    String,
+    chrono::DateTime<chrono::Utc>,
+    Option<chrono::DateTime<chrono::Utc>>,
+);
+
+/// Build relation records from edge rows: direction filter, the 1.3-1.6
+/// visibility rules, per-target preview fields and trans-object detection.
+/// Returns the records plus `(junction entity id, record index)` pairs for
+/// `load_trans_through`.
+#[allow(clippy::too_many_arguments)]
+fn build_relation_records(
+    rows: Vec<RelationEdgeRow>,
+    eid: i64,
+    direction: Option<&str>,
+    perm: &crate::dataperm::DataPerm,
+    fields_map: &mut HashMap<i64, Map<String, Value>>,
+    view_meta: &RelationViewMeta,
+    type_field_order: &HashMap<String, Vec<String>>,
+) -> (Vec<RelationRecord>, Vec<(i64, usize)>) {
+    let mut records = Vec::with_capacity(rows.len());
+    let mut trans_ids: Vec<(i64, usize)> = Vec::new();
+    for (sid, alias, subj, other, other_public, other_type, vf, vt) in rows {
+        let outgoing = subj == eid;
+        if let Some(dir) = direction {
+            if dir == "outgoing" && !outgoing {
+                continue;
+            }
+            if dir == "incoming" && outgoing {
+                continue;
+            }
+        }
+        // Relation type read + instance read + hidden-object rule (1.3-1.5).
+        if !perm.can_relation_dir(&alias, crate::dataperm::Op::Read, Some(outgoing))
+            || !perm.can_relation_instance(&sid.to_string(), crate::dataperm::Op::Read)
+            || !perm.can_entity(&other_public.to_string(), crate::dataperm::Op::Read)
+        {
+            continue;
+        }
+        let mut f = fields_map.remove(&other).unwrap_or_default();
+        perm.filter_fields(&[&other_type], &mut f);
+        perm.mask_fields(&[&other_type], &mut f);
+        let type_visible = perm.can_type(&[&other_type], crate::dataperm::Op::Read);
+        let (target_name, target_type) = if type_visible {
+            (display_name_of(&other_type, &f, other), other_type.clone())
+        } else {
+            // 1.6: relation visible but the target type is not — the peer
+            // renders as a restricted stub.
+            ("restricted".to_string(), "restricted".to_string())
+        };
+        let is_trans = type_visible && view_meta.trans.get(&target_type).copied().unwrap_or(false);
+        if is_trans {
+            trans_ids.push((other, records.len()));
+        }
+        records.push(RelationRecord {
+            relation_id: sid.to_string(),
+            predicate: alias.clone(),
+            direction: if outgoing {
+                "outgoing".to_string()
+            } else {
+                "incoming".to_string()
+            },
+            target_entity_id: other_public.to_string(),
+            target_display_name: target_name,
+            target_type: target_type.clone(),
+            valid_from: vf.to_rfc3339(),
+            valid_to: vt.map(|t| t.to_rfc3339()),
+            source: "manual".to_string(),
+            qualifiers: json!({}),
+            group: view_meta
+                .groups
+                .get(&alias)
+                .cloned()
+                .unwrap_or_else(|| "general".to_string()),
+            preview: if type_visible {
+                preview_fields_for(view_meta, &target_type, type_field_order, &f)
+            } else {
+                Vec::new()
+            },
+            trans: is_trans,
+            through: Vec::new(),
+        });
+    }
+    (records, trans_ids)
+}
+
 /// Accept a full RFC3339 timestamp or a bare `YYYY-MM-DD` date (what an
 /// `input[type=date]` produces). A bare date means "as of that day" —
 /// interpreted as the end of the day UTC so an `as_of` of *today* still
@@ -1755,16 +2103,7 @@ pub async fn pg_get_relations(
             } else {
                 ""
             };
-            let rows: Vec<(
-                i64,
-                String,
-                i64,
-                i64,
-                uuid::Uuid,
-                String,
-                chrono::DateTime<chrono::Utc>,
-                Option<chrono::DateTime<chrono::Utc>>,
-            )> = sqlx::query_as(&format!(
+            let rows: Vec<RelationEdgeRow> = sqlx::query_as(&format!(
                 "SELECT s.statement_id, pd.stable_alias, s.subject,
                         te.entity_id AS other_id,
                         te.public_id AS other_public,
@@ -1792,51 +2131,34 @@ pub async fn pg_get_relations(
 
             let others: Vec<i64> = rows.iter().map(|r| r.3).collect();
             let mut fields_map = load_fields(&mut tx, tenant, &others).await?;
-            let mut records = Vec::with_capacity(rows.len());
-            for (sid, alias, subj, other, other_public, other_type, vf, vt) in rows {
-                let outgoing = subj == eid;
-                if let Some(dir) = direction.as_deref() {
-                    if dir == "outgoing" && !outgoing {
-                        continue;
-                    }
-                    if dir == "incoming" && outgoing {
-                        continue;
-                    }
-                }
-                // Relation type read + instance read + hidden-object rule (1.3-1.5).
-                if !perm.can_relation_dir(&alias, crate::dataperm::Op::Read, Some(outgoing))
-                    || !perm.can_relation_instance(&sid.to_string(), crate::dataperm::Op::Read)
-                    || !perm.can_entity(&other_public.to_string(), crate::dataperm::Op::Read)
-                {
-                    continue;
-                }
-                let mut f = fields_map.remove(&other).unwrap_or_default();
-                perm.filter_fields(&[&other_type], &mut f);
-                perm.mask_fields(&[&other_type], &mut f);
-                let (target_name, target_type) =
-                    if perm.can_type(&[&other_type], crate::dataperm::Op::Read) {
-                        (display_name_of(&other_type, &f, other), other_type)
-                    } else {
-                        // 1.6: relation visible but the target type is not —
-                        // the peer renders as a restricted stub.
-                        ("restricted".to_string(), "restricted".to_string())
-                    };
-                records.push(RelationRecord {
-                    relation_id: sid.to_string(),
-                    predicate: alias.clone(),
-                    direction: if outgoing {
-                        "outgoing".to_string()
-                    } else {
-                        "incoming".to_string()
-                    },
-                    target_entity_id: other_public.to_string(),
-                    target_display_name: target_name,
-                    target_type,
-                    valid_from: vf.to_rfc3339(),
-                    valid_to: vt.map(|t| t.to_rfc3339()),
-                    source: "manual".to_string(),
-                    qualifiers: json!({}),
-                });
+
+            let (view_meta, type_field_order) = load_relation_view_meta(&mut tx, tenant).await?;
+
+            let (mut records, trans_ids) = build_relation_records(
+                rows,
+                eid,
+                direction.as_deref(),
+                &perm,
+                &mut fields_map,
+                &view_meta,
+                &type_field_order,
+            );
+
+            // One extra hop for trans-objects: their other edges carry the
+            // real destination (ЮЛ) and relation attributes (рабочий телефон).
+            if !trans_ids.is_empty() {
+                load_trans_through(
+                    &mut tx,
+                    tenant,
+                    &perm,
+                    eid,
+                    as_of,
+                    &trans_ids,
+                    &mut records,
+                    &view_meta,
+                    &type_field_order,
+                )
+                .await?;
             }
             ok_json(serde_json::to_value(records).unwrap_or(Value::Null))
         })
@@ -1847,7 +2169,6 @@ pub async fn pg_get_relations(
         meta: meta(),
     }))
 }
-
 #[post("/entities/<public_id>/relations", data = "<body>")]
 pub async fn pg_create_relation(
     cap: CapabilityGuard,

@@ -24,57 +24,131 @@
       </div>
     </div>
 
-    <!-- Sections by relation predicate -->
-    <div v-for="section in relationSections" :key="section.key" class="space-y-3">
-      <div class="flex items-center justify-between">
-        <div class="flex items-center gap-2">
-          <h3 class="font-medium">{{ section.label }}</h3>
-          <UBadge variant="subtle" size="sm">
-            {{ section.direction === 'outgoing' ? t('entity.graph.direction_outgoing') : t('entity.graph.direction_incoming') }}
-          </UBadge>
-          <span class="text-sm text-[var(--ui-text-muted)]">({{ section.items.length }})</span>
-        </div>
-      </div>
+    <!-- Sections by relation group -->
+    <div v-for="group in relationGroups" :key="group.id" class="space-y-3">
+      <button
+        type="button"
+        class="flex w-full items-center gap-2 text-left"
+        @click="toggleGroup(group.id)"
+      >
+        <UIcon
+          :name="collapsedGroups.has(group.id) ? 'i-lucide-chevron-right' : 'i-lucide-chevron-down'"
+          class="size-4 text-[var(--ui-text-muted)]"
+        />
+        <h3 class="font-medium">{{ group.label }}</h3>
+        <UBadge variant="subtle" size="sm">{{ group.count }}</UBadge>
+      </button>
 
-      <div v-if="section.items.length === 0" class="text-sm text-[var(--ui-text-muted)] py-2">
-        {{ t('entity.empty') }}
-      </div>
-      <div v-else class="space-y-2">
-        <div
-          v-for="item in section.items"
-          :key="item.id"
-          class="rounded-md border border-[var(--ui-border)] p-3 hover:border-[var(--ui-border-muted)]"
-        >
-          <div class="flex items-start justify-between">
-            <div class="flex-1">
-              <NuxtLink :to="`/entities/${item.targetPublicId}`" class="font-medium hover:underline">
-                {{ item.title }}
-              </NuxtLink>
-              <p v-if="item.targetType" class="text-xs text-[var(--ui-text-muted)] mt-0.5">
-                {{ t(`types.${item.targetType}`, item.targetType) }}
-              </p>
-              <p v-if="item.validFrom" class="text-xs text-[var(--ui-text-muted)] mt-1">
-                {{ t('entity.relations.valid_from') }}: {{ item.validFrom }}
-                <span v-if="item.validTo"> · {{ t('entity.relations.valid_to') }}: {{ item.validTo }}</span>
-              </p>
-              <p v-if="item.source" class="text-xs text-[var(--ui-text-muted)] mt-1">
-                {{ t('entity.relations.source') }}: {{ item.source }}
-              </p>
+      <div v-show="!collapsedGroups.has(group.id)" class="space-y-4 ps-6">
+        <div v-for="section in group.sections" :key="section.key" class="space-y-2">
+          <div class="flex items-center gap-2">
+            <h4 class="text-sm font-medium text-[var(--ui-text-muted)]">{{ section.label }}</h4>
+            <UBadge variant="subtle" size="xs">
+              {{ section.direction === 'outgoing' ? t('entity.graph.direction_outgoing') : t('entity.graph.direction_incoming') }}
+            </UBadge>
+            <span class="text-xs text-[var(--ui-text-muted)]">({{ section.items.length }})</span>
+          </div>
+
+          <div class="space-y-2">
+            <div
+              v-for="item in section.items"
+              :key="item.id"
+              class="rounded-md border border-[var(--ui-border)] p-3 hover:border-[var(--ui-border-muted)]"
+              :class="item.trans ? 'border-s-2 border-s-[var(--ui-primary)]' : ''"
+            >
+              <div class="flex items-start justify-between gap-2">
+                <div class="flex-1 min-w-0">
+                  <div class="flex flex-wrap items-center gap-2">
+                    <NuxtLink :to="`/entities/${item.targetPublicId}`" class="font-medium hover:underline">
+                      {{ item.title }}
+                    </NuxtLink>
+                    <UBadge v-if="item.targetType" variant="subtle" size="xs">
+                      {{ t(`types.${item.targetType}`, item.targetType) }}
+                    </UBadge>
+                    <UBadge v-if="item.trans" color="primary" variant="subtle" size="xs" icon="i-lucide-waypoints">
+                      {{ t('entity.relations.trans_object') }}
+                    </UBadge>
+                  </div>
+
+                  <!-- Preview fields (the type's preview view) -->
+                  <div v-if="item.preview.length" class="mt-1.5 flex flex-wrap gap-x-4 gap-y-1">
+                    <span
+                      v-for="field in item.preview"
+                      :key="field.field"
+                      class="text-xs text-[var(--ui-text-muted)]"
+                    >
+                      <span class="font-medium">{{ fieldLabel(field.field) }}:</span>
+                      {{ formatValue(field.value) }}
+                    </span>
+                  </div>
+
+                  <p v-if="item.validFrom" class="text-xs text-[var(--ui-text-muted)] mt-1.5">
+                    {{ t('entity.relations.valid_from') }}: {{ item.validFrom }}
+                    <span v-if="item.validTo"> · {{ t('entity.relations.valid_to') }}: {{ item.validTo }}</span>
+                  </p>
+                  <p v-if="item.source" class="text-xs text-[var(--ui-text-muted)] mt-1">
+                    {{ t('entity.relations.source') }}: {{ item.source }}
+                  </p>
+
+                  <!-- Trans-object: onward edges (the real destinations) -->
+                  <div v-if="item.trans" class="mt-2">
+                    <button
+                      v-if="item.through.length"
+                      type="button"
+                      class="flex items-center gap-1 text-xs text-[var(--ui-primary)]"
+                      @click="toggleThrough(item.id)"
+                    >
+                      <UIcon
+                        :name="collapsedThrough.has(item.id) ? 'i-lucide-chevron-right' : 'i-lucide-chevron-down'"
+                        class="size-3.5"
+                      />
+                      {{ t('entity.relations.via') }} ({{ item.through.length }})
+                    </button>
+                    <div
+                      v-show="!collapsedThrough.has(item.id)"
+                      class="mt-1.5 space-y-1.5 border-s border-[var(--ui-border)] ps-3"
+                    >
+                      <div
+                        v-for="edge in item.through"
+                        :key="edge.relationId"
+                        class="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm"
+                      >
+                        <UIcon name="i-lucide-corner-down-right" class="size-3.5 text-[var(--ui-text-muted)]" />
+                        <span class="text-xs text-[var(--ui-text-muted)]">{{ predicateLabel(edge.predicate) }}:</span>
+                        <NuxtLink :to="`/entities/${edge.targetPublicId}`" class="font-medium hover:underline">
+                          {{ edge.title }}
+                        </NuxtLink>
+                        <UBadge variant="subtle" size="xs">{{ t(`types.${edge.targetType}`, edge.targetType) }}</UBadge>
+                        <span
+                          v-for="field in edge.preview"
+                          :key="field.field"
+                          class="text-xs text-[var(--ui-text-muted)]"
+                        >
+                          {{ fieldLabel(field.field) }}: {{ formatValue(field.value) }}
+                        </span>
+                      </div>
+                      <p v-if="!item.through.length" class="text-xs text-[var(--ui-text-muted)]">
+                        {{ t('entity.relations.no_through') }}
+                      </p>
+                    </div>
+                  </div>
+                </div>
+                <UButton
+                  size="xs"
+                  variant="ghost"
+                  color="error"
+                  icon="i-lucide-trash"
+                  @click="removeRelation(item)"
+                />
+              </div>
             </div>
-            <UButton
-              size="xs"
-              variant="ghost"
-              color="error"
-              icon="i-lucide-trash"
-              @click="removeRelation(item)"
-            />
           </div>
         </div>
       </div>
     </div>
 
     <!-- Empty state -->
-    <div v-if="relationSections.length === 0" class="text-center py-8 text-[var(--ui-text-muted)]">
+    <div v-if="relationGroups.length === 0" class="text-center py-8 text-[var(--ui-text-muted)]">
       {{ t('entity.empty') }}
     </div>
 
@@ -166,15 +240,31 @@
 <script setup lang="ts">
 import { ref, computed } from 'vue';
 import { useI18n } from 'vue-i18n';
+import type { EntityRelation, RelationThroughEdge } from '@enginer/api-client';
 
 const props = defineProps<{
   entityId: string;
   typeId: string;
 }>();
 
-const { t } = useI18n();
+const { t, te } = useI18n();
 const toast = useToast();
 const api = useApi();
+
+interface PreviewItem {
+  field: string;
+  value: unknown;
+}
+
+interface ThroughItem {
+  relationId: string;
+  predicate: string;
+  direction: 'outgoing' | 'incoming';
+  targetPublicId: string;
+  title: string;
+  targetType: string;
+  preview: PreviewItem[];
+}
 
 interface RelationItem {
   id: string;
@@ -186,9 +276,13 @@ interface RelationItem {
   validFrom?: string;
   validTo?: string;
   source?: string;
+  group: string;
+  preview: PreviewItem[];
+  trans: boolean;
+  through: ThroughItem[];
 }
 
-interface RelationSection {
+interface PredicateSection {
   key: string;
   predicateId: string;
   label: string;
@@ -196,7 +290,16 @@ interface RelationSection {
   items: RelationItem[];
 }
 
-const relationSections = ref<RelationSection[]>([]);
+interface RelationGroup {
+  id: string;
+  label: string;
+  count: number;
+  sections: PredicateSection[];
+}
+
+const relationGroups = ref<RelationGroup[]>([]);
+const collapsedGroups = ref<Set<string>>(new Set());
+const collapsedThrough = ref<Set<string>>(new Set());
 const showHistorical = ref(false);
 const schemaPredicates = ref<Array<{
   alias: string;
@@ -206,6 +309,51 @@ const schemaPredicates = ref<Array<{
   is_edge: boolean;
 }>>([]);
 const schemaTypes = ref<Array<{ id: string; display_name: string }>>([]);
+
+// Display order for well-known relation groups; unknown groups append
+// alphabetically at the end.
+const GROUP_ORDER = ['employment', 'contacts', 'ownership', 'documents', 'workflow', 'general'];
+
+function groupLabel(id: string): string {
+  const key = `entity.relations.group.${id}`;
+  return te(key) ? t(key) : id;
+}
+
+function predicateLabel(alias: string): string {
+  const key = `entity.relations.predicate.${alias}`;
+  if (te(key)) return t(key);
+  return schemaPredicates.value.find((p) => p.alias === alias)?.label || alias;
+}
+
+function fieldLabel(alias: string): string {
+  const key = `entity.relations.preview.${alias}`;
+  if (te(key)) return t(key);
+  return schemaPredicates.value.find((p) => p.alias === alias)?.label || alias;
+}
+
+function formatValue(value: unknown): string {
+  if (value === null || value === undefined) return '';
+  if (typeof value === 'string') return value;
+  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
+  if (typeof value === 'object') {
+    const obj = value as Record<string, unknown>;
+    if (obj.amount !== undefined && obj.currency) return `${obj.amount} ${obj.currency}`;
+    if (obj.amount !== undefined && obj.unit) return `${obj.amount} ${obj.unit}`;
+  }
+  return JSON.stringify(value);
+}
+
+function toggleGroup(id: string) {
+  const next = new Set(collapsedGroups.value);
+  if (next.has(id)) next.delete(id); else next.add(id);
+  collapsedGroups.value = next;
+}
+
+function toggleThrough(id: string) {
+  const next = new Set(collapsedThrough.value);
+  if (next.has(id)) next.delete(id); else next.add(id);
+  collapsedThrough.value = next;
+}
 
 // Available predicates for this entity type
 const predicateOptions = computed(() => schemaPredicates.value
@@ -334,19 +482,16 @@ async function removeRelation(item: RelationItem) {
   }
 }
 
-interface ApiRelation {
-  relation_id?: string;
-  predicate?: string;
-  predicate_id?: string;
-  direction: string;
-  target_entity_id?: string;
-  target_public_id?: string;
-  target_display_name?: string;
-  target_title?: string;
-  target_type?: string;
-  valid_from?: string;
-  valid_to?: string | null;
-  source?: string;
+function mapThrough(edge: RelationThroughEdge): ThroughItem {
+  return {
+    relationId: edge.relation_id,
+    predicate: edge.predicate,
+    direction: edge.direction === 'outgoing' ? 'outgoing' : 'incoming',
+    targetPublicId: edge.target_entity_id,
+    title: edge.target_display_name,
+    targetType: edge.target_type,
+    preview: (edge.preview ?? []).map((f) => ({ field: f.field, value: f.value })),
+  };
 }
 
 async function fetchRelations() {
@@ -354,42 +499,61 @@ async function fetchRelations() {
     const res = await api.entities.getRelations(props.entityId, {
       as_of: showHistorical.value ? undefined : new Date().toISOString().slice(0, 10),
     });
-    const relations = (res.data ?? []) as ApiRelation[];
-    const sectionMap = new Map<string, RelationSection>();
+    const relations = (res.data ?? []) as EntityRelation[];
+    const groupMap = new Map<string, Map<string, PredicateSection>>();
     for (const rel of relations) {
-      const predicateId = rel.predicate_id ?? rel.predicate ?? 'unknown';
-      const direction = (rel.direction === 'outbound' || rel.direction === 'outgoing') ? 'outgoing' : 'incoming';
+      const predicateId = rel.predicate ?? 'unknown';
+      const direction = rel.direction === 'outgoing' ? 'outgoing' : 'incoming';
+      const groupId = rel.group || 'general';
+      if (!groupMap.has(groupId)) groupMap.set(groupId, new Map());
+      const sections = groupMap.get(groupId)!;
       const key = `${predicateId}:${direction}`;
-      if (!sectionMap.has(key)) {
-        sectionMap.set(key, {
+      if (!sections.has(key)) {
+        sections.set(key, {
           key,
           predicateId,
-          label: t(`entity.relations.predicate.${predicateId}`, predicateId),
+          label: predicateLabel(predicateId),
           direction,
           items: [],
         });
       }
-      const section = sectionMap.get(key)!;
       const relId = rel.relation_id ?? '';
       if (!relId) {
         console.warn('Relation missing relation_id', rel);
       }
-      section.items.push({
+      sections.get(key)!.items.push({
         id: relId,
         predicateId,
         direction,
-        targetPublicId: rel.target_public_id ?? rel.target_entity_id ?? '',
-        title: rel.target_title ?? rel.target_display_name ?? '',
+        targetPublicId: rel.target_entity_id ?? '',
+        title: rel.target_display_name ?? '',
         targetType: rel.target_type ?? '',
         validFrom: rel.valid_from,
         validTo: rel.valid_to ?? undefined,
         source: rel.source,
+        group: groupId,
+        preview: (rel.preview ?? []).map((f) => ({ field: f.field, value: f.value })),
+        trans: rel.trans ?? false,
+        through: (rel.through ?? []).map(mapThrough),
       });
     }
-    relationSections.value = Array.from(sectionMap.values());
+    relationGroups.value = Array.from(groupMap.entries())
+      .map(([id, sections]) => ({
+        id,
+        label: groupLabel(id),
+        count: Array.from(sections.values()).reduce((n, s) => n + s.items.length, 0),
+        sections: Array.from(sections.values()),
+      }))
+      .sort((a, b) => {
+        const ia = GROUP_ORDER.indexOf(a.id);
+        const ib = GROUP_ORDER.indexOf(b.id);
+        if (ia !== -1 || ib !== -1) return (ia === -1 ? 999 : ia) - (ib === -1 ? 999 : ib);
+        return a.label.localeCompare(b.label);
+      });
+    collapsedGroups.value = new Set();
   } catch (e: unknown) {
     toast.add({ title: t('common.error'), description: e instanceof Error ? e.message : String(e), color: 'error' });
-    relationSections.value = [];
+    relationGroups.value = [];
   }
 }
 

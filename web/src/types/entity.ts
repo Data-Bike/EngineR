@@ -192,6 +192,46 @@ export interface EntityGraphResponse {
   edges: EntityGraphEdge[];
 }
 
+/** One preview field on a relation target card (`RelationPreviewField`). */
+export interface RelationPreviewField {
+  field: string;
+  value: unknown;
+}
+
+/** An onward edge of a trans-object (`RelationThroughEdge`). */
+export interface RelationThroughEdge {
+  relation_id: string;
+  predicate: string;
+  /** Direction relative to the trans-object. */
+  direction: 'outgoing' | 'incoming' | string;
+  target_entity_id: string;
+  target_display_name: string;
+  target_type: string;
+  preview?: RelationPreviewField[];
+}
+
+/** A single relation row (`RelationRecord`). */
+export interface EntityRelation {
+  relation_id: string;
+  predicate: string;
+  direction: 'outgoing' | 'incoming' | string;
+  target_entity_id: string;
+  target_display_name: string;
+  target_type: string;
+  valid_from: string;
+  valid_to: string | null;
+  source: string;
+  qualifiers: Record<string, unknown>;
+  /** Relation group id from the predicate's `group` schema attribute. */
+  group?: string;
+  /** Ordered preview fields of the target (the type's `preview` view). */
+  preview?: RelationPreviewField[];
+  /** True when the target is a schema-declared trans-object. */
+  trans?: boolean;
+  /** The trans-object's other edges (one hop). */
+  through?: RelationThroughEdge[];
+}
+
 /** Retire entity request body. */
 export interface RetireEntityBody {
   reason: string;

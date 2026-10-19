@@ -9,6 +9,7 @@ import type {
   CreateEntityResponse,
   Entity,
   EntityGraphResponse,
+  EntityRelation,
   MergeEntityBody,
   MergeEntityResponse,
   QueryBody,
@@ -51,8 +52,8 @@ export class EntityEndpoints {
   async getRelations(
     publicId: string,
     options?: { direction?: 'outgoing' | 'incoming' | 'both'; as_of?: string },
-  ): Promise<ParsedResponse<unknown[]>> {
-    return this.client.get<unknown[]>(`/entities/${publicId}/relations`, { query: options });
+  ): Promise<ParsedResponse<EntityRelation[]>> {
+    return this.client.get<EntityRelation[]>(`/entities/${publicId}/relations`, { query: options });
   }
 
   /** POST /entities/{publicId}/relations — add a relation. */

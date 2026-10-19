@@ -410,6 +410,115 @@ fn relation_create_and_graph_traversal() {
     );
 }
 
+fn create_typed(h: &Harness, type_id: &str, statements: Vec<Value>) -> (Status, Value) {
+    req(
+        &h,
+        Method::Post,
+        "/api/v1/entities",
+        Some(json!({
+            "type_id": type_id,
+            "identity_mode": "return_existing",
+            "statements": statements,
+        })),
+    )
+}
+
+#[test]
+fn relations_include_group_preview_and_trans_through() {
+    let Some(h) = harness() else { return };
+    // ФЛ → holds_position → Должность(trans) → {ЮЛ, рабочий телефон}.
+    let (_, b) = create_entity(&h, &uniq("83"), "ООО «Цель»", vec![]);
+    let org = b["data"]["public_id"].as_str().unwrap().to_string();
+    let (st, b) = create_typed(
+        &h,
+        "position",
+        vec![json!({"predicate_id": "title", "value": {"kind": "text", "value": "Директор"}})],
+    );
+    assert_eq!(st, Status::Ok, "{b}");
+    let pos = b["data"]["public_id"].as_str().unwrap().to_string();
+    let (st, b) = create_typed(
+        &h,
+        "contact_point",
+        vec![
+            json!({"predicate_id": "cp_kind", "value": {"kind": "text", "value": "phone"}}),
+            json!({"predicate_id": "cp_number", "value": {"kind": "text", "value": "123-45-67"}}),
+        ],
+    );
+    assert_eq!(st, Status::Ok, "{b}");
+    let cp = b["data"]["public_id"].as_str().unwrap().to_string();
+    let (st, b) = create_typed(
+        &h,
+        "person",
+        vec![
+            json!({"predicate_id": "full_name", "value": {"kind": "text", "value": "Сидоров Сидор"}}),
+            json!({"predicate_id": "inn", "value": {"kind": "text", "value": uniq("84")}}),
+        ],
+    );
+    assert_eq!(st, Status::Ok, "{b}");
+    let person = b["data"]["public_id"].as_str().unwrap().to_string();
+
+    for (src, pred, tgt) in [
+        (&person, "holds_position", &pos),
+        (&pos, "position_at", &org),
+        (&pos, "position_work_phone", &cp),
+    ] {
+        let (st, b) = req(
+            &h,
+            Method::Post,
+            &format!("/api/v1/entities/{src}/relations"),
+            Some(json!({"predicate": pred, "target_entity_id": tgt})),
+        );
+        assert_eq!(st, Status::Ok, "{pred}: {b}");
+    }
+
+    let (st, body) = req(
+        &h,
+        Method::Get,
+        &format!("/api/v1/entities/{person}/relations"),
+        None,
+    );
+    assert_eq!(st, Status::Ok);
+    let rels = body["data"].as_array().unwrap();
+    let holds = rels
+        .iter()
+        .find(|r| r["predicate"] == "holds_position")
+        .unwrap_or_else(|| panic!("holds_position missing: {body}"));
+    assert_eq!(holds["group"], "employment", "{holds}");
+    assert_eq!(holds["trans"], true, "{holds}");
+    assert!(
+        holds["preview"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|f| f["field"] == "title" && f["value"] == "Директор"),
+        "{holds}"
+    );
+    let through = holds["through"].as_array().unwrap();
+    let through_targets: Vec<&str> = through
+        .iter()
+        .filter_map(|e| e["target_entity_id"].as_str())
+        .collect();
+    assert!(through_targets.contains(&org.as_str()), "{through:?}");
+    assert!(through_targets.contains(&cp.as_str()), "{through:?}");
+    // A plain relation stays un-grouped-by-trans but still carries its group.
+    let (st, body) = req(
+        &h,
+        Method::Get,
+        &format!("/api/v1/entities/{org}/relations"),
+        None,
+    );
+    assert_eq!(st, Status::Ok);
+    let incoming = body["data"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["predicate"] == "position_at")
+        .unwrap_or_else(|| panic!("position_at missing: {body}"));
+    assert_eq!(incoming["direction"], "incoming");
+    assert_eq!(incoming["group"], "employment");
+    assert_eq!(incoming["trans"], true); // the position is still a trans-object
+}
+
 #[test]
 fn schema_draft_type_publish_and_entity_create() {
     let Some(h) = harness() else { return };

@@ -390,6 +390,7 @@ async fn seed_inner(
     }
 
     seed_schema(conn, tenant).await?;
+    seed_relation_metadata(conn, tenant).await?;
     seed_entities(conn, tenant).await?;
     seed_operations(conn, tenant).await?;
 
@@ -735,8 +736,8 @@ async fn seed_schema(conn: &mut Conn, tenant: uuid::Uuid) -> Result<(), DbError>
         "version": 1,
         "etag": "\"schema:1:1\"",
         "changes": [],
-        "type_count": 5,
-        "predicate_count": 20,
+        "type_count": 7,
+        "predicate_count": 26,
         "created_at": "2025-01-01T00:00:00Z",
         "updated_at": "2025-01-01T00:00:00Z",
         "published_at": "2025-01-01T00:00:00Z",
@@ -746,16 +747,28 @@ async fn seed_schema(conn: &mut Conn, tenant: uuid::Uuid) -> Result<(), DbError>
         "impact": null,
         "publish_reason": "Initial seed",
         "retire_reason": null,
+        "relation_groups": [
+            {"id": "employment", "label": "Работа и занятость", "order": 10},
+            {"id": "contacts", "label": "Контакты", "order": 20},
+            {"id": "ownership", "label": "Владение и управление", "order": 30},
+            {"id": "documents", "label": "Документы", "order": 40},
+            {"id": "workflow", "label": "Процессы и проверки", "order": 50},
+            {"id": "general", "label": "Прочие связи", "order": 90}
+        ],
         "types": [
             {"type_id": "person", "stable_alias": "person", "entity_class": "data",
-             "label": "Физическое лицо", "fields": [
+             "label": "Физическое лицо",
+             "preview": ["full_name", "birth_date", "inn"],
+             "fields": [
                 {"alias": "full_name", "kind": "text", "required": true, "identity": true, "label": "ФИО"},
                 {"alias": "birth_date", "kind": "date", "label": "Дата рождения"},
                 {"alias": "inn", "kind": "text", "identity": true, "label": "ИНН"},
                 {"alias": "email", "kind": "email", "label": "E-mail"},
                 {"alias": "phone", "kind": "phone", "label": "Телефон"}]},
             {"type_id": "legal_entity", "stable_alias": "legal_entity", "entity_class": "data",
-             "label": "Юридическое лицо", "fields": [
+             "label": "Юридическое лицо",
+             "preview": ["name", "inn", "ogrn", "address"],
+             "fields": [
                 {"alias": "name", "kind": "text", "required": true, "label": "Наименование"},
                 {"alias": "short_name", "kind": "text", "label": "Краткое наименование"},
                 {"alias": "inn", "kind": "text", "required": true, "identity": true, "label": "ИНН"},
@@ -763,15 +776,33 @@ async fn seed_schema(conn: &mut Conn, tenant: uuid::Uuid) -> Result<(), DbError>
                 {"alias": "kpp", "kind": "text", "label": "КПП"},
                 {"alias": "okved", "kind": "text", "label": "ОКВЭД"},
                 {"alias": "address", "kind": "text", "label": "Адрес"}]},
+            {"type_id": "position", "stable_alias": "position", "entity_class": "data",
+             "label": "Должность", "trans": true,
+             "preview": ["title"],
+             "fields": [
+                {"alias": "title", "kind": "text", "required": true, "label": "Название должности"}]},
+            {"type_id": "contact_point", "stable_alias": "contact_point", "entity_class": "data",
+             "label": "Контактная точка",
+             "preview": ["cp_kind", "cp_code", "cp_number"],
+             "fields": [
+                {"alias": "cp_kind", "kind": "text", "required": true, "label": "Вид контакта"},
+                {"alias": "cp_code", "kind": "text", "label": "Код"},
+                {"alias": "cp_number", "kind": "text", "required": true, "label": "Номер"}]},
             {"type_id": "request", "stable_alias": "request", "entity_class": "data",
-             "label": "Заявка", "fields": [
+             "label": "Заявка",
+             "preview": ["title", "status_note"],
+             "fields": [
                 {"alias": "title", "kind": "text", "required": true, "label": "Заголовок"},
                 {"alias": "status_note", "kind": "text", "label": "Комментарий"}]},
             {"type_id": "check", "stable_alias": "check", "entity_class": "data",
-             "label": "Проверка", "fields": [
+             "label": "Проверка",
+             "preview": ["title"],
+             "fields": [
                 {"alias": "title", "kind": "text", "required": true, "label": "Заголовок"}]},
             {"type_id": "document", "stable_alias": "document", "entity_class": "data",
-             "label": "Документ", "fields": [
+             "label": "Документ",
+             "preview": ["title", "amount"],
+             "fields": [
                 {"alias": "title", "kind": "text", "required": true, "label": "Заголовок"},
                 {"alias": "amount", "kind": "decimal", "label": "Сумма"}]}
         ],
@@ -791,16 +822,32 @@ async fn seed_schema(conn: &mut Conn, tenant: uuid::Uuid) -> Result<(), DbError>
             {"stable_alias": "status_note", "scalar_kind": "text", "label": "Комментарий"},
             {"stable_alias": "address", "scalar_kind": "text", "label": "Адрес"},
             {"stable_alias": "amount", "scalar_kind": "decimal", "label": "Сумма"},
+            {"stable_alias": "cp_kind", "scalar_kind": "text", "label": "Вид контакта"},
+            {"stable_alias": "cp_code", "scalar_kind": "text", "label": "Код"},
+            {"stable_alias": "cp_number", "scalar_kind": "text", "label": "Номер"},
             {"stable_alias": "works_for", "is_edge": true, "label": "Работает в",
-             "domain": "person", "range": "legal_entity", "inverse_label": "Сотрудник"},
+             "domain": "person", "range": "legal_entity", "inverse_label": "Сотрудник",
+             "group": "employment"},
             {"stable_alias": "owns", "is_edge": true, "label": "Владеет",
-             "domain": "person", "range": "legal_entity", "inverse_label": "Владелец"},
+             "domain": "person", "range": "legal_entity", "inverse_label": "Владелец",
+             "group": "ownership"},
+            {"stable_alias": "holds_position", "is_edge": true, "label": "Занимает должность",
+             "domain": "person", "range": "position", "inverse_label": "Сотрудник",
+             "group": "employment"},
+            {"stable_alias": "position_at", "is_edge": true, "label": "В организации",
+             "domain": "position", "range": "legal_entity", "inverse_label": "Должности",
+             "group": "employment"},
+            {"stable_alias": "position_work_phone", "is_edge": true, "label": "Рабочий телефон",
+             "domain": "position", "range": "contact_point", "inverse_label": "Должность",
+             "group": "contacts"},
             {"stable_alias": "for_entity", "is_edge": true, "label": "По объекту",
-             "range": "*", "inverse_label": "Имеет объект"},
+             "range": "*", "inverse_label": "Имеет объект",
+             "group": "workflow"},
             {"stable_alias": "performs_check", "is_edge": true, "label": "Выполняет проверку",
-             "domain": "person", "range": "check"},
+             "domain": "person", "range": "check", "group": "workflow"},
             {"stable_alias": "related_to", "is_edge": true, "label": "Связан с",
-             "range": "*", "inverse_label": "Связан с"}
+             "range": "*", "inverse_label": "Связан с",
+             "group": "general"}
         ]
     }"##).expect("seed revision content is valid json");
     sqlx::query(
@@ -815,12 +862,14 @@ async fn seed_schema(conn: &mut Conn, tenant: uuid::Uuid) -> Result<(), DbError>
     .await
     .map_err(db)?;
 
-    let types: [(u64, &str, i16, &str); 5] = [
+    let types: [(u64, &str, i16, &str); 7] = [
         (1, "person", 0, "Физическое лицо"),
         (2, "legal_entity", 0, "Юридическое лицо"),
         (3, "request", 0, "Заявка"),
         (4, "check", 0, "Проверка"),
         (5, "document", 0, "Документ"),
+        (6, "position", 0, "Должность"),
+        (7, "contact_point", 0, "Контактная точка"),
     ];
     for (n, alias, class, label) in types {
         let tid = schema_uuid(n);
@@ -850,7 +899,7 @@ async fn seed_schema(conn: &mut Conn, tenant: uuid::Uuid) -> Result<(), DbError>
     }
 
     // (seq, alias, is_edge, scalar_kind, ru label)
-    let predicates: [(u64, &str, bool, Option<&str>, &str); 20] = [
+    let predicates: [(u64, &str, bool, Option<&str>, &str); 26] = [
         (101, "full_name", false, Some("text"), "ФИО"),
         (
             102,
@@ -872,11 +921,17 @@ async fn seed_schema(conn: &mut Conn, tenant: uuid::Uuid) -> Result<(), DbError>
         (113, "status_note", false, Some("text"), "Комментарий"),
         (114, "address", false, Some("text"), "Адрес"),
         (115, "amount", false, Some("decimal"), "Сумма"),
+        (116, "cp_kind", false, Some("text"), "Вид контакта"),
+        (117, "cp_code", false, Some("text"), "Код"),
+        (118, "cp_number", false, Some("text"), "Номер"),
         (151, "works_for", true, None, "Работает в"),
         (152, "owns", true, None, "Владеет"),
         (153, "for_entity", true, None, "По объекту"),
         (154, "performs_check", true, None, "Выполняет проверку"),
         (155, "related_to", true, None, "Связан с"),
+        (156, "holds_position", true, None, "Занимает должность"),
+        (157, "position_at", true, None, "В организации"),
+        (158, "position_work_phone", true, None, "Рабочий телефон"),
     ];
     for (n, alias, is_edge, kind, label) in predicates {
         let pid = schema_uuid(n);
@@ -932,6 +987,131 @@ async fn seed_schema(conn: &mut Conn, tenant: uuid::Uuid) -> Result<(), DbError>
     Ok(())
 }
 
+/// Merge demo presentation metadata (type `preview`/`trans`, predicate
+/// `group`, `relation_groups`) into whichever revision is published.
+/// Revision 1 content is the source of truth; when a different revision is
+/// published (e.g. one created via the schema-admin UI), its entries are
+/// patched by alias and missing demo types/predicates are appended so the
+/// relations UI always has the full demo metadata.
+async fn seed_relation_metadata(conn: &mut Conn, tenant: uuid::Uuid) -> Result<(), DbError> {
+    let db = |e: sqlx::Error| DbError::Other {
+        message: e.to_string(),
+    };
+    let demo: Option<serde_json::Value> = sqlx::query_scalar(
+        "SELECT content FROM meta.schema_revision WHERE tenant_id=$1 AND revision_id=1",
+    )
+    .bind(tenant)
+    .fetch_optional(&mut *conn)
+    .await
+    .map_err(db)?;
+    let Some(demo) = demo else { return Ok(()) };
+    let row: Option<(i64, serde_json::Value)> = sqlx::query_as(
+        "SELECT revision_id, content FROM meta.schema_revision
+         WHERE tenant_id=$1 AND state='published'",
+    )
+    .bind(tenant)
+    .fetch_optional(&mut *conn)
+    .await
+    .map_err(db)?;
+    let Some((rev, mut published)) = row else {
+        return Ok(());
+    };
+    if rev == 1 {
+        return Ok(());
+    }
+
+    let alias_of = |v: &serde_json::Value| {
+        v.get("stable_alias")
+            .or_else(|| v.get("type_id"))
+            .or_else(|| v.get("alias"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+            .to_string()
+    };
+    let index_by_alias = |v: &serde_json::Value, key: &str| {
+        let mut m = std::collections::HashMap::new();
+        for item in v
+            .get(key)
+            .and_then(serde_json::Value::as_array)
+            .into_iter()
+            .flatten()
+        {
+            let a = alias_of(item);
+            if !a.is_empty() {
+                m.insert(a, item.clone());
+            }
+        }
+        m
+    };
+    let demo_types = index_by_alias(&demo, "types");
+    let demo_preds = index_by_alias(&demo, "predicates");
+
+    let Some(obj) = published.as_object_mut() else {
+        return Ok(());
+    };
+    let type_count = {
+        let types = obj.entry("types").or_insert_with(|| serde_json::json!([]));
+        let mut count = 0usize;
+        if let Some(arr) = types.as_array_mut() {
+            for (alias, dt) in &demo_types {
+                match arr.iter_mut().find(|t| alias_of(t) == *alias) {
+                    Some(existing) => {
+                        for k in ["preview", "trans"] {
+                            if let Some(v) = dt.get(k) {
+                                existing[k] = v.clone();
+                            }
+                        }
+                    }
+                    None => arr.push(dt.clone()),
+                }
+            }
+            count = arr.len();
+        }
+        count
+    };
+    obj.insert("type_count".to_string(), serde_json::json!(type_count));
+    let pred_count = {
+        let preds = obj
+            .entry("predicates")
+            .or_insert_with(|| serde_json::json!([]));
+        let mut count = 0usize;
+        if let Some(arr) = preds.as_array_mut() {
+            for (alias, dp) in &demo_preds {
+                match arr.iter_mut().find(|p| alias_of(p) == *alias) {
+                    Some(existing) => {
+                        for k in ["group", "label", "inverse_label", "domain", "range"] {
+                            if let Some(v) = dp.get(k) {
+                                if existing.get(k).is_none() || k == "group" {
+                                    existing[k] = v.clone();
+                                }
+                            }
+                        }
+                    }
+                    None => arr.push(dp.clone()),
+                }
+            }
+            count = arr.len();
+        }
+        count
+    };
+    obj.insert("predicate_count".to_string(), serde_json::json!(pred_count));
+    if let Some(groups) = demo.get("relation_groups") {
+        obj.insert("relation_groups".to_string(), groups.clone());
+    }
+
+    sqlx::query(
+        "UPDATE meta.schema_revision SET content=$1
+         WHERE tenant_id=$2 AND revision_id=$3 AND state='published'",
+    )
+    .bind(&published)
+    .bind(tenant)
+    .bind(rev)
+    .execute(&mut *conn)
+    .await
+    .map_err(db)?;
+    Ok(())
+}
+
 /// Seed demo entities + statements + relations so the workspace has real data.
 async fn seed_entities(conn: &mut Conn, tenant: uuid::Uuid) -> Result<(), DbError> {
     let db = |e: sqlx::Error| DbError::Other {
@@ -940,13 +1120,15 @@ async fn seed_entities(conn: &mut Conn, tenant: uuid::Uuid) -> Result<(), DbErro
     let admin: uuid::Uuid = "00000000-0000-0000-0000-0000000000a1".parse().unwrap();
 
     // (entity_id, type_n, public_id)
-    let entities: [(i64, u64, &str); 6] = [
+    let entities: [(i64, u64, &str); 8] = [
         (1, 1, "00000000-0000-7000-9000-000000000001"),
         (2, 1, "00000000-0000-7000-9000-000000000002"),
         (3, 2, "00000000-0000-7000-9000-000000000003"),
         (4, 2, "00000000-0000-7000-9000-000000000004"),
         (5, 3, "00000000-0000-7000-9000-000000000005"),
         (6, 4, "00000000-0000-7000-9000-000000000006"),
+        (7, 6, "00000000-0000-7000-9000-000000000007"),
+        (8, 7, "00000000-0000-7000-9000-000000000008"),
     ];
     for (eid, type_n, public) in entities {
         sqlx::query(
@@ -1006,6 +1188,11 @@ async fn seed_entities(conn: &mut Conn, tenant: uuid::Uuid) -> Result<(), DbErro
         (13, 4, 106, text("1207700012345"), "scalar"),
         (14, 5, 112, text("Заявка на кредит №1024"), "scalar"),
         (15, 6, 112, text("KYC-проверка ООО «Ромашка»"), "scalar"),
+        (16, 7, 112, text("Главный инженер"), "scalar"),
+        (17, 8, 116, text("phone"), "scalar"),
+        (18, 8, 117, text("+7"), "scalar"),
+        (19, 8, 118, text("495 123-45-67"), "scalar"),
+        (24, 8, 104, text("+7 495 123-45-67"), "scalar"),
         // edges
         (
             20,
@@ -1033,6 +1220,28 @@ async fn seed_entities(conn: &mut Conn, tenant: uuid::Uuid) -> Result<(), DbErro
             6,
             153,
             serde_json::json!({"object_kind":"entity","entity_id":3}),
+            "entity",
+        ),
+        // Trans-object chain: Иванов → Должность → {АО «Вектор», телефон}.
+        (
+            30,
+            1,
+            156,
+            serde_json::json!({"object_kind":"entity","entity_id":7}),
+            "entity",
+        ),
+        (
+            31,
+            7,
+            157,
+            serde_json::json!({"object_kind":"entity","entity_id":4}),
+            "entity",
+        ),
+        (
+            32,
+            7,
+            158,
+            serde_json::json!({"object_kind":"entity","entity_id":8}),
             "entity",
         ),
     ];
