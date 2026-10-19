@@ -764,6 +764,24 @@ pub static TOOLS: &[ToolDef] = &[
         ],
     },
 
+    // --- Database dump ---------------------------------------------------------------------
+    ToolDef {
+        name: "admin.dump_run",
+        desc: "Start a full-database export (enginer-dump) — privileged, dumps all tenants.",
+        method: "POST", path: "/admin/dump", capability: Some("security.manage"), params: &[],
+    },
+    ToolDef {
+        name: "admin.dump_list",
+        desc: "List dump runs with status and downloadable part files.",
+        method: "GET", path: "/admin/dump", capability: Some("security.manage"), params: &[],
+    },
+    ToolDef {
+        name: "admin.dump_delete",
+        desc: "Delete a finished dump run and its files.",
+        method: "DELETE", path: "/admin/dump/{id}", capability: Some("security.manage"),
+        params: &[ID],
+    },
+
     // --- Permission groups -----------------------------------------------------------------
     ToolDef {
         name: "permissions.groups",

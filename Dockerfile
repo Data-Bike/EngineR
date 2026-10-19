@@ -18,7 +18,7 @@ COPY crates/ ./crates/
 COPY apps/ ./apps/
 
 # Build the API, worker and MCP binaries.
-RUN cargo build --release --bin enginer-api --bin enginer-worker --bin enginer-mcp
+RUN cargo build --release --bin enginer-api --bin enginer-worker --bin enginer-mcp --bin enginer-dump
 
 # --- Runtime stage ---
 FROM debian:bookworm-slim AS runtime
@@ -33,6 +33,7 @@ WORKDIR /app
 COPY --from=builder /build/target/release/enginer-api /app/enginer-api
 COPY --from=builder /build/target/release/enginer-worker /app/enginer-worker
 COPY --from=builder /build/target/release/enginer-mcp /app/enginer-mcp
+COPY --from=builder /build/target/release/enginer-dump /app/enginer-dump
 
 # Copy migrations + config
 COPY migrations/ /app/migrations/

@@ -845,3 +845,19 @@ MCP-level fallback; keep both in mind when touching
   capped 600s); at 5 attempts it dead-letters (`dispatched_at` set +
   `last_error` kept). Cross-tenant batches re-scope
   `app.tenant_id` per event.
+
+## Dump UI / API surface
+
+- `POST|GET|DELETE /api/v1/admin/dump[/<id>[/<file>]]`
+  (`apps/api/src/dump_routes.rs`) — gated by `security.manage`;
+  `/admin/dump` is in `dataperm::ADMIN_URL_PREFIXES` (superuser blocked).
+  POST spawns `enginer-dump export` (env `ENGINER_DUMP_BIN`) into
+  `ENGINER_DUMP_DIR/<id>/`, stdout/stderr → `export.log`, completion →
+  `status.json`. One concurrent run (409 if busy). Restore stays CLI-only.
+- Requires `ENGINER_DUMP_DATABASE_URL` (superuser/BYPASSRLS DSN) —
+  set on the api container in docker-compose; dumps land in the
+  `dump-data` volume. Never expose that DSN through the API.
+- MCP parity: `admin.dump_run`, `admin.dump_list`, `admin.dump_delete`.
+- Nuxt: `/admin/dump` page (card on /admin, capability
+  `security.manage`); the `/api/v1` nitro proxy streams response bodies
+  (`Readable.fromWeb`) — required for large dump downloads.

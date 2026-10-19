@@ -164,6 +164,9 @@ fn required_capabilities(method: &str, path: &str) -> Vec<&'static str> {
     let segs: Vec<&str> = path.split('/').collect();
     let one = |c: &'static str| vec![c];
     match (method, &segs[..]) {
+        // Database dump: full-database export — privileged operation.
+        (_, ["", "api", "v1", "admin", "dump", ..]) => one("security.manage"),
+
         // Audit: read vs administer (checkpoint/retention are security ops).
         ("GET", ["", "api", "v1", "audit", ..]) => one("audit.read"),
         (_, ["", "api", "v1", "audit", ..]) => one("security.manage"),

@@ -20,6 +20,7 @@ pub(crate) mod authn;
 mod config;
 mod cors;
 pub(crate) mod dataperm;
+mod dump_routes;
 mod entity_pg;
 mod files_pg;
 mod health;
@@ -58,6 +59,7 @@ pub fn rocket_build(state: AppState) -> Rocket<Build> {
         .mount("/api/v1", skr_pg::routes())
         .mount("/api/v1", files_pg::routes())
         .mount("/api/v1", users_pg::routes())
+        .mount("/api/v1", dump_routes::routes())
         .register(
             "/api/v1",
             catchers![

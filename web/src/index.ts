@@ -20,12 +20,12 @@
  */
 
 import { ApiClient, type ApiClientConfig, type ParsedResponse, type RequestOptions } from './client/ApiClient.js';
-import { EntityEndpoints, SchemaEndpoints, SecurityEndpoints, HealthEndpoints, ConnectorEndpoints, CheckEndpoints, FileEndpoints, AuditEndpoints, ReportEndpoints, DashboardEndpoints, RequestEndpoints, MonitorEndpoints, UserEndpoints } from './endpoints/index.js';
+import { EntityEndpoints, SchemaEndpoints, SecurityEndpoints, HealthEndpoints, ConnectorEndpoints, CheckEndpoints, FileEndpoints, AuditEndpoints, ReportEndpoints, DashboardEndpoints, RequestEndpoints, MonitorEndpoints, UserEndpoints, DumpEndpoints } from './endpoints/index.js';
 
 export * from './types/index.js';
 export { ApiClient, type ApiClientConfig, type ParsedResponse, type RequestOptions };
 export { ApiClientError, type ApiError, type ApiErrorCode, httpStatusForCode } from './types/error.js';
-export { EntityEndpoints, SchemaEndpoints, SecurityEndpoints, HealthEndpoints, ConnectorEndpoints, CheckEndpoints, FileEndpoints, AuditEndpoints, ReportEndpoints, DashboardEndpoints, RequestEndpoints, MonitorEndpoints, UserEndpoints, type HealthResponse } from './endpoints/index.js';
+export { EntityEndpoints, SchemaEndpoints, SecurityEndpoints, HealthEndpoints, ConnectorEndpoints, CheckEndpoints, FileEndpoints, AuditEndpoints, ReportEndpoints, DashboardEndpoints, RequestEndpoints, MonitorEndpoints, UserEndpoints, DumpEndpoints, type HealthResponse, type DumpInfo, type DumpFileInfo } from './endpoints/index.js';
 
 /** The full EngineR API client: all endpoint groups in one object. */
 export interface EnginerClient {
@@ -57,6 +57,8 @@ export interface EnginerClient {
   readonly monitors: MonitorEndpoints;
   /** User administration + activity (users.manage). */
   readonly users: UserEndpoints;
+  /** Database dump administration (security.manage). */
+  readonly dumps: DumpEndpoints;
 }
 
 /**
@@ -82,5 +84,6 @@ export function createEnginerClient(config: ApiClientConfig): EnginerClient {
     requests: new RequestEndpoints(http),
     monitors: new MonitorEndpoints(http),
     users: new UserEndpoints(http),
+    dumps: new DumpEndpoints(http),
   };
 }

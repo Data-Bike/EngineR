@@ -5,6 +5,7 @@
  * to the Nuxt server, which forwards them to the API.
  */
 import { defineEventHandler, readBody, getQuery, getHeaders, setResponseHeaders, setResponseStatus } from 'h3';
+import { Readable } from 'node:stream';
 
 export default defineEventHandler(async (event) => {
   const apiUrl = process.env.ENGINER_API_URL ?? 'http://localhost:8010';
@@ -52,9 +53,12 @@ export default defineEventHandler(async (event) => {
       setResponseHeaders(event, { [key]: value });
     });
 
-    // Return body as text
-    const text = await response.text();
-    return text;
+    // Stream the body — large payloads (dumps, file downloads) must not
+    // be buffered in the proxy's memory.
+    if (response.body) {
+      return Readable.fromWeb(response.body as import('node:stream/web').ReadableStream);
+    }
+    return null;
   } catch (err) {
     console.error('[proxy] error:', err);
     setResponseStatus(event, 502);

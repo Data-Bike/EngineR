@@ -71,6 +71,7 @@ pub const ADMIN_CAPS: &[&str] = &[
 
 /// URL prefixes reserved for administrative API surface.
 pub const ADMIN_URL_PREFIXES: &[&str] = &[
+    "/admin/dump",
     "/permissions",
     "/users",
     "/audit/retention",

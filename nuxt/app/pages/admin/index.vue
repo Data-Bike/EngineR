@@ -46,6 +46,17 @@
           </div>
         </UCard>
       </NuxtLink>
+      <NuxtLink v-if="hasCapability('security.manage')" to="/admin/dump" class="block" data-testid="admin-dump-card">
+        <UCard class="hover:border-[var(--ui-border-muted)]">
+          <div class="flex items-center gap-3">
+            <UIcon name="i-lucide-database-backup" class="text-2xl text-[var(--ui-primary)]" />
+            <div>
+              <p class="font-medium">{{ t('dump.title') }}</p>
+              <p class="text-sm text-[var(--ui-text-muted)]">{{ t('dump.desc') }}</p>
+            </div>
+          </div>
+        </UCard>
+      </NuxtLink>
       <NuxtLink v-if="hasCapability('users.manage') || hasCapability('user.read')" to="/admin/users" class="block" data-testid="admin-users-card">
         <UCard class="hover:border-[var(--ui-border-muted)]">
           <div class="flex items-center gap-3">
