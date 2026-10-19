@@ -126,6 +126,28 @@ re-`draft_get` for a fresh etag → `draft_publish` (`reason`, `if_match`).
 replacement first; each write bumps the draft version, so always re-fetch
 the etag before the next mutating call.
 
+### Schema metadata conventions (preview / trans / groups)
+
+The published revision content carries metadata the UI/API use to render
+relations — preserve it when mutating `types`/`predicates` arrays (a whole
+array replace drops anything you did not copy back):
+
+- Type entry: `"preview": ["field_alias", ...]` — ordered fields of the
+  compact object preview (e.g. person: `["full_name","birth_date","inn"]`,
+  contact_point: `["cp_kind","cp_code","cp_number"]`); `"trans": true` —
+  trans-object (junction entity carrying relation attributes + onward
+  edges, e.g. `position` between person and legal_entity).
+- Edge predicate entry: `"group": "<group_id>"` — relation group
+  membership (employment/contacts/ownership/documents/workflow/general).
+- Record top level: `relation_groups: [{"id","label","order"}]` — the
+  group registry. `draft_update` accepts it as a `relation_groups` array
+  param; omitting the field keeps the existing registry (same
+  keep-vs-clear Option semantics as `types`/`predicates`/`changes`).
+- `relations.list` responses are enriched: each record has `group`,
+  `preview` (ordered `{field,value}` pairs), `trans` and `through`
+  (the trans-object's onward edges with their own previews) — don't be
+  surprised by the extra fields; use them instead of a second fetch.
+
 ## 6. Entity/field conventions
 
 - `entities.list` filter arg is `type` (type alias, e.g. `wh_warehouse`),
