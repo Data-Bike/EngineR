@@ -288,3 +288,54 @@ Notes:
 - Re-running `codemap_provision.py` is safe: `cm_id` identity dedups
   (`outcome: deduplicated`), duplicate relations return 409 which the
   driver counts as already-existing.
+
+---
+
+# Data dump / restore (`dump_all.py` + `restore_dump.py`)
+
+Run: 2026-10-19 · all operations via MCP `tools/call` (admin token)
+
+## Artifacts
+
+- `docs/testing/warehouse/dump_all.py` — exports the live DB:
+  published schema catalog (types+predicates), every entity of every
+  type (`entities.query` paginated at 500 — `entities.list` clamps to
+  200), and every relation (`relations.list` outgoing per entity,
+  deduped by relation_id). Writes:
+  - `dump.json` — canonical `enginer-dump/1` payload
+    (schema + entities with full field maps + relations with
+    valid_from/valid_to/qualifiers);
+  - `dump.puml` — human-readable PlantUML object diagram AND a
+    machine-restore payload: the same JSON, base64-encoded in 76-col
+    lines inside a `legend` block between
+    `DUMP64-BEGIN`/`DUMP64-END` markers. base64 is PUML-safe so no
+    escaping is needed in the payload; visible labels are escaped
+    (`" -> \"`, `\n`, `\t`, backslash) and truncated at 90 chars —
+    the legend block is authoritative for restore, the diagram is for
+    humans.
+- `docs/testing/warehouse/restore_dump.py` — reads either file
+  (`DUMP64` block auto-extracted from .puml), ensures the schema
+  (skips publish when the live catalog already covers all dumped
+  types, else draft → update → validate → impact → publish), replays
+  `entities.create` per entity building an old→new public_id map,
+  then replays `relations.create` with mapped ids. `--dry-run`
+  supported.
+
+## Verified results
+
+- Dump: **523 entities** (48 kb_article + 475 cm_node),
+  **1254 relations**, published rev 2 catalog.
+- In-place restore (same DB): 523 `deduplicated`, 0 created,
+  1254 relations `duplicate`, **0 failures** — idempotent.
+- Post-restore counts via `entities.query` paging:
+  `cm_node` 475/475, `kb_article` 48/48.
+
+## Known limits
+
+- `relations.create` accepts only `id/predicate/target_entity_id` —
+  qualifiers and validity windows are kept in `dump.json` for
+  reference but cannot be replayed through the current tool surface.
+- Retired entities are dumped with status but re-created as new
+  active entities on restore (identity policies dedup only against
+  active keys); public_ids are content-derived so dedup returns the
+  same ids on an intact DB.
