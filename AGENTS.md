@@ -760,3 +760,36 @@ publish); empty/blank identity components never produce identity keys;
   `kb.docs.<NN>` per `docs/` spec). Query: `entities.list {type:"kb_article"}`
   — reprovision via `docs/testing/warehouse/kb_provision.py` +
   `kb_docs_provision.py` (idempotent by `kb_id` identity).
+
+## Database dump / restore (apps/dump)
+
+`enginer-dump` is the production dump tool (Rust, streaming — designed for
+very large databases; rows never materialise as a set):
+
+- `enginer-dump export --dsn <url> --dir <out>` — writes
+  `01_schema.ndjson` (meta.*: types/predicates/identity policies/schema
+  revisions), `02_data.ndjson` (core.*: entities, statements/edges, files,
+  workflow instances), `03_system.ndjson` (sec/ops/audit/integration:
+  users, credentials, policies, sessions, outbox, audit chain) +
+  `manifest.json`. Each line: `{"table":"<schema>.<name>","row":{..}}`.
+  Export uses lazy `fetch()` streaming (`to_jsonb(t)` per row).
+- `enginer-dump import --dsn <url> --dir <dump> [--batch 500]` — replays
+  via `jsonb_populate_recordset` batches + `OVERRIDING SYSTEM VALUE`
+  (identity columns) + `ON CONFLICT DO NOTHING` (idempotent).
+  `session_replication_role=replica` disables FK triggers (needs
+  superuser). Sequences are dumped verbatim (`_sequences` lines) and
+  replayed exactly — including app-managed `entity_id_seq`/`statement_id_seq`
+  that no column default owns.
+- Round-trip verified 2026-10: fresh DB + migrations + import → all 43
+  table row-hashes and all sequences byte-identical to source.
+- Run as superuser/BYPASSRLS to see all tenants. Dumps contain credential
+  hashes and session rows — treat as secrets.
+
+**Keep the dump current:** table lists are discovered from
+`information_schema` at runtime — new tables in existing schemas are
+picked up automatically. When adding a NEW schema, add it to `SCHEMAS`
+in `apps/dump/src/main.rs` and to the `part_for` mapping. When changing
+the dump format, bump `FORMAT`. Python MCP tools
+(`docs/testing/warehouse/dump_all.py` / `restore_dump.py`) remain as an
+MCP-level fallback; keep both in mind when touching
+`entities`/`relations` semantics.

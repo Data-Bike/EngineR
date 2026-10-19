@@ -802,6 +802,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "enginer-dump"
+version = "0.1.0"
+dependencies = [
+ "async-std",
+ "chrono",
+ "enginer-observability",
+ "futures",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "thiserror",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "enginer-files"
 version = "0.1.0"
 dependencies = [
