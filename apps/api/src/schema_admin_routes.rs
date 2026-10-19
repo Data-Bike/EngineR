@@ -201,6 +201,12 @@ pub struct SchemaRevisionRecord {
     pub etag: String,
     pub types: Vec<Value>,
     pub predicates: Vec<Value>,
+    /// Registry of relation groups ({id, label, order}) shown as sections
+    /// on the relations tab. Predicates reference a group id via their
+    /// `group` attribute; entries live at record level so they survive
+    /// the draft → publish lifecycle.
+    #[serde(default)]
+    pub relation_groups: Vec<Value>,
     pub changes: Vec<SchemaChange>,
     pub type_count: usize,
     pub predicate_count: usize,
@@ -249,6 +255,7 @@ pub struct UpdateDraftBody {
     // schema on any metadata-only update.
     pub types: Option<Vec<Value>>,
     pub predicates: Option<Vec<Value>>,
+    pub relation_groups: Option<Vec<Value>>,
     pub changes: Option<Vec<SchemaChange>>,
 }
 
@@ -725,6 +732,7 @@ fn seed_revision() -> SchemaRevisionRecord {
         predicate_count: predicates.len(),
         types,
         predicates,
+        relation_groups: Vec::new(),
         changes: Vec::new(),
         created_at: timestamp.clone(),
         updated_at: timestamp.clone(),
@@ -1160,6 +1168,10 @@ pub async fn create_draft(
                     .as_ref()
                     .map(|r| r.predicates.clone())
                     .unwrap_or_default(),
+                relation_groups: base
+                    .as_ref()
+                    .map(|r| r.relation_groups.clone())
+                    .unwrap_or_default(),
                 changes: Vec::new(),
                 type_count: 0,
                 predicate_count: 0,
@@ -1226,6 +1238,9 @@ pub async fn update_draft(
             }
             if let Some(p) = body.predicates {
                 record.predicates = p;
+            }
+            if let Some(g) = body.relation_groups {
+                record.relation_groups = g;
             }
             if let Some(c) = body.changes {
                 record.changes = c;
@@ -1704,6 +1719,17 @@ fn type_entry_to_record(
             .to_string(),
         entity_count,
         fields,
+        preview: entry
+            .get("preview")
+            .and_then(Value::as_array)
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_string)
+                    .collect()
+            })
+            .unwrap_or_default(),
+        trans: entry.get("trans").and_then(Value::as_bool).unwrap_or(false),
     }
 }
 
@@ -1959,6 +1985,7 @@ pub async fn list_predicates(
                         "participates_in_identity": p.get("participates_in_identity").or_else(||p.get("identity")).and_then(Value::as_bool).unwrap_or(false),
                         "confidentiality_class": p.get("confidentiality").or_else(||p.get("confidentiality_class")).and_then(Value::as_str).unwrap_or("internal"),
                         "inverse_label": p.get("inverse_label").and_then(Value::as_str).unwrap_or_default(),
+                        "group": p.get("group").and_then(Value::as_str).unwrap_or_default(),
                     })
                 })
                 .collect();

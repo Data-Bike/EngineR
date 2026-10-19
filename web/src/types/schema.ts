@@ -142,6 +142,8 @@ export interface SchemaRevisionRecord {
   etag: string;
   types: Record<string, unknown>[];
   predicates: Record<string, unknown>[];
+  /** Relation group registry ({id, label, order}) used to group relations in the UI. */
+  relation_groups?: Record<string, unknown>[];
   changes: SchemaChange[];
   type_count: number;
   predicate_count: number;
@@ -171,6 +173,7 @@ export interface UpdateSchemaDraftBody {
   semantic_version: string;
   types: Record<string, unknown>[];
   predicates: Record<string, unknown>[];
+  relation_groups?: Record<string, unknown>[];
   changes: SchemaChange[];
 }
 

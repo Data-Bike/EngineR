@@ -23,6 +23,9 @@
               <p class="font-medium">{{ type.display_name }}</p>
               <UBadge variant="subtle" size="sm">{{ type.type_id }}</UBadge>
               <UBadge v-if="type.entity_class" variant="outline" size="sm">{{ type.entity_class }}</UBadge>
+              <UBadge v-if="type.trans" variant="soft" size="sm" color="primary" icon="i-lucide-waypoints">
+                {{ t('admin.trans_object') }}
+              </UBadge>
               <UBadge v-if="type.entity_count !== undefined" variant="soft" size="sm" color="primary">
                 {{ type.entity_count }} {{ t('admin.objects_count', 'объектов') }}
               </UBadge>
@@ -72,6 +75,10 @@
             <USelect v-model="formData.entity_class" :items="entityClassOptions" class="w-full" />
           </UFormField>
 
+          <UFormField :label="t('admin.trans_object')" :hint="t('admin.trans_object_hint')">
+            <USwitch v-model="formData.trans" />
+          </UFormField>
+
           <!-- Fields section -->
           <div class="space-y-2">
             <div class="flex items-center justify-between">
@@ -93,7 +100,7 @@
                   <UInput v-model="field.label" class="w-full" placeholder="ИНН, ФИО, ..." />
                 </UFormField>
               </div>
-              <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
+              <div class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-2">
                 <UFormField :label="t('admin.field_kind')">
                   <USelect v-model="field.kind" :items="fieldKindOptions" class="w-full" />
                 </UFormField>
@@ -103,11 +110,18 @@
                 <UFormField :label="t('admin.field_identity')">
                   <USwitch v-model="field.identity" />
                 </UFormField>
+                <UFormField :label="t('admin.field_preview')" :title="t('admin.field_preview_hint')">
+                  <USwitch v-model="field.preview" />
+                </UFormField>
               </div>
               <UFormField v-if="field.kind === 'entity_reference'" :label="t('admin.range_type')">
                 <USelect v-model="field.target_type_id" :items="typeOptions" class="w-full" />
               </UFormField>
             </div>
+            <p v-if="previewAliases.length" class="text-xs text-[var(--ui-text-muted)]">
+              {{ t('admin.preview_order_hint') }}:
+              <span class="font-mono">{{ previewAliases.join(' · ') }}</span>
+            </p>
           </div>
 
           <div class="flex justify-end gap-2">
@@ -141,6 +155,8 @@ interface TypeField {
   kind: string;
   required: boolean;
   identity: boolean;
+  /** Included in the type's `preview` view (compact cards, relation lists). */
+  preview?: boolean;
   target_type_id?: string;
 }
 
@@ -150,6 +166,10 @@ interface SchemaType {
   description: string;
   entity_class: string;
   entity_count?: number;
+  /** Ordered field aliases of the preview view (from the published schema). */
+  preview?: string[];
+  /** Trans-object (junction) flag. */
+  trans: boolean;
   fields: TypeField[];
 }
 
@@ -186,8 +206,14 @@ const formData = ref<SchemaType>({
   display_name: '',
   description: '',
   entity_class: 'data',
+  trans: false,
   fields: [],
 });
+
+/** Preview field aliases in declared order — the type's `preview` view. */
+const previewAliases = computed(() =>
+  formData.value.fields.filter((f) => f.preview && f.alias).map((f) => f.alias),
+);
 
 async function fetchTypes() {
   loading.value = true;
@@ -201,6 +227,8 @@ async function fetchTypes() {
       description: t.description ?? '',
       entity_class: t.entity_class ?? 'data',
       entity_count: t.entity_count as number | undefined,
+      preview: (t.preview ?? []) as string[],
+      trans: t.trans ?? false,
       fields: [] as TypeField[],
     }));
 
@@ -214,12 +242,14 @@ async function fetchTypes() {
           for (const section of data.sections) {
             if (section.fields) {
               for (const f of section.fields) {
+                const alias = f.alias ?? f.predicate_id ?? '';
                 fields.push({
-                  alias: f.alias ?? f.predicate_id ?? '',
+                  alias,
                   label: f.label_key ?? f.alias ?? f.predicate_id ?? '',
                   kind: f.kind ?? 'text',
                   required: f.required ?? false,
                   identity: f.identity ?? false,
+                  preview: (tp.preview ?? []).includes(alias),
                   target_type_id: f.target_type_id,
                 });
               }
@@ -247,6 +277,7 @@ function openCreateDialog() {
     display_name: '',
     description: '',
     entity_class: 'data',
+    trans: false,
     fields: [],
   };
   showDialog.value = true;
@@ -255,6 +286,10 @@ function openCreateDialog() {
 function editType(type: SchemaType) {
   editing.value = true;
   formData.value = JSON.parse(JSON.stringify(type));
+  // Fields loaded from the form view don't carry the preview flag —
+  // restore it from the type's preview list.
+  const previewSet = new Set(type.preview ?? []);
+  for (const f of formData.value.fields) f.preview = previewSet.has(f.alias);
   showDialog.value = true;
 }
 
@@ -265,6 +300,7 @@ function addField() {
     kind: 'text',
     required: false,
     identity: false,
+    preview: false,
   });
 }
 
@@ -281,6 +317,10 @@ function entryFromForm(): Record<string, unknown> {
     entity_class: formData.value.entity_class,
     label: formData.value.display_name,
     description: formData.value.description,
+    trans: formData.value.trans,
+    // Empty list omitted → the relations API falls back to its field-order
+    // heuristic instead of showing no preview at all.
+    ...(previewAliases.value.length ? { preview: previewAliases.value } : {}),
     fields: formData.value.fields.map((field) => ({
       alias: field.alias,
       label: field.label,
@@ -307,6 +347,7 @@ async function saveType() {
         resource_kind: 'type',
         resource_id: typeId,
         summary: formData.value.display_name || typeId,
+        breaking: false,
       }],
       mutate(types) {
         const entry = entryFromForm();

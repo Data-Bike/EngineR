@@ -307,6 +307,15 @@ pub struct SchemaTypeRecord {
     pub entity_count: usize,
     #[serde(default)]
     pub fields: Vec<TypeFieldRecord>,
+    /// Ordered field aliases used for compact previews (relations tab,
+    /// autocomplete). Empty → heuristic fallback.
+    #[serde(default)]
+    pub preview: Vec<String>,
+    /// Trans-object: a junction entity whose purpose is to carry relation
+    /// attributes and onward edges (e.g. Position between Person and
+    /// LegalEntity). Rendered with through-edge expansion.
+    #[serde(default)]
+    pub trans: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

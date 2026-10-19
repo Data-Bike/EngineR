@@ -6,9 +6,14 @@
         <h1 class="text-2xl font-bold">{{ t('admin.predicates_title') }}</h1>
         <p class="text-[var(--ui-text-muted)] mt-1">{{ t('admin.predicates_desc') }}</p>
       </div>
-      <UButton icon="i-lucide-plus" @click="openCreateDialog">
-        {{ t('admin.create_predicate') }}
-      </UButton>
+      <div class="flex gap-2">
+        <UButton variant="outline" icon="i-lucide-layers" @click="openGroupsDialog">
+          {{ t('admin.manage_groups') }}
+        </UButton>
+        <UButton icon="i-lucide-plus" @click="openCreateDialog">
+          {{ t('admin.create_predicate') }}
+        </UButton>
+      </div>
     </div>
 
     <!-- Info banner about direction -->
@@ -45,6 +50,9 @@
               </UBadge>
               <UBadge v-if="pred.participates_in_identity" variant="soft" size="sm" color="warning">
                 {{ t('admin.identity_field') }}
+              </UBadge>
+              <UBadge v-if="pred.is_edge && pred.group" variant="soft" size="sm" color="info" icon="i-lucide-layers">
+                {{ groupLabel(pred.group) }}
               </UBadge>
             </div>
             <div class="mt-2 text-sm text-[var(--ui-text-muted)] space-y-0.5">
@@ -123,6 +131,10 @@
             </div>
           </div>
 
+          <UFormField v-if="formData.is_edge" :label="t('admin.relation_group')" :hint="t('admin.relation_group_hint')">
+            <USelect v-model="formData.group" :items="groupOptions" class="w-full" />
+          </UFormField>
+
           <!-- Cardinality -->
           <div class="grid grid-cols-1 sm:grid-cols-2 gap-2">
             <UFormField :label="t('admin.min_cardinality')">
@@ -147,6 +159,42 @@
               {{ t('common.cancel') }}
             </UButton>
             <UButton @click="savePredicate" :loading="saving">
+              {{ t('common.save') }}
+            </UButton>
+          </div>
+        </div>
+      </template>
+    </UModal>
+
+    <!-- Relation groups registry editor -->
+    <UModal v-model:open="showGroupsDialog">
+      <template #content>
+        <div class="p-6 space-y-4 max-h-[80vh] overflow-y-auto">
+          <h2 class="text-lg font-bold">{{ t('admin.manage_groups') }}</h2>
+          <p class="text-sm text-[var(--ui-text-muted)]">{{ t('admin.manage_groups_hint') }}</p>
+
+          <div v-for="(g, idx) in groupsForm" :key="idx" class="flex items-end gap-2 border border-[var(--ui-border)] rounded-md p-3">
+            <UFormField :label="t('admin.group_id')" class="flex-1">
+              <UInput v-model="g.id" class="w-full" placeholder="employment" :disabled="g.id === 'general'" />
+            </UFormField>
+            <UFormField :label="t('admin.group_label')" class="flex-1">
+              <UInput v-model="g.label" class="w-full" :placeholder="t('admin.group_label_placeholder')" />
+            </UFormField>
+            <UFormField :label="t('admin.group_order')" class="w-24">
+              <UInput v-model.number="g.order" type="number" class="w-full" />
+            </UFormField>
+            <UButton size="sm" variant="ghost" color="error" icon="i-lucide-x" :disabled="g.id === 'general'" @click="groupsForm.splice(idx, 1)" />
+          </div>
+
+          <UButton variant="outline" size="sm" icon="i-lucide-plus" @click="groupsForm.push({ id: '', label: '', order: (groupsForm.at(-1)?.order ?? 0) + 10 })">
+            {{ t('admin.add_group') }}
+          </UButton>
+
+          <div class="flex justify-end gap-2">
+            <UButton variant="outline" @click="showGroupsDialog = false">
+              {{ t('common.cancel') }}
+            </UButton>
+            <UButton :loading="savingGroups" @click="saveGroups">
               {{ t('common.save') }}
             </UButton>
           </div>
@@ -180,6 +228,14 @@ interface Predicate {
   participates_in_identity: boolean;
   confidentiality_class: string;
   inverse_label: string;
+  /** Relation group id from the schema's relation_groups registry. */
+  group: string;
+}
+
+interface RelationGroup {
+  id: string;
+  label: string;
+  order: number;
 }
 
 const loading = ref(false);
@@ -247,7 +303,28 @@ const formData = ref<Predicate>({
   participates_in_identity: false,
   confidentiality_class: 'public',
   inverse_label: '',
+  group: '',
 });
+
+const relationGroups = ref<RelationGroup[]>([]);
+const showGroupsDialog = ref(false);
+const savingGroups = ref(false);
+const groupsForm = ref<RelationGroup[]>([]);
+
+/** Localized group label: i18n key first, registry label as fallback. */
+function groupLabel(id: string): string {
+  const key = `entity.relations.group.${id}`;
+  const translated = t(key);
+  if (translated !== key) return translated;
+  return relationGroups.value.find((g) => g.id === id)?.label || id;
+}
+
+const groupOptions = computed(() => [
+  { label: t('admin.no_group'), value: '' },
+  ...[...relationGroups.value]
+    .sort((a, b) => a.order - b.order)
+    .map((g) => ({ label: groupLabel(g.id), value: g.id })),
+]);
 
 const filteredPredicates = computed(() => {
   return predicates.value.filter(p => {
@@ -271,10 +348,18 @@ function directionColor(dir: string): 'success' | 'primary' {
 async function fetchPredicates() {
   loading.value = true;
   try {
-    const [res, typesResponse] = await Promise.all([
+    const [res, typesResponse, published] = await Promise.all([
       api.schemas.listPredicates(),
       api.schemas.listTypes(),
+      api.schemas.listPublished(),
     ]);
+    relationGroups.value = ((published.data?.[0]?.relation_groups ?? []) as any[])
+      .map((g) => ({
+        id: String(g.id ?? ''),
+        label: String(g.label ?? g.id ?? ''),
+        order: Number(g.order ?? 0),
+      }))
+      .filter((g) => g.id);
     schemaTypes.value = (typesResponse.data ?? []).map((schemaType: any) => ({
       id: schemaType.id ?? schemaType.type_id ?? '',
       display_name: schemaType.display_name ?? schemaType.id ?? '',
@@ -298,6 +383,7 @@ async function fetchPredicates() {
         participates_in_identity: p.participates_in_identity ?? p.identity ?? false,
         confidentiality_class: p.confidentiality_class ?? 'public',
         inverse_label: p.inverse_label ?? '',
+        group: p.group ?? '',
       };
     });
   } catch (e: unknown) {
@@ -322,8 +408,16 @@ function openCreateDialog() {
     participates_in_identity: false,
     confidentiality_class: 'public',
     inverse_label: '',
+    group: '',
   };
   showDialog.value = true;
+}
+
+function openGroupsDialog() {
+  groupsForm.value = JSON.parse(JSON.stringify(
+    [...relationGroups.value].sort((a, b) => a.order - b.order),
+  ));
+  showGroupsDialog.value = true;
 }
 
 function editPredicate(pred: Predicate) {
@@ -349,6 +443,7 @@ function entryFromForm(): Record<string, unknown> {
     base.is_edge = true;
     base.domain = formData.value.domain_type;
     base.range = formData.value.range_type;
+    if (formData.value.group) base.group = formData.value.group;
   } else {
     base.is_edge = false;
     base.scalar_kind = formData.value.scalar_kind;
@@ -371,6 +466,7 @@ async function savePredicate() {
         resource_kind: 'predicate',
         resource_id: alias,
         summary: formData.value.label || alias,
+        breaking: false,
       }],
       mutate(_types, predicates) {
         const entry = entryFromForm();
@@ -388,6 +484,41 @@ async function savePredicate() {
     toast.add({ title: t('common.error'), description: e instanceof Error ? e.message : String(e), color: 'error' });
   } finally {
     saving.value = false;
+  }
+}
+
+async function saveGroups() {
+  savingGroups.value = true;
+  try {
+    const entries = groupsForm.value
+      .filter((g) => g.id.trim())
+      .map((g) => ({ id: g.id.trim(), label: g.label.trim() || g.id.trim(), order: g.order }));
+    // The general bucket must always exist — it is the fallback for
+    // predicates without an explicit group.
+    if (!entries.some((g) => g.id === 'general')) {
+      entries.push({ id: 'general', label: t('admin.no_group'), order: 999 });
+    }
+    await applySchemaMutation({
+      name: t('admin.manage_groups'),
+      reason: 'relation groups updated',
+      changes: [{
+        kind: 'update',
+        resource_kind: 'relation_groups',
+        resource_id: 'relation_groups',
+        summary: t('admin.manage_groups'),
+        breaking: false,
+      }],
+      mutate(_types, _predicates, groups) {
+        groups.splice(0, groups.length, ...entries);
+      },
+    });
+    showGroupsDialog.value = false;
+    toast.add({ title: t('admin.groups_saved'), color: 'success' });
+    await fetchPredicates();
+  } catch (e: unknown) {
+    toast.add({ title: t('common.error'), description: e instanceof Error ? e.message : String(e), color: 'error' });
+  } finally {
+    savingGroups.value = false;
   }
 }
 

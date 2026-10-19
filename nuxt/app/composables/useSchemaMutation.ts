@@ -7,8 +7,12 @@ export interface SchemaMutationOptions {
   reason: string;
   /** Change-log entries for validation/impact reporting. */
   changes: SchemaChange[];
-  /** Mutate copies of the draft's types/predicates arrays in place. */
-  mutate: (types: Record<string, unknown>[], predicates: Record<string, unknown>[]) => void;
+  /** Mutate copies of the draft's types/predicates/relation_groups arrays in place. */
+  mutate: (
+    types: Record<string, unknown>[],
+    predicates: Record<string, unknown>[],
+    relationGroups: Record<string, unknown>[],
+  ) => void;
 }
 
 /**
@@ -33,7 +37,8 @@ export function useSchemaMutation() {
     const draft = await api.schemas.getDraft(draftId);
     const types = (draft.data.types ?? []) as Record<string, unknown>[];
     const predicates = (draft.data.predicates ?? []) as Record<string, unknown>[];
-    options.mutate(types, predicates);
+    const relationGroups = (draft.data.relation_groups ?? []) as Record<string, unknown>[];
+    options.mutate(types, predicates, relationGroups);
 
     await api.schemas.updateDraft(
       draftId,
@@ -43,6 +48,7 @@ export function useSchemaMutation() {
         semantic_version: draft.data.semantic_version,
         types,
         predicates,
+        relation_groups: relationGroups,
         changes: options.changes,
       },
       draft.data.etag,
