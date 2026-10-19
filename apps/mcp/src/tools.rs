@@ -517,6 +517,7 @@ pub static TOOLS: &[ToolDef] = &[
             Param { name: "description", loc: B, ty: "string", required: false, desc: "Draft description." },
             Param { name: "types", loc: B, ty: "array", required: false, desc: "Type definitions." },
             Param { name: "predicates", loc: B, ty: "array", required: false, desc: "Predicate definitions." },
+            Param { name: "relation_groups", loc: B, ty: "array", required: false, desc: "Relation group registry ({id, label, order})." },
             Param { name: "changes", loc: B, ty: "array", required: false, desc: "Schema change entries." },
             IF_MATCH,
         ],
