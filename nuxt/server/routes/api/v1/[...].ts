@@ -4,7 +4,7 @@
  * This avoids CORS by making the browser send same-origin requests
  * to the Nuxt server, which forwards them to the API.
  */
-import { defineEventHandler, readBody, getQuery, getHeaders, setResponseHeaders, setResponseStatus } from 'h3';
+import { defineEventHandler, getRequestWebStream, getQuery, getHeaders, setResponseHeaders, setResponseStatus, getRequestIP } from 'h3';
 import { Readable } from 'node:stream';
 
 export default defineEventHandler(async (event) => {
@@ -20,25 +20,36 @@ export default defineEventHandler(async (event) => {
 
   const method = event.method;
   const headers = getHeaders(event);
-  const body = ['GET', 'HEAD'].includes(method)
+  // Stream the request body untouched — binary uploads (dump .xz archives,
+  // file chunks) must not go through JSON parse/stringify, and multi-GB
+  // uploads must not be buffered in the proxy's memory.
+  const bodyStream = ['GET', 'HEAD'].includes(method)
     ? undefined
-    : await readBody(event).catch(() => undefined);
+    : getRequestWebStream(event);
 
-  // Forward headers except host
+  // Forward headers except host/content-length (fetch recomputes it).
   const forwardHeaders: Record<string, string> = {};
   for (const [key, value] of Object.entries(headers)) {
-    if (key.toLowerCase() === 'host') continue;
+    const lower = key.toLowerCase();
+    if (lower === 'host' || lower === 'content-length' || lower === 'connection') continue;
     if (typeof value === 'string') {
       forwardHeaders[key] = value;
     }
+  }
+  // Preserve the real client address for the API's audit log.
+  const clientIp = getRequestIP(event, { xForwardedFor: true });
+  if (clientIp) {
+    forwardHeaders['x-forwarded-for'] = clientIp;
   }
 
   try {
     const response = await globalThis.fetch(target, {
       method,
       headers: forwardHeaders,
-      body: body !== undefined ? JSON.stringify(body) : undefined,
-    });
+      body: bodyStream,
+      // Required by undici when the body is a ReadableStream.
+      duplex: 'half',
+    } as RequestInit & { duplex: 'half' });
 
     // Forward status
     setResponseStatus(event, response.status);

@@ -44,9 +44,10 @@ pub fn rocket_build(state: AppState) -> Rocket<Build> {
     // Use rocket::build() which reads Rocket.toml + ROCKET_* env vars
     // automatically. The secret_key comes from Rocket.toml or
     // ROCKET_SECRET_KEY env var.
+    let cors = cors::CorsFairing::new(&state.config.http.public_origin);
     let mut rocket = rocket::build()
         .manage(state)
-        .attach(cors::CorsFairing)
+        .attach(cors)
         .attach(AuditFairing)
         .mount("/health", routes![health::live, health::ready])
         .mount("/health", routes![options_preflight])

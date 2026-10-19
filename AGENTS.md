@@ -878,7 +878,17 @@ MCP-level fallback; keep both in mind when touching
   upstream; the March-2024 backdoor shipped only in 5.6.0/5.6.1
   tarballs). Import auto-detects `.xz` and falls back to legacy plain
   `.ndjson`; `manifest.json` stays uncompressed.
-- MCP parity: `admin.dump_run`, `admin.dump_list`, `admin.dump_delete`.
+- MCP parity: `admin.dump_run`, `admin.dump_list`, `admin.dump_delete`,
+  `admin.dump_upload`, `admin.dump_restore` (latter requires
+  `confirm: "RESTORE"`).
 - Nuxt: `/admin/dump` page (card on /admin, capability
-  `security.manage`); the `/api/v1` nitro proxy streams response bodies
-  (`Readable.fromWeb`) — required for large dump downloads.
+  `security.manage`); the `/api/v1` nitro proxy streams request and
+  response bodies (`getRequestWebStream` + `duplex: 'half'` and
+  `Readable.fromWeb`) — required for large binary dump upload/download;
+  JSON.parse/stringify would corrupt `.xz` bytes and buffer multi-GB
+  transfers in memory. Proxy forwards `x-forwarded-for` for audit.
+- CORS is an origin allowlist (`cors::CorsFairing::new`):
+  `http.public_origin` + built-in localhost dev origins +
+  `ENGINER_CORS_ORIGINS` (comma-separated). Arbitrary `Origin` values are
+  never reflected — without the allowlist any site could read
+  credentialed responses. Session cookie is `HttpOnly, SameSite=Lax`.

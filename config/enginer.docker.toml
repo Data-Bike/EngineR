@@ -14,5 +14,5 @@ db_executor_queue = 200
 
 [security]
 policy_cache_ttl_seconds = 30
-fail_closed = false
+fail_closed = true
 internal_mtls_identity = "enginer-api"
