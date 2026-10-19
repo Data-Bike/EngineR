@@ -820,3 +820,28 @@ MCP-level fallback; keep both in mind when touching
 - MCP bridge: JSON-RPC notifications (no `id`) are executed but MUST
   NOT produce a response — the server replies bare HTTP 202 with an
   empty body (`McpResponse::Accepted`), including error paths.
+
+## DataPerm on entity-linked resources (review 2026-10 #2)
+
+- `entity_pg::checked_entity(tx, ctx, public_id, op)` is the shared gate:
+  resolves the entity under RLS and requires `can_type(op)` +
+  `can_entity(op)`; denied entities 404 like missing ones. All
+  entity-scoped sub-resource routes must go through it —
+  `files_pg` documents (read=Read, attach/delete=Update) and `skr_pg`
+  (checks, assessments, factors, tasks, requests, workflows) do.
+- `GET /entities/{id}/relations?as_of=<rfc3339>` filters by validity
+  window (`valid_from <= t < valid_to`); bad timestamps → 422.
+- `POST /entities/query` returns `truncated: true` when the candidate
+  fetch hit the 2000-row window — `rows`/`cursor`/`total_estimate` then
+  cover only that window; clients should narrow `from`/`where`.
+- Schema admin (`schema_admin_routes.rs`): `save_record` is a
+  version-guarded upsert (`content->>'version'` must grow) — stale
+  writers get 409 instead of silently overwriting. `publish` and
+  `create_draft` take a per-tenant `pg_advisory_xact_lock` (publish
+  mutates sibling revisions + mirrors registry; create allocates
+  `max(revision_id)+1`).
+- Worker outbox drain: a failed `dispatch` keeps the event pending —
+  `attempts+1`, `last_error`, exponential backoff (`10s * 2^attempts`,
+  capped 600s); at 5 attempts it dead-letters (`dispatched_at` set +
+  `last_error` kept). Cross-tenant batches re-scope
+  `app.tenant_id` per event.

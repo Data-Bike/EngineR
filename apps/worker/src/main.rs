@@ -79,9 +79,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
 
                     let count = rows.len();
-                    let mut ids = Vec::with_capacity(count);
+                    let mut ok_ids = Vec::with_capacity(count);
+                    let mut failed: Vec<(i64, String)> = Vec::new();
                     for (id, tenant_id, event_type, payload) in &rows {
-                        ids.push(*id);
                         // RLS: scope the transaction to the event's tenant.
                         sqlx::query("SELECT set_config('app.tenant_id', $1, true)")
                             .bind(tenant_id.to_string())
@@ -89,28 +89,55 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                             .await
                             .map_err(db_err)?;
                         match dispatch(&mut tx, event_type, payload).await {
-                            Ok(()) => tracing::info!(
-                                outbox_id = id,
-                                event_type = %event_type,
-                                "outbox event processed"
-                            ),
-                            Err(e) => tracing::warn!(
-                                outbox_id = id,
-                                event_type = %event_type,
-                                error = %e,
-                                "outbox event failed"
-                            ),
+                            Ok(()) => {
+                                ok_ids.push(*id);
+                                tracing::info!(
+                                    outbox_id = id,
+                                    event_type = %event_type,
+                                    "outbox event processed"
+                                );
+                            }
+                            Err(e) => {
+                                failed.push((*id, e.clone()));
+                                tracing::warn!(
+                                    outbox_id = id,
+                                    event_type = %event_type,
+                                    error = %e,
+                                    "outbox event failed"
+                                );
+                            }
                         }
                     }
 
-                    sqlx::query(
-                        "UPDATE ops.outbox SET dispatched_at = now(), attempts = attempts + 1
-                         WHERE outbox_id = ANY($1)",
-                    )
-                    .bind(&ids)
-                    .execute(&mut *tx)
-                    .await
-                    .map_err(db_err)?;
+                    if !ok_ids.is_empty() {
+                        sqlx::query(
+                            "UPDATE ops.outbox SET dispatched_at = now(), attempts = attempts + 1
+                             WHERE outbox_id = ANY($1)",
+                        )
+                        .bind(&ok_ids)
+                        .execute(&mut *tx)
+                        .await
+                        .map_err(db_err)?;
+                    }
+                    // Failed events stay pending: exponential backoff retry,
+                    // dead-letter after MAX_ATTEMPTS (dispatched + last_error).
+                    for (id, err) in &failed {
+                        sqlx::query(
+                            "UPDATE ops.outbox
+                             SET attempts = attempts + 1,
+                                 last_error = $2,
+                                 available_at = now() + make_interval(
+                                     secs => least(600.0, 10.0 * power(2, attempts))),
+                                 dispatched_at = CASE WHEN attempts + 1 >= 5
+                                                      THEN now() ELSE dispatched_at END
+                             WHERE outbox_id = $1",
+                        )
+                        .bind(*id)
+                        .bind(err)
+                        .execute(&mut *tx)
+                        .await
+                        .map_err(db_err)?;
+                    }
 
                     tx.commit().await.map_err(db_err)?;
                     Ok(serde_json::json!({"drained": count}))

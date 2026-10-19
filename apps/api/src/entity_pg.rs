@@ -247,6 +247,47 @@ pub(crate) fn entity_visible(perm: &crate::dataperm::DataPerm, row: &EntityRow) 
         && perm.can_entity(&row.public_id.to_string(), crate::dataperm::Op::Read)
 }
 
+/// Resolve an entity by public_id under RLS and require DataPerm access.
+/// `Op::Read` for reads of entity-linked resources (documents, checks,
+/// factors, tasks), `Op::Update` for mutations. A denied entity is
+/// indistinguishable from a missing one (404) — same contract as the
+/// entity routes.
+pub(crate) async fn checked_entity(
+    tx: &mut Transaction<'_, Postgres>,
+    ctx: &AuthContext,
+    public_id: uuid::Uuid,
+    op: crate::dataperm::Op,
+) -> Result<EntityRow, DbError> {
+    let perm = perm_for(tx, ctx).await?;
+    let row: Option<(
+        i64,
+        uuid::Uuid,
+        uuid::Uuid,
+        String,
+        i16,
+        i64,
+        chrono::DateTime<chrono::Utc>,
+        Option<chrono::DateTime<chrono::Utc>>,
+    )> = sqlx::query_as(&format!("{ENTITY_SELECT} AND e.public_id = $2"))
+        .bind(ctx.tenant_id)
+        .bind(public_id)
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(db_err)?;
+    let erow = row_to_entity_row(row.ok_or_else(|| http_err(404, "entity not found"))?);
+    let allowed = if op == crate::dataperm::Op::Read {
+        entity_visible(&perm, &erow)
+    } else {
+        let keys = type_keys(&erow);
+        let key_refs: [&str; 2] = [&keys[0], &keys[1]];
+        perm.can_type(&key_refs, op) && perm.can_entity(&public_id.to_string(), op)
+    };
+    if !allowed {
+        return Err(http_err(404, "entity not found"));
+    }
+    Ok(erow)
+}
+
 pub(crate) async fn record_for(
     tx: &mut Transaction<'_, Postgres>,
     tenant: uuid::Uuid,
@@ -1673,7 +1714,10 @@ pub async fn pg_get_relations(
     direction: Option<String>,
     as_of: Option<String>,
 ) -> Result<Json<ApiEnvelope<Vec<RelationRecord>>>, Status> {
-    let _ = as_of;
+    let as_of = as_of
+        .map(|s| s.parse::<chrono::DateTime<chrono::Utc>>())
+        .transpose()
+        .map_err(|_| Status::UnprocessableEntity)?;
     let exec = exec_of(state)?;
     let ctx = cap.ctx.clone();
     let pid: uuid::Uuid = public_id.parse().map_err(|_| Status::NotFound)?;
@@ -1692,6 +1736,12 @@ pub async fn pg_get_relations(
             .map_err(db_err)?;
             let (eid,) = subject.ok_or_else(|| http_err(404, "entity not found"))?;
             // Edges touching this entity; `te` is always the "other" side.
+            // `as_of` narrows to relations whose validity window covers t.
+            let as_of_clause = if as_of.is_some() {
+                " AND s.valid_from <= $3 AND (s.valid_to IS NULL OR s.valid_to > $3)"
+            } else {
+                ""
+            };
             let rows: Vec<(
                 i64,
                 String,
@@ -1701,7 +1751,7 @@ pub async fn pg_get_relations(
                 String,
                 chrono::DateTime<chrono::Utc>,
                 Option<chrono::DateTime<chrono::Utc>>,
-            )> = sqlx::query_as(
+            )> = sqlx::query_as(&format!(
                 "SELECT s.statement_id, pd.stable_alias, s.subject,
                         te.entity_id AS other_id,
                         te.public_id AS other_public,
@@ -1718,10 +1768,11 @@ pub async fn pg_get_relations(
                  LEFT JOIN meta.type_definition td
                    ON td.tenant_id=te.tenant_id AND td.type_id=te.type_id
                  WHERE s.tenant_id=$1 AND s.object_kind='entity' AND s.status='active'
-                   AND (s.subject=$2 OR (s.object->>'entity_id')::bigint=$2)",
-            )
+                   AND (s.subject=$2 OR (s.object->>'entity_id')::bigint=$2){as_of_clause}"
+            ))
             .bind(tenant)
             .bind(eid)
+            .bind(as_of.unwrap_or(chrono::DateTime::<chrono::Utc>::UNIX_EPOCH))
             .fetch_all(&mut *tx)
             .await
             .map_err(db_err)?;
@@ -2488,6 +2539,7 @@ pub async fn pg_query_entities_post(
                 .await
                 .map_err(db_err)?
             };
+            let window_truncated = rows.len() >= 2000;
             let rows: Vec<EntityRow> = rows.into_iter().map(row_to_entity_row).collect();
             let records = record_for(&mut tx, tenant, &rows, &perm).await?;
 
@@ -2545,7 +2597,7 @@ pub async fn pg_query_entities_post(
                             .and_then(Value::as_object)
                             .is_some_and(|o| {
                                 o.values()
-                                    .filter_map(Value::as_str)
+                                    .filter_map(wire_text)
                                     .any(|s| s.to_lowercase().contains(&search))
                             })
                 })
@@ -2595,6 +2647,7 @@ pub async fn pg_query_entities_post(
                     rows: rows_out,
                     cursor: (next < total).then(|| next.to_string()),
                     total_estimate: Some(total as i64),
+                    truncated: window_truncated,
                 })
                 .unwrap_or(Value::Null),
             )

@@ -30,25 +30,24 @@ async fn tx<'e>(pool: &'e PgPool, ctx: &AuthContext) -> Result<Transaction<'e, P
     rls_tx(pool, ctx, "skr").await
 }
 
-/// Lighter variant: internal id + display name without building a full record.
+/// Lighter variant: internal id + display name without building a full
+/// record. Enforces DataPerm (`op`) on the entity — denied entities 404 like
+/// missing ones, same contract as the entity routes.
 async fn entity_ref2(
     tx: &mut Transaction<'_, Postgres>,
-    tenant: uuid::Uuid,
+    ctx: &AuthContext,
     public_id: &str,
+    op: crate::dataperm::Op,
 ) -> Result<(i64, String), DbError> {
+    let tenant = ctx.tenant_id;
     let pid: uuid::Uuid = public_id
         .parse()
         .map_err(|_| http_err(404, "entity not found"))?;
-    let row: Option<(i64,)> = sqlx::query_as(
-        "SELECT entity_id FROM core.entity
-         WHERE tenant_id=$1 AND public_id=$2 AND retired_at IS NULL",
-    )
-    .bind(tenant)
-    .bind(pid)
-    .fetch_optional(&mut **tx)
-    .await
-    .map_err(db_err)?;
-    let (eid,) = row.ok_or_else(|| http_err(404, "entity not found"))?;
+    let erow = crate::entity_pg::checked_entity(tx, ctx, pid, op).await?;
+    if op != crate::dataperm::Op::Read && erow.retired_at.is_some() {
+        return Err(http_err(404, "entity not found"));
+    }
+    let eid = erow.entity_id;
     let fields = load_fields(tx, tenant, &[eid]).await?;
     let type_alias: String = sqlx::query_scalar(
         "SELECT COALESCE(td.stable_alias,'')
@@ -117,18 +116,8 @@ pub async fn query_checks(
                 .as_deref()
                 .and_then(|s| s.parse::<uuid::Uuid>().ok());
             if let Some(pid) = target_pid {
-                let exists: bool = sqlx::query_scalar(
-                    "SELECT EXISTS(SELECT 1 FROM core.entity
-                                   WHERE tenant_id=$1 AND public_id=$2)",
-                )
-                .bind(ctx.tenant_id)
-                .bind(pid)
-                .fetch_one(&mut *t)
-                .await
-                .map_err(db_err)?;
-                if !exists {
-                    return Err(http_err(404, "entity not found"));
-                }
+                crate::entity_pg::checked_entity(&mut t, &ctx, pid, crate::dataperm::Op::Read)
+                    .await?;
             }
             let cursor_uuid = cursor.as_deref().and_then(|s| s.parse::<uuid::Uuid>().ok());
             let rows = sqlx::query(&format!(
@@ -207,6 +196,10 @@ pub async fn get_check(
                 .map_err(db_err)?
                 .ok_or_else(|| http_err(404, "check not found"))?;
             let ep: Option<uuid::Uuid> = r.try_get("entity_public").ok().flatten();
+            if let Some(ep) = ep {
+                crate::entity_pg::checked_entity(&mut t, &ctx, ep, crate::dataperm::Op::Read)
+                    .await?;
+            }
             let eid: Option<i64> = r.try_get("entity_id").ok().flatten();
             let name = if let Some(eid) = eid {
                 load_fields(&mut t, ctx.tenant_id, &[eid])
@@ -243,16 +236,23 @@ pub async fn get_check_evidence(
     let v = exec
         .run(Deadline::in_secs(10), move |pool| async move {
             let mut t = tx(&pool, &ctx).await?;
-            let evidence: Option<Value> = sqlx::query_scalar(
-                "SELECT evidence FROM core.check_instance
-                 WHERE tenant_id=$1 AND check_id=$2",
+            let row: Option<(Value, Option<uuid::Uuid>)> = sqlx::query_as(
+                "SELECT c.evidence, e.public_id AS entity_public
+                 FROM core.check_instance c
+                 LEFT JOIN core.entity e ON e.tenant_id=c.tenant_id AND e.entity_id=c.entity_id
+                 WHERE c.tenant_id=$1 AND c.check_id=$2",
             )
             .bind(ctx.tenant_id)
             .bind(cid)
             .fetch_optional(&mut *t)
             .await
             .map_err(db_err)?;
-            Ok(json!({ "evidence": evidence.ok_or_else(|| http_err(404, "check not found"))? }))
+            let (evidence, entity_public) = row.ok_or_else(|| http_err(404, "check not found"))?;
+            if let Some(ep) = entity_public {
+                crate::entity_pg::checked_entity(&mut t, &ctx, ep, crate::dataperm::Op::Read)
+                    .await?;
+            }
+            Ok(json!({ "evidence": evidence }))
         })
         .await
         .map_err(|e| to_status(&e))?;
@@ -288,7 +288,8 @@ pub async fn create_check(
     let v = exec
         .run(Deadline::in_secs(10), move |pool| async move {
             let mut t = tx(&pool, &ctx).await?;
-            let (eid, name) = entity_ref2(&mut t, ctx.tenant_id, &target_entity_id).await?;
+            let (eid, name) =
+                entity_ref2(&mut t, &ctx, &target_entity_id, crate::dataperm::Op::Update).await?;
             let cid = uuid::Uuid::now_v7();
             sqlx::query(
                 "INSERT INTO core.check_instance
@@ -538,7 +539,7 @@ pub async fn get_entity_assessment(
     let v = exec
         .run(Deadline::in_secs(10), move |pool| async move {
             let mut t = tx(&pool, &ctx).await?;
-            let (eid, _) = entity_ref2(&mut t, ctx.tenant_id, &public_id).await?;
+            let (eid, _) = entity_ref2(&mut t, &ctx, &public_id, crate::dataperm::Op::Read).await?;
             Ok(latest_assessment(&mut t, &ctx, eid)
                 .await?
                 .unwrap_or(Value::Null))
@@ -591,7 +592,8 @@ pub async fn trigger_entity_assessment(
     let v = exec
         .run(Deadline::in_secs(15), move |pool| async move {
             let mut t = tx(&pool, &ctx).await?;
-            let (eid, _) = entity_ref2(&mut t, ctx.tenant_id, &public_id).await?;
+            let (eid, _) =
+                entity_ref2(&mut t, &ctx, &public_id, crate::dataperm::Op::Update).await?;
             if !force {
                 if let Some(existing) = latest_assessment(&mut t, &ctx, eid).await? {
                     return Ok(existing);
@@ -655,7 +657,7 @@ pub async fn get_entity_factors(
     let v = exec
         .run(Deadline::in_secs(10), move |pool| async move {
             let mut t = tx(&pool, &ctx).await?;
-            let (eid, _) = entity_ref2(&mut t, ctx.tenant_id, &public_id).await?;
+            let (eid, _) = entity_ref2(&mut t, &ctx, &public_id, crate::dataperm::Op::Read).await?;
             Ok(Value::Array(
                 load_factors(&mut t, ctx.tenant_id, eid, &public_id).await?,
             ))
@@ -681,7 +683,8 @@ pub async fn resolve_entity_factor(
     let v = exec
         .run(Deadline::in_secs(10), move |pool| async move {
             let mut t = tx(&pool, &ctx).await?;
-            let (eid, _) = entity_ref2(&mut t, ctx.tenant_id, &public_id).await?;
+            let (eid, _) =
+                entity_ref2(&mut t, &ctx, &public_id, crate::dataperm::Op::Update).await?;
             let changed = sqlx::query(
                 "UPDATE core.risk_factor SET resolved=true, resolved_at=now()
                  WHERE tenant_id=$1 AND entity_id=$2 AND factor_id=$3 AND NOT resolved",
@@ -760,7 +763,7 @@ pub async fn get_entity_tasks(
     let v = exec
         .run(Deadline::in_secs(10), move |pool| async move {
             let mut t = tx(&pool, &ctx).await?;
-            let (eid, _) = entity_ref2(&mut t, ctx.tenant_id, &public_id).await?;
+            let (eid, _) = entity_ref2(&mut t, &ctx, &public_id, crate::dataperm::Op::Read).await?;
             let rows = sqlx::query(
                 "SELECT * FROM core.task
                  WHERE tenant_id=$1 AND entity_id=$2 ORDER BY created_at DESC",
@@ -825,7 +828,8 @@ pub async fn create_entity_task(
     let v = exec
         .run(Deadline::in_secs(10), move |pool| async move {
             let mut t = tx(&pool, &ctx).await?;
-            let (eid, _) = entity_ref2(&mut t, ctx.tenant_id, &public_id).await?;
+            let (eid, _) =
+                entity_ref2(&mut t, &ctx, &public_id, crate::dataperm::Op::Update).await?;
             let tid = uuid::Uuid::now_v7();
             sqlx::query(
                 "INSERT INTO core.task
@@ -872,15 +876,21 @@ async fn transition_task_pg(
     let status_to = status_to.to_string();
     exec.run(Deadline::in_secs(10), move |pool| async move {
         let mut t = tx(&pool, &ctx).await?;
-        let cur: Option<String> = sqlx::query_scalar(
-            "SELECT status FROM core.task WHERE tenant_id=$1 AND task_id=$2 FOR UPDATE",
+        let cur: Option<(String, Option<uuid::Uuid>)> = sqlx::query_as(
+            "SELECT t.status, e.public_id AS entity_public
+             FROM core.task t
+             LEFT JOIN core.entity e ON e.tenant_id=t.tenant_id AND e.entity_id=t.entity_id
+             WHERE t.tenant_id=$1 AND t.task_id=$2 FOR UPDATE OF t",
         )
         .bind(ctx.tenant_id)
         .bind(tid)
         .fetch_optional(&mut *t)
         .await
         .map_err(db_err)?;
-        let cur = cur.ok_or_else(|| http_err(404, "task not found"))?;
+        let (cur, entity_public) = cur.ok_or_else(|| http_err(404, "task not found"))?;
+        if let Some(ep) = entity_public {
+            crate::entity_pg::checked_entity(&mut t, &ctx, ep, crate::dataperm::Op::Update).await?;
+        }
         if !allowed.contains(&cur) {
             return Err(http_err(409, "invalid task state transition"));
         }
@@ -1048,7 +1058,8 @@ pub async fn start_workflow(
                 .and_then(Value::as_str)
                 .unwrap_or("new")
                 .to_string();
-            let (eid, _) = entity_ref2(&mut t, ctx.tenant_id, &target_entity_id).await?;
+            let (eid, _) =
+                entity_ref2(&mut t, &ctx, &target_entity_id, crate::dataperm::Op::Update).await?;
             let wid = uuid::Uuid::now_v7();
             sqlx::query(
                 "INSERT INTO core.workflow_instance
@@ -1104,6 +1115,10 @@ pub async fn get_workflow(
             .map_err(db_err)?
             .ok_or_else(|| http_err(404, "workflow not found"))?;
             let ep: Option<uuid::Uuid> = r.try_get("entity_public").ok().flatten();
+            if let Some(ep) = ep {
+                crate::entity_pg::checked_entity(&mut t, &ctx, ep, crate::dataperm::Op::Read)
+                    .await?;
+            }
             Ok(workflow_row(
                 &r,
                 &ep.map(|u| u.to_string()).unwrap_or_default(),
@@ -1157,6 +1172,11 @@ pub async fn transition_workflow(
             .await
             .map_err(db_err)?
             .ok_or_else(|| http_err(404, "workflow not found"))?;
+            let ep: Option<uuid::Uuid> = r.try_get("entity_public").ok().flatten();
+            if let Some(ep) = ep {
+                crate::entity_pg::checked_entity(&mut t, &ctx, ep, crate::dataperm::Op::Update)
+                    .await?;
+            }
             if r.try_get::<bool, _>("terminated").unwrap_or_default() {
                 return Err(http_err(409, "workflow terminated"));
             }
@@ -1256,16 +1276,20 @@ pub async fn get_workflow_tasks(
     let v = exec
         .run(Deadline::in_secs(10), move |pool| async move {
             let mut t = tx(&pool, &ctx).await?;
-            let exists: i64 = sqlx::query_scalar(
-                "SELECT count(*) FROM core.workflow_instance WHERE tenant_id=$1 AND workflow_id=$2",
+            let wf_entity: Option<Option<uuid::Uuid>> = sqlx::query_scalar(
+                "SELECT e.public_id FROM core.workflow_instance w
+                 LEFT JOIN core.entity e ON e.tenant_id=w.tenant_id AND e.entity_id=w.entity_id
+                 WHERE w.tenant_id=$1 AND w.workflow_id=$2",
             )
             .bind(ctx.tenant_id)
             .bind(wid)
-            .fetch_one(&mut *t)
+            .fetch_optional(&mut *t)
             .await
             .map_err(db_err)?;
-            if exists == 0 {
-                return Err(http_err(404, "workflow not found"));
+            let wf_entity = wf_entity.ok_or_else(|| http_err(404, "workflow not found"))?;
+            if let Some(ep) = wf_entity {
+                crate::entity_pg::checked_entity(&mut t, &ctx, ep, crate::dataperm::Op::Read)
+                    .await?;
             }
             let rows = sqlx::query(
                 "SELECT t.*, e.public_id AS entity_public FROM core.task t
@@ -1406,7 +1430,8 @@ pub async fn create_request(
     let v = exec
         .run(Deadline::in_secs(10), move |pool| async move {
             let mut t = tx(&pool, &ctx).await?;
-            let (eid, name) = entity_ref2(&mut t, ctx.tenant_id, &target_entity_id).await?;
+            let (eid, name) =
+                entity_ref2(&mut t, &ctx, &target_entity_id, crate::dataperm::Op::Update).await?;
             let rid = uuid::Uuid::now_v7();
             sqlx::query(
                 "INSERT INTO core.request

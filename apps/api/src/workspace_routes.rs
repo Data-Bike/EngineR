@@ -325,6 +325,12 @@ pub struct QueryResponseRecord {
     pub rows: Vec<serde_json::Value>,
     pub cursor: Option<String>,
     pub total_estimate: Option<i64>,
+    /// True when the candidate fetch hit its internal window cap — `rows`,
+    /// `total_estimate` and `cursor` then cover only that window, not the
+    /// full tenant dataset. Clients should narrow `from`/`where` instead of
+    /// paginating through a truncated window.
+    #[serde(default)]
+    pub truncated: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]

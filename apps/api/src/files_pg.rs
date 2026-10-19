@@ -5,7 +5,7 @@
 //! persist per-chunk in `core.upload_chunk` so they survive restarts.
 
 use crate::authn::AuthContext;
-use crate::entity_pg::{db_err, http_err, rls_tx, to_status, ENTITY_SELECT};
+use crate::entity_pg::{checked_entity, db_err, http_err, rls_tx, to_status, ENTITY_SELECT};
 use crate::workspace_routes::{meta, ApiEnvelope, CapabilityGuard};
 use crate::AppState;
 use blake2::Blake2b512;
@@ -633,24 +633,12 @@ pub async fn get_entity_documents(
             let pid: uuid::Uuid = public_id
                 .parse()
                 .map_err(|_| http_err(404, "entity not found"))?;
-            let exists: bool = sqlx::query_scalar(
-                "SELECT EXISTS(SELECT 1 FROM core.entity
-                               WHERE tenant_id=$1 AND public_id=$2)",
-            )
-            .bind(ctx.tenant_id)
-            .bind(pid)
-            .fetch_one(&mut *t)
-            .await
-            .map_err(db_err)?;
-            if !exists {
-                return Err(http_err(404, "entity not found"));
-            }
+            let erow = checked_entity(&mut t, &ctx, pid, crate::dataperm::Op::Read).await?;
             let rows = sqlx::query(&format!(
-                "{DOC_SELECT} AND d.entity_id=(SELECT entity_id FROM core.entity WHERE tenant_id=$1 AND public_id=$2)
-                 ORDER BY d.created_at DESC",
+                "{DOC_SELECT} AND d.entity_id=$2 ORDER BY d.created_at DESC",
             ))
             .bind(ctx.tenant_id)
-            .bind(pid)
+            .bind(erow.entity_id)
             .fetch_all(&mut *t)
             .await
             .map_err(db_err)?;
@@ -696,16 +684,11 @@ pub async fn upload_entity_document(
             let pid: uuid::Uuid = public_id
                 .parse()
                 .map_err(|_| http_err(404, "entity not found"))?;
-            let eid: Option<i64> = sqlx::query_scalar(
-                "SELECT entity_id FROM core.entity
-                 WHERE tenant_id=$1 AND public_id=$2 AND retired_at IS NULL",
-            )
-            .bind(ctx.tenant_id)
-            .bind(pid)
-            .fetch_optional(&mut *t)
-            .await
-            .map_err(db_err)?;
-            let eid = eid.ok_or_else(|| http_err(404, "entity not found"))?;
+            let erow = checked_entity(&mut t, &ctx, pid, crate::dataperm::Op::Update).await?;
+            if erow.retired_at.is_some() {
+                return Err(http_err(404, "entity not found"));
+            }
+            let eid = erow.entity_id;
             let file_id = uuid::Uuid::now_v7();
             let doc_id = uuid::Uuid::now_v7();
             sqlx::query(
@@ -781,6 +764,7 @@ pub async fn download_entity_document(
     let v = exec
         .run(Deadline::in_secs(30), move |pool| async move {
             let mut t = tx(&pool, &ctx).await?;
+            checked_entity(&mut t, &ctx, pid, crate::dataperm::Op::Read).await?;
             let row: Option<(uuid::Uuid,)> = sqlx::query_as(
                 "SELECT d.file_id FROM core.entity_document d
                  JOIN core.entity e ON e.tenant_id=d.tenant_id AND e.entity_id=d.entity_id
@@ -824,6 +808,7 @@ pub async fn delete_entity_document(
     let ctx = cap.ctx.clone();
     exec.run(Deadline::in_secs(10), move |pool| async move {
         let mut t = tx(&pool, &ctx).await?;
+        checked_entity(&mut t, &ctx, pid, crate::dataperm::Op::Update).await?;
         let changed = sqlx::query(
             "DELETE FROM core.entity_document d USING core.entity e
              WHERE d.tenant_id=$1 AND e.tenant_id=d.tenant_id

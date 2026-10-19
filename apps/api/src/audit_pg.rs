@@ -437,24 +437,24 @@ pub async fn verify_chain(
     let v = exec
         .run(Deadline::in_secs(30), move |pool| async move {
             let mut tx = audit_tx(&pool, &ctx, "audit.verify").await?;
-            let rows = sqlx::query(
+            let mut rows = sqlx::query(
                 "SELECT e.sequence, e.previous_hash, e.entry_hash, e.occurred_at,
                         e.tenant_id, e.kind, e.action, e.resource_kind, e.resource_id,
                         e.effect, e.principal_id
                  FROM audit.event e
-                 LEFT JOIN sec.principal_credential c
-                     ON c.principal_id = e.principal_id
                  WHERE e.tenant_id=$1 AND e.sequence IS NOT NULL
                  ORDER BY e.sequence ASC",
             )
             .bind(ctx.tenant_id)
-            .fetch_all(&mut *tx)
-            .await
-            .map_err(db)?;
+            .fetch(&mut *tx);
             let mut valid = true;
+            let mut entry_count = 0i64;
             let mut prev_hash = "0".repeat(64);
             let mut prev_seq = 0i64;
-            for r in &rows {
+            use rocket::futures::StreamExt as _;
+            use sqlx::Row as _;
+            while let Some(r) = rows.next().await {
+                let r = r.map_err(db)?;
                 let seq: i64 = r.try_get("sequence").unwrap_or_default();
                 let stored_prev: String = r.try_get("previous_hash").unwrap_or_default();
                 let stored_hash: String = r.try_get("entry_hash").unwrap_or_default();
@@ -495,10 +495,11 @@ pub async fn verify_chain(
                 }
                 prev_hash = stored_hash;
                 prev_seq = seq;
+                entry_count += 1;
             }
             Ok(json!({
                 "valid": valid,
-                "entry_count": rows.len() as i64,
+                "entry_count": entry_count,
                 "last_sequence": prev_seq,
             }))
         })

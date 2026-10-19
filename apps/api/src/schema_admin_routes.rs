@@ -405,7 +405,11 @@ async fn save_record(
         .parent_revision_id
         .as_deref()
         .and_then(|s| s.parse().ok());
-    sqlx::query(
+    // Optimistic concurrency: every mutation path bumps `record.version`
+    // (touch()), so the DO UPDATE only applies when the stored version is
+    // strictly older. A stale in-flight writer loses instead of silently
+    // overwriting a concurrent If-Match-passed change.
+    let changed = sqlx::query(
         "INSERT INTO meta.schema_revision
          (tenant_id, revision_id, state, parent_revision_id, semantic_version, content,
           created_by, published_by, published_at, retired_at)
@@ -414,7 +418,9 @@ async fn save_record(
          SET state=EXCLUDED.state, parent_revision_id=EXCLUDED.parent_revision_id,
              semantic_version=EXCLUDED.semantic_version, content=EXCLUDED.content,
              published_by=EXCLUDED.published_by, published_at=EXCLUDED.published_at,
-             retired_at=EXCLUDED.retired_at",
+             retired_at=EXCLUDED.retired_at
+         WHERE (meta.schema_revision.content->>'version')::bigint
+               < (EXCLUDED.content->>'version')::bigint",
     )
     .bind(tenant)
     .bind(revision_id)
@@ -430,7 +436,15 @@ async fn save_record(
     .await
     .map_err(|e| DbError::Other {
         message: e.to_string(),
-    })?;
+    })?
+    .rows_affected();
+    if changed == 0 {
+        return Err(sf_err(
+            Status::Conflict,
+            "conflict",
+            "Схема была изменена параллельным запросом. Обновите данные и повторите.",
+        ));
+    }
     Ok(())
 }
 
@@ -1077,6 +1091,15 @@ pub async fn create_draft(
     let v = exec
         .run(Deadline::in_secs(15), move |pool| async move {
             let mut tx = schema_tx(&pool, &ctx).await?;
+            // Serialize revision-id allocation per tenant: next_id is
+            // max(revision_id)+1, so concurrent creates would collide.
+            sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 7919))")
+                .bind(ctx.tenant_id.to_string())
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| DbError::Other {
+                    message: e.to_string(),
+                })?;
             let all = load_records(&mut tx, ctx.tenant_id).await?;
             let revisions: Vec<&SchemaRevisionRecord> =
                 all.iter().filter(|r| !is_draft(r)).collect();
@@ -1243,7 +1266,9 @@ pub async fn delete_draft(
             .await?
             .ok_or_else(|| sf_err(Status::NotFound, "not_found", "Черновик схемы не найден"))?;
         require_if_match_pg(&record, &if_match_s)?;
-        let rid: i64 = id2.parse().unwrap_or(-1);
+        let rid: i64 = id2
+            .parse()
+            .map_err(|_| sf(500, "internal_error", "bad revision id"))?;
         delete_record(&mut tx, ctx.tenant_id, rid).await?;
         tx.commit().await.map_err(|e| DbError::Other {
             message: e.to_string(),
@@ -1367,6 +1392,16 @@ pub async fn publish_draft(
     let v = exec
         .run(Deadline::in_secs(20), move |pool| async move {
             let mut tx = schema_tx(&pool, &ctx).await?;
+            // Publish mutates *other* revisions (retires the published set) and
+            // mirrors definitions into the registry — serialize publishes per
+            // tenant so two concurrent drafts can't interleave.
+            sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 7919))")
+                .bind(ctx.tenant_id.to_string())
+                .execute(&mut *tx)
+                .await
+                .map_err(|e| DbError::Other {
+                    message: e.to_string(),
+                })?;
             let mut all = load_records(&mut tx, ctx.tenant_id).await?;
             let idx = all
                 .iter()
