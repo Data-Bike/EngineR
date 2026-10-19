@@ -198,3 +198,93 @@ a marker or were counted across attempts.)
 Failures: none — every `entities.update` succeeded on the first attempt
 with no index-size error, confirming the hashed index accepts
 full-length scalar objects.
+
+---
+
+# Code map — machine-queryable repo map (`cm_node` + `cm_*` edges)
+
+Run: 2026-10-19 · tool: `docs/testing/warehouse/codemap_provision.py`
+(+ `codemap_data.py`) · all writes via MCP `tools/call` (admin token)
+
+## Schema change
+
+- **New published revision id: `2`** (semantic_version `1.1.0`, display
+  name "Project KB + code map") — draft branched with
+  `base_revision: "1"`, full lifecycle validate → impact → publish
+  (impact: additive, non-breaking, 21 new fields). Revision 1
+  auto-retired on publish; all 47 kb_article entities preserved.
+- **Type `cm_node`** (entity_class `data`), fields: `cm_id` text —
+  identity + required; `cm_kind` text — required; `cm_name` text —
+  required; `cm_path`, `cm_method`, `cm_capability`, `cm_summary`,
+  `cm_detail` text; `cm_sort` integer; `cm_tags` text.
+- **Scalar predicates:** `cm_*` matching the fields (`cm_id` participates
+  in identity → re-runs deduplicate cleanly).
+- **Edge predicates** (domain `cm_node` → range `cm_node`):
+  `cm_contains` (hierarchy), `cm_depends` (build deps), `cm_exposes`
+  (module→route), `cm_maps_to` (MCP tool→route), `cm_calls` (UI/client→
+  route), `cm_uses` (UI composition), `cm_persists` (route/module→table),
+  `cm_defines` (migration→table), `cm_tests` (test→subject);
+  `cm_implements` (cm_node → kb_article) links code to `kb.docs.*` spec
+  digests.
+
+## Nodes written — **475** `cm_node` entities (all `created`, 0 failed)
+
+| cm_kind | count | covers |
+|---|---|---|
+| repo | 1 | `cm.repo` root |
+| app | 3 | enginer-api, enginer-mcp, enginer-worker |
+| crate | 21 | all workspace crates (test-support included) |
+| package | 3 | web/ client, nuxt/ SPA, schema-packages/skr-core |
+| module | 109 | every meaningful .rs file + web endpoints + i18n |
+| route | 105 | every HTTP endpoint incl. health, auth, internal security API |
+| tool | 95 | every MCP tool in apps/mcp/src/tools.rs |
+| table | 43 | every PostgreSQL table (core/meta/sec/ops/audit/integration) |
+| migration | 24 | every migrations/*.sql file |
+| page | 22 | every nuxt/app/pages route |
+| component | 20 | all notable Vue components + shell |
+| composable | 5 | useApi/useAuth/useCapability/useSchemaMutation/useStagedUpload |
+| middleware | 2 | auth + capability guards |
+| test | 19 | Rust/Vitest/Playwright/MCP test suites |
+| config | 2 | docker-compose, enginer.*.toml/Rocket.toml |
+| doc | 1 | AGENTS.md |
+
+## Edges written — **1206** relation rows (+4 KB links)
+
+| predicate | count | example |
+|---|---|---|
+| cm_contains | 306 | app.api → mod.api.entity_pg |
+| cm_persists | 257 | route.post.api.v1.entities → core.statement |
+| cm_calls | 198 | page.entities.id → GET /entities/{id} |
+| cm_exposes | 105 | mod.api.skr_pg → GET /checks |
+| cm_maps_to | 95 | tool.entities.create → POST /entities |
+| cm_depends | 77 | app.api → crate.domain (Cargo.toml) |
+| cm_implements | 67 | crate.query-engine → kb.docs.07 |
+| cm_defines | 43 | mig.20260803000008 → core.statement |
+| cm_tests | 37 | test.api-pg → app.api |
+| cm_uses | 21 | page.entities.id → cmp.GraphView |
+
+Plus `kb.onboarding`/`kb.self`/`kb.docs.index` → `kb.codemap`
+(kb_related) and `cm.repo` —cm_implements→ `kb.codemap`.
+
+## Verification (MCP only)
+
+|| Check | Result |
+|---|---|
+|| `entities.query` per cm_kind (paginated) | all 475 accounted (table above) |
+|| `entities.get` app.api / crate.domain / route.post…entities / tool.entities.query | all ok |
+|| `entities.graph` from `app.api` depth=2 both | **320 nodes, 486 edges** — connected map |
+|| `entities.query` cm_path=`/api/v1/entities` | GET+POST route nodes + both MCP tools, with caps |
+|| `entities.query` cm_capability=`schema.publish` | publish+retire routes and both MCP tools |
+|| `relations.list` route → outgoing | cm_persists edges to real tables |
+
+Notes:
+- `entities.list` caps `limit` at 200; use `entities.query` with
+  `page:{size:500, after:<cursor>}` to enumerate the whole map.
+- `kb.codemap` (category `codemap`, public_id
+  `01a1517e-3772-7e32-bedf-5654fbc12757`) documents the schema and gives
+  8 ready-made queries (route lookup, tool→route, route→tables,
+  page→calls, capability scan, reverse deps, graph traversal,
+  crate→spec).
+- Re-running `codemap_provision.py` is safe: `cm_id` identity dedups
+  (`outcome: deduplicated`), duplicate relations return 409 which the
+  driver counts as already-existing.
