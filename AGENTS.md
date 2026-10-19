@@ -857,6 +857,11 @@ MCP-level fallback; keep both in mind when touching
 - Requires `ENGINER_DUMP_DATABASE_URL` (superuser/BYPASSRLS DSN) —
   set on the api container in docker-compose; dumps land in the
   `dump-data` volume. Never expose that DSN through the API.
+- Dump parts are xz-compressed at `9 | PRESET_EXTREME` (xz -9e) via
+  `liblzma` — maintained fork vendoring XZ Utils 5.8.x (post-backdoor
+  upstream; the March-2024 backdoor shipped only in 5.6.0/5.6.1
+  tarballs). Import auto-detects `.xz` and falls back to legacy plain
+  `.ndjson`; `manifest.json` stays uncompressed.
 - MCP parity: `admin.dump_run`, `admin.dump_list`, `admin.dump_delete`.
 - Nuxt: `/admin/dump` page (card on /admin, capability
   `security.manage`); the `/api/v1` nitro proxy streams response bodies

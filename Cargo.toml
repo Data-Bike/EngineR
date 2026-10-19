@@ -67,7 +67,6 @@ enginer-files = { path = "crates/files" }
 enginer-reporting = { path = "crates/reporting" }
 enginer-security = { path = "crates/security" }
 enginer-audit-persistence = { path = "crates/audit-persistence" }
-enginer-integration = { path = "crates/integration" }
 enginer-test-support = { path = "crates/test-support" }
 
 # Async / web.
@@ -99,7 +98,6 @@ blake2 = "0.10"
 sha2 = "0.10"
 base64ct = { version = "1.6", features = ["alloc"] }
 argon2 = "0.5"
-subtle = "2"
 hex = "0.4"
 
 # Errors / logging.
@@ -113,7 +111,6 @@ toml = "0.8"
 # Dev.
 proptest = "1"
 pretty_assertions = "1"
-tempfile = "3"
 
 [profile.dev]
 debug = 1

@@ -22,6 +22,7 @@ chrono.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+liblzma = { version = "0.4.9", default-features = false, features = ["static"] }
 
 [lints]
 workspace = true

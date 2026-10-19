@@ -20,6 +20,10 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 const PART_FILES: &[&str] = &[
+    "01_schema.ndjson.xz",
+    "02_data.ndjson.xz",
+    "03_system.ndjson.xz",
+    // Legacy uncompressed layout from before xz was introduced.
     "01_schema.ndjson",
     "02_data.ndjson",
     "03_system.ndjson",

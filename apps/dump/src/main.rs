@@ -8,14 +8,21 @@
 //! databases.
 //!
 //! Layout (mirrors the normative split):
-//!   `01_schema.ndjson`  — meta.* : object types, predicates, identity
+//!   `01_schema.ndjson.xz` — meta.* : object types, predicates, identity
 //!                       policies, schema revisions, reference data.
-//!   `02_data.ndjson`    — core.* : entities, statements (object graph
+//!   `02_data.ndjson.xz` — core.* : entities, statements (object graph
 //!                       edges), files, workflow/domain instances.
-//!   `03_system.ndjson`  — sec/ops/audit/integration/report : users,
+//!   `03_system.ndjson.xz` — sec/ops/audit/integration/report : users,
 //!                       credentials, roles/policies, sessions, outbox,
 //!                       audit chain, connectors — everything else.
-//!   manifest.json     — format version, counts, table->file map.
+//!   manifest.json     — format version, counts, table->file map
+//!                       (uncompressed for inspectability).
+//!
+//! Parts are xz-compressed at level `9 | PRESET_EXTREME` (equivalent to
+//! `xz -9e`) via `liblzma` — the maintained fork vendoring XZ Utils
+//! 5.8.x, i.e. a post-backdoor upstream (the March-2024 backdoor only
+//! shipped in the 5.6.0/5.6.1 tarballs). Import auto-detects `.xz` and
+//! falls back to plain `.ndjson` for backward compatibility.
 //!
 //! Tables are discovered at runtime from `information_schema` and routed
 //! by schema, so new migrations are picked up automatically — keep the
@@ -36,14 +43,17 @@ use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::PathBuf;
 
 use futures::StreamExt;
+use liblzma::read::XzDecoder;
+use liblzma::stream::PRESET_EXTREME;
+use liblzma::write::XzEncoder;
 use serde_json::{json, Value};
 use sqlx::postgres::PgConnection;
 use sqlx::{Connection, Row};
 
 const FORMAT: &str = "enginer-dump/1";
-const FILE_SCHEMA: &str = "01_schema.ndjson";
-const FILE_DATA: &str = "02_data.ndjson";
-const FILE_SYSTEM: &str = "03_system.ndjson";
+const FILE_SCHEMA: &str = "01_schema.ndjson.xz";
+const FILE_DATA: &str = "02_data.ndjson.xz";
+const FILE_SYSTEM: &str = "03_system.ndjson.xz";
 const FILE_MANIFEST: &str = "manifest.json";
 const DEFAULT_BATCH: usize = 500;
 
@@ -151,7 +161,7 @@ async fn list_tables(conn: &mut PgConnection) -> Result<Vec<(String, String)>, D
 
 async fn export_table(
     conn: &mut PgConnection,
-    w: &mut BufWriter<std::fs::File>,
+    w: &mut dyn Write,
     schema: &str,
     table: &str,
 ) -> Result<u64, DynError> {
@@ -185,7 +195,7 @@ async fn export_table(
 /// `last_value/is_called` instead of guessing from MAX(column).
 async fn export_sequences(
     conn: &mut PgConnection,
-    w: &mut BufWriter<std::fs::File>,
+    w: &mut dyn Write,
     schema: &str,
 ) -> Result<u64, DynError> {
     let names: Vec<String> = sqlx::query_scalar(
@@ -237,15 +247,19 @@ async fn run_export(cli: &Cli) -> Result<(), DynError> {
     let tables = list_tables(&mut conn).await?;
     tracing::info!(tables = tables.len(), "tables discovered");
 
-    let mut writers: BTreeMap<&'static str, BufWriter<std::fs::File>> = BTreeMap::new();
+    let mut writers: BTreeMap<&'static str, XzEncoder<BufWriter<std::fs::File>>> = BTreeMap::new();
     let mut manifest_files: BTreeMap<String, Value> = BTreeMap::new();
     let mut table_map: BTreeMap<String, String> = BTreeMap::new();
 
     for f in [FILE_SCHEMA, FILE_DATA, FILE_SYSTEM] {
         let path = cli.dir.join(f);
+        // xz -9e equivalent — maximal compression for long-term storage.
         writers.insert(
             f,
-            BufWriter::with_capacity(1 << 20, std::fs::File::create(&path)?),
+            XzEncoder::new(
+                BufWriter::with_capacity(1 << 20, std::fs::File::create(&path)?),
+                9 | PRESET_EXTREME,
+            ),
         );
     }
 
@@ -279,8 +293,10 @@ async fn run_export(cli: &Cli) -> Result<(), DynError> {
         entry["rows"] = json!(entry["rows"].as_u64().unwrap_or(0) + n);
     }
 
-    for w in writers.values_mut() {
-        w.flush()?;
+    for w in writers.into_values() {
+        // finish() writes the xz stream footer (index + CRC64) — without
+        // it the file is not a valid .xz container.
+        w.finish()?;
     }
     sqlx::query("COMMIT").execute(&mut conn).await?;
 
@@ -413,20 +429,37 @@ impl Importer<'_> {
 }
 
 async fn import_file(cli: &Cli, imp: &mut Importer<'_>, name: &str) -> Result<u64, DynError> {
-    let path = cli.dir.join(name);
-    if !path.exists() {
+    // Prefer the compressed part; fall back to the pre-xz plain layout
+    // ("01_schema.ndjson") so older dumps still restore.
+    let plain = name.strip_suffix(".xz").unwrap_or(name);
+    let (path, xz) = if cli.dir.join(name).exists() {
+        (cli.dir.join(name), true)
+    } else if cli.dir.join(plain).exists() {
+        (cli.dir.join(plain), false)
+    } else {
         tracing::warn!(file = name, "dump part missing — skipped");
         return Ok(0);
-    }
+    };
     let file = std::fs::File::open(&path)?;
-    let reader = BufReader::with_capacity(1 << 20, file);
     let mut n = 0u64;
-    for line in reader.lines() {
-        let line = line?;
+    // read::XzDecoder implements Read, not BufRead — buffer on top so the
+    // decompressor is fed large chunks instead of per-line reads.
+    let mut reader: Box<dyn BufRead> = if xz {
+        Box::new(BufReader::with_capacity(1 << 20, XzDecoder::new(file)))
+    } else {
+        Box::new(BufReader::with_capacity(1 << 20, file))
+    };
+    let mut line = String::new();
+    loop {
+        line.clear();
+        if reader.read_line(&mut line)? == 0 {
+            break;
+        }
+        let line = line.trim_end();
         if line.is_empty() {
             continue;
         }
-        let mut v: Value = serde_json::from_str(&line)?;
+        let mut v: Value = serde_json::from_str(line)?;
         let table = v["table"].as_str().unwrap_or("").to_string();
         // take() moves the row out without cloning — the row can be a
         // multi-KB statement object.
