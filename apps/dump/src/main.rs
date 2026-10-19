@@ -21,6 +21,9 @@
 //! by schema, so new migrations are picked up automatically — keep the
 //! SCHEMA_* grouping in sync when adding a new schema.
 //!
+//! Export runs inside a single `REPEATABLE READ READ ONLY` transaction —
+//! the dump is one consistent snapshot even while the source is written.
+//!
 //! Usage:
 //!   enginer-dump export --dsn <url> --dir <`out_dir`>
 //!   enginer-dump import --dsn <url> --dir <`dump_dir`> [--batch 500]
@@ -98,8 +101,12 @@ fn parse_cli() -> Cli {
             "--batch" => {
                 batch = args
                     .next()
-                    .and_then(|v| v.parse().ok())
-                    .unwrap_or(DEFAULT_BATCH);
+                    .and_then(|v| v.parse::<usize>().ok())
+                    .filter(|n| *n > 0)
+                    .unwrap_or_else(|| {
+                        eprintln!("error: --batch must be a positive integer");
+                        usage();
+                    });
             }
             _ => usage(),
         }
@@ -112,16 +119,19 @@ fn parse_cli() -> Cli {
         eprintln!("error: --dir required");
         usage();
     };
-    Cli { command, dsn, dir, batch }
+    Cli {
+        command,
+        dsn,
+        dir,
+        batch,
+    }
 }
 
 fn qident(s: impl AsRef<str>) -> String {
     format!("\"{}\"", s.as_ref().replace('"', "\"\""))
 }
 
-async fn list_tables(
-    conn: &mut PgConnection,
-) -> Result<Vec<(String, String)>, DynError> {
+async fn list_tables(conn: &mut PgConnection) -> Result<Vec<(String, String)>, DynError> {
     let rows = sqlx::query(
         "SELECT table_schema::text, table_name::text \
          FROM information_schema.tables \
@@ -150,17 +160,16 @@ async fn export_table(
         qident(schema),
         qident(table)
     );
-    let mut stream =
-        sqlx::query_scalar::<_, serde_json::Value>(&sql).fetch(&mut *conn);
+    let mut stream = sqlx::query_scalar::<_, serde_json::Value>(&sql).fetch(&mut *conn);
+    // Precompute the line envelope once — building a json!{} object and a
+    // format!() string per row would double allocations at scale.
+    let prefix = format!("{{\"table\":\"{schema}.{table}\",\"row\":");
     let mut n = 0u64;
     while let Some(row) = stream.next().await {
         let row = row?;
-        let line = json!({
-            "table": format!("{schema}.{table}"),
-            "row": row,
-        });
-        w.write_all(serde_json::to_string(&line)?.as_bytes())?;
-        w.write_all(b"\n")?;
+        w.write_all(prefix.as_bytes())?;
+        serde_json::to_writer(&mut *w, &row)?;
+        w.write_all(b"}\n")?;
         n += 1;
         if n % 100_000 == 0 {
             w.flush()?;
@@ -179,24 +188,32 @@ async fn export_sequences(
     w: &mut BufWriter<std::fs::File>,
     schema: &str,
 ) -> Result<u64, DynError> {
-    let mut stream = sqlx::query(
-        "SELECT sequencename::text, last_value, cycle FROM pg_sequences \
-         WHERE schemaname = $1 ORDER BY sequencename",
+    let names: Vec<String> = sqlx::query_scalar(
+        "SELECT c.relname::text FROM pg_class c \
+         JOIN pg_namespace n ON n.oid = c.relnamespace \
+         WHERE n.nspname = $1 AND c.relkind = 'S' ORDER BY c.relname",
     )
     .bind(schema)
-    .fetch(&mut *conn);
+    .fetch_all(&mut *conn)
+    .await?;
     let mut n = 0u64;
-    while let Some(r) = stream.next().await {
-        let r = r?;
-        let last: Option<i64> = r.get("last_value");
+    for seq in names {
+        // Read (last_value, is_called) straight from the sequence
+        // relation — pg_sequences loses the is_called flag, so a
+        // setval(v,false) state would restore off-by-one otherwise.
+        let row = sqlx::query(&format!(
+            "SELECT last_value, is_called FROM {}.{}",
+            qident(schema),
+            qident(&seq)
+        ))
+        .fetch_one(&mut *conn)
+        .await?;
         let line = json!({
             "table": "_sequences",
             "row": {
-                "name": format!("{}.{}", schema,
-                                r.get::<String, _>("sequencename")),
-                // last_value NULL <=> is_called = false
-                "last_value": last,
-                "is_called": last.is_some(),
+                "name": format!("{schema}.{seq}"),
+                "last_value": row.get::<i64, _>("last_value"),
+                "is_called": row.get::<bool, _>("is_called"),
             },
         });
         w.write_all(serde_json::to_string(&line)?.as_bytes())?;
@@ -209,31 +226,39 @@ async fn export_sequences(
 async fn run_export(cli: &Cli) -> Result<(), DynError> {
     std::fs::create_dir_all(&cli.dir)?;
     let mut conn = PgConnection::connect(&cli.dsn).await?;
+    // Consistent snapshot: without this, each table streams at its own
+    // commit point and a concurrent writer could produce a dump whose
+    // rows violate FK relationships between tables. REPEATABLE READ
+    // holds one snapshot for the whole export; READ ONLY keeps us from
+    // accidentally mutating the source.
+    sqlx::query("BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY")
+        .execute(&mut conn)
+        .await?;
     let tables = list_tables(&mut conn).await?;
     tracing::info!(tables = tables.len(), "tables discovered");
 
-    let mut writers: BTreeMap<&'static str, BufWriter<std::fs::File>> =
-        BTreeMap::new();
+    let mut writers: BTreeMap<&'static str, BufWriter<std::fs::File>> = BTreeMap::new();
     let mut manifest_files: BTreeMap<String, Value> = BTreeMap::new();
     let mut table_map: BTreeMap<String, String> = BTreeMap::new();
 
     for f in [FILE_SCHEMA, FILE_DATA, FILE_SYSTEM] {
         let path = cli.dir.join(f);
-        writers.insert(f, BufWriter::new(std::fs::File::create(&path)?));
+        writers.insert(
+            f,
+            BufWriter::with_capacity(1 << 20, std::fs::File::create(&path)?),
+        );
     }
 
     for (schema, table) in &tables {
         let f = part_for(schema);
         let fq = format!("{schema}.{table}");
         tracing::info!(table = %fq, file = f, "exporting");
-        let n = export_table(&mut conn, writers.get_mut(f).unwrap(), schema, table)
-            .await?;
+        let n = export_table(&mut conn, writers.get_mut(f).unwrap(), schema, table).await?;
         table_map.insert(fq.clone(), f.to_string());
         let entry = manifest_files
             .entry(f.to_string())
             .or_insert_with(|| json!({"rows": 0, "tables": []}));
-        entry["rows"] =
-            json!(entry["rows"].as_u64().unwrap_or(0) + n);
+        entry["rows"] = json!(entry["rows"].as_u64().unwrap_or(0) + n);
         entry["tables"]
             .as_array_mut()
             .unwrap()
@@ -245,15 +270,19 @@ async fn run_export(cli: &Cli) -> Result<(), DynError> {
     // them after the table rows.
     for schema in SCHEMAS {
         let f = part_for(schema);
-        let n = export_sequences(&mut conn, writers.get_mut(f).unwrap(), schema)
-            .await?;
-        let entry = manifest_files.get_mut(f).unwrap();
+        let n = export_sequences(&mut conn, writers.get_mut(f).unwrap(), schema).await?;
+        // or_insert_with: a schema may own sequences but zero tables
+        // (e.g. an empty `report` schema) — entry must exist regardless.
+        let entry = manifest_files
+            .entry(f.to_string())
+            .or_insert_with(|| json!({"rows": 0, "tables": []}));
         entry["rows"] = json!(entry["rows"].as_u64().unwrap_or(0) + n);
     }
 
     for w in writers.values_mut() {
         w.flush()?;
     }
+    sqlx::query("COMMIT").execute(&mut conn).await?;
 
     let manifest = json!({
         "format": FORMAT,
@@ -278,7 +307,7 @@ struct Importer<'a> {
     batch: usize,
     buf_table: Option<String>,
     buf: Vec<Value>,
-    inserted: u64,
+    rows_read: u64,
 }
 
 impl Importer<'_> {
@@ -309,8 +338,7 @@ impl Importer<'_> {
                     continue;
                 }
                 match row["last_value"].as_i64() {
-                    Some(v) => sqlx::query(
-                        "SELECT setval($1::text::regclass, $2, $3)")
+                    Some(v) => sqlx::query("SELECT setval($1::text::regclass, $2, $3)")
                         .bind(name.to_string())
                         .bind(v)
                         .bind(row["is_called"].as_bool().unwrap_or(true))
@@ -318,8 +346,7 @@ impl Importer<'_> {
                         .await
                         .map(|_| ())?,
                     // never called: setval(1, is_called=false)
-                    None => sqlx::query(
-                        "SELECT setval($1::text::regclass, 1, false)")
+                    None => sqlx::query("SELECT setval($1::text::regclass, 1, false)")
                         .bind(name.to_string())
                         .execute(&mut *self.conn)
                         .await
@@ -351,11 +378,7 @@ impl Importer<'_> {
     }
 }
 
-async fn import_file(
-    cli: &Cli,
-    imp: &mut Importer<'_>,
-    name: &str,
-) -> Result<u64, DynError> {
+async fn import_file(cli: &Cli, imp: &mut Importer<'_>, name: &str) -> Result<u64, DynError> {
     let path = cli.dir.join(name);
     if !path.exists() {
         tracing::warn!(file = name, "dump part missing — skipped");
@@ -369,9 +392,11 @@ async fn import_file(
         if line.is_empty() {
             continue;
         }
-        let v: Value = serde_json::from_str(&line)?;
+        let mut v: Value = serde_json::from_str(&line)?;
         let table = v["table"].as_str().unwrap_or("").to_string();
-        imp.push(&table, v["row"].clone()).await?;
+        // take() moves the row out without cloning — the row can be a
+        // multi-KB statement object.
+        imp.push(&table, v["row"].take()).await?;
         n += 1;
         if n % 100_000 == 0 {
             tracing::info!(file = name, rows = n, "import progress");
@@ -383,12 +408,12 @@ async fn import_file(
 async fn run_import(cli: &Cli) -> Result<(), DynError> {
     let manifest_path = cli.dir.join(FILE_MANIFEST);
     if manifest_path.exists() {
-        let m: Value = serde_json::from_str(&std::fs::read_to_string(
-            manifest_path,
-        )?)?;
+        let m: Value = serde_json::from_str(&std::fs::read_to_string(manifest_path)?)?;
         if m["format"].as_str() != Some(FORMAT) {
             tracing::warn!(format = %m["format"], "manifest format mismatch — continuing anyway");
         }
+    } else {
+        tracing::warn!("no manifest.json in dump dir — format unchecked");
     }
 
     let mut conn = PgConnection::connect(&cli.dsn).await?;
@@ -399,8 +424,10 @@ async fn run_import(cli: &Cli) -> Result<(), DynError> {
         .execute(&mut conn)
         .await
     {
-        tracing::warn!("could not disable triggers ({e}) — \
-                        continuing with constraint checks on");
+        tracing::warn!(
+            "could not disable triggers ({e}) — \
+                        continuing with constraint checks on"
+        );
     }
 
     let mut imp = Importer {
@@ -408,15 +435,15 @@ async fn run_import(cli: &Cli) -> Result<(), DynError> {
         batch: cli.batch,
         buf_table: None,
         buf: Vec::with_capacity(cli.batch),
-        inserted: 0,
+        rows_read: 0,
     };
     for f in [FILE_SCHEMA, FILE_DATA, FILE_SYSTEM] {
         let n = import_file(cli, &mut imp, f).await?;
-        imp.inserted += n;
+        imp.rows_read += n;
         tracing::info!(file = f, rows = n, "imported");
     }
     imp.flush().await?;
-    tracing::info!(rows = imp.inserted, "import complete");
+    tracing::info!(rows = imp.rows_read, "import complete");
     Ok(())
 }
 
