@@ -69,13 +69,19 @@ impl McpState {
             .bearer_auth(token)
             .send()
             .await;
-        let ctx = match res {
-            Ok(r) if r.status().is_success() => r
-                .json::<Value>()
+        let Ok(res) = res else {
+            // Transport failure — not a verdict on the token. Caching `None`
+            // here would mark every token invalid for the TTL during an API
+            // blip, so bail without touching the cache.
+            return None;
+        };
+        let ctx = if res.status().is_success() {
+            res.json::<Value>()
                 .await
                 .ok()
-                .and_then(|env| env.get("data").cloned()),
-            _ => None,
+                .and_then(|env| env.get("data").cloned())
+        } else {
+            None
         };
         {
             let mut cache = self.contexts.lock().unwrap();
@@ -407,4 +413,139 @@ pub async fn handle_rpc(state: &McpState, token: &str, ctx: &Value, msg: &Value)
             ))
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// HTTP layer — Rocket routes. Kept in the library so integration tests can
+// mount the exact production route set; `main.rs` only wires config + launch.
+// ---------------------------------------------------------------------------
+
+use rocket::http::{ContentType, Status};
+use rocket::serde::json::Json;
+use rocket::{delete, get, post, routes, State};
+
+/// Extracted `Bearer` token (any value — validation happens against the API).
+struct Bearer(String);
+
+#[rocket::async_trait]
+impl<'r> rocket::request::FromRequest<'r> for Bearer {
+    type Error = &'static str;
+
+    async fn from_request(
+        req: &'r rocket::request::Request<'_>,
+    ) -> rocket::request::Outcome<Self, Self::Error> {
+        match req
+            .headers()
+            .get_one("authorization")
+            .and_then(|h| h.strip_prefix("Bearer "))
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+        {
+            Some(t) => rocket::request::Outcome::Success(Bearer(t.to_string())),
+            None => rocket::request::Outcome::Error((Status::Unauthorized, "missing bearer token")),
+        }
+    }
+}
+
+/// MCP responses: JSON-RPC results carry a body; notifications are acked
+/// with bare 202 (no message body, per the streamable-HTTP spec).
+#[derive(rocket::response::Responder)]
+enum McpResponse {
+    #[response(status = 200, content_type = "json")]
+    Json(Json<Value>),
+    #[response(status = 202)]
+    Accepted(()),
+    #[response(status = 401, content_type = "json")]
+    Unauthorized(Json<Value>),
+}
+
+#[post("/mcp", data = "<body>")]
+async fn mcp_post(
+    state: &State<McpState>,
+    bearer: Bearer,
+    body: Json<Value>,
+) -> Result<McpResponse, Status> {
+    let Some(ctx) = state.validate_token(&bearer.0).await else {
+        return Ok(McpResponse::Unauthorized(Json(json!({
+            "jsonrpc": "2.0",
+            "id": null,
+            "error": { "code": -32001, "message": "invalid or expired API token" },
+        }))));
+    };
+    let msg = body.into_inner();
+    // Batch requests are supported: array in → array out.
+    if let Value::Array(items) = msg {
+        // JSON-RPC: an empty batch is an Invalid Request, and an
+        // unbounded batch is a resource drain — cap it.
+        if items.is_empty() || items.len() > 128 {
+            return Ok(McpResponse::Json(Json(json!({
+                "jsonrpc": "2.0", "id": null,
+                "error": { "code": -32600, "message": "invalid batch (empty or >128 messages)" },
+            }))));
+        }
+        let mut out = Vec::new();
+        for m in items {
+            if let Some(r) = handle_rpc(state, &bearer.0, &ctx, &m).await {
+                out.push(r);
+            }
+        }
+        if out.is_empty() {
+            return Ok(McpResponse::Accepted(()));
+        }
+        return Ok(McpResponse::Json(Json(Value::Array(out))));
+    }
+    match handle_rpc(state, &bearer.0, &ctx, &msg).await {
+        Some(res) => Ok(McpResponse::Json(Json(res))),
+        None => Ok(McpResponse::Accepted(())),
+    }
+}
+
+#[get("/mcp")]
+fn mcp_get() -> Status {
+    // Server-initiated SSE streams are not implemented.
+    Status::MethodNotAllowed
+}
+
+#[delete("/mcp")]
+fn mcp_delete() -> Status {
+    // Stateless — nothing to tear down.
+    Status::Ok
+}
+
+/// Markdown doc vs. auth rejection for `GET /agent-tool.md`.
+#[derive(rocket::response::Responder)]
+enum AgentDocResponse {
+    #[response(status = 200)]
+    Markdown((ContentType, String)),
+    #[response(status = 401, content_type = "json")]
+    Unauthorized(Json<Value>),
+}
+
+/// `GET /agent-tool.md` — the SKILL.md an agent reads before driving this
+/// server. Any valid token suffices: it is documentation, not domain data.
+#[get("/agent-tool.md")]
+async fn agent_tool_md(state: &State<McpState>, bearer: Bearer) -> AgentDocResponse {
+    if state.validate_token(&bearer.0).await.is_none() {
+        return AgentDocResponse::Unauthorized(Json(json!({
+            "error": "invalid or expired API token"
+        })));
+    }
+    AgentDocResponse::Markdown((
+        ContentType::parse_flexible("text/markdown; charset=utf-8").expect("valid media type"),
+        AGENT_TOOL_MD.to_string(),
+    ))
+}
+
+#[get("/health")]
+fn health() -> Json<Value> {
+    Json(json!({ "status": "ok" }))
+}
+
+/// Build the Rocket instance with every MCP route mounted. `main` supplies
+/// the configured state; tests supply one pointing at a stubbed API.
+pub fn rocket(state: McpState) -> rocket::Rocket<rocket::Build> {
+    rocket::build().manage(state).mount(
+        "/",
+        routes![mcp_post, mcp_get, mcp_delete, agent_tool_md, health],
+    )
 }
