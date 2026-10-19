@@ -678,6 +678,7 @@ dependencies = [
  "enginer-contracts",
  "enginer-db-runtime",
  "enginer-domain",
+ "enginer-dump",
  "enginer-files",
  "enginer-identity",
  "enginer-observability",

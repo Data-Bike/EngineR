@@ -1,11 +1,12 @@
-//! Database dump administration (export side of `apps/dump`).
+//! Database dump administration (export side of `enginer-dump`).
 //!
-//! `POST /admin/dump` spawns `enginer-dump export` into
-//! `ENGINER_DUMP_DIR/<dump_id>/`, tracked by a `status.json` marker.
-//! `GET /admin/dump` lists runs; `GET /admin/dump/<id>/<file>` streams a
-//! part file; `DELETE /admin/dump/<id>` removes a finished run.
+//! `POST /admin/dump` runs `enginer_dump::export` in-process on a
+//! dedicated thread into `ENGINER_DUMP_DIR/<dump_id>/`, tracked by a
+//! `status.json` marker. `GET /admin/dump` lists runs;
+//! `GET /admin/dump/<id>/<file>` streams a part file;
+//! `DELETE /admin/dump/<id>` removes a finished run.
 //!
-//! The binary connects with `ENGINER_DUMP_DATABASE_URL` — a superuser /
+//! The export connects with `ENGINER_DUMP_DATABASE_URL` — a superuser /
 //! BYPASSRLS DSN (dumps span every tenant and contain credential hashes).
 //! That DSN is never exposed through the API. Gated by `security.manage`.
 //! Restore stays CLI-only: replaying a dump can overwrite production data.
@@ -34,10 +35,6 @@ const PART_FILES: &[&str] = &[
 
 fn dump_root() -> PathBuf {
     std::env::var("ENGINER_DUMP_DIR").map_or_else(|_| PathBuf::from("./dumps"), PathBuf::from)
-}
-
-fn dump_bin() -> String {
-    std::env::var("ENGINER_DUMP_BIN").unwrap_or_else(|_| "enginer-dump".into())
 }
 
 fn valid_dump_id(id: &str) -> bool {
@@ -110,43 +107,33 @@ pub fn run_dump(cap: CapabilityGuard) -> Result<Json<ApiEnvelope<Value>>, Status
     let dir = dump_root().join(&dump_id);
     std::fs::create_dir_all(&dir).map_err(|_| Status::InternalServerError)?;
     let log_path = dir.join("export.log");
-    let log_file = std::fs::File::create(&log_path).map_err(|_| Status::InternalServerError)?;
-    let log_err = log_file
-        .try_clone()
-        .map_err(|_| Status::InternalServerError)?;
+    std::fs::File::create(&log_path).map_err(|_| Status::InternalServerError)?;
 
-    let mut child = match std::process::Command::new(dump_bin())
-        .arg("export")
-        .arg("--dsn")
-        .arg(&dsn)
-        .arg("--dir")
-        .arg(&dir)
-        .stdout(std::process::Stdio::from(log_file))
-        .stderr(std::process::Stdio::from(log_err))
-        .spawn()
-    {
-        Ok(c) => c,
-        Err(e) => {
-            tracing::warn!("cannot spawn enginer-dump: {e}");
-            let _ = std::fs::remove_dir_all(&dir);
-            return Err(Status::ServiceUnavailable);
-        }
-    };
-
+    // In-process export on a dedicated OS thread: the dump crate uses
+    // async-std/sqlx which has its own global reactor, so block_on here
+    // works independently of Rocket's runtime.
     let status_path = dir.join("status.json");
     std::thread::spawn(move || {
-        let result = match child.wait() {
-            Ok(s) => json!({
-                "status": if s.success() { "done" } else { "failed" },
-                "exit_code": s.code().unwrap_or(-1),
+        let result = match async_std::task::block_on(enginer_dump::export(&dsn, &dir)) {
+            Ok(()) => json!({
+                "status": "done",
+                "exit_code": 0,
                 "finished_at": chrono::Utc::now().to_rfc3339(),
             }),
-            Err(e) => json!({
-                "status": "failed",
-                "exit_code": Value::Null,
-                "error": e.to_string(),
-                "finished_at": chrono::Utc::now().to_rfc3339(),
-            }),
+            Err(e) => {
+                tracing::warn!("dump export failed: {e}");
+                // Mirror the error into export.log — tracing goes to the
+                // API's own log stream, not the dump directory.
+                if let Ok(mut f) = std::fs::OpenOptions::new().append(true).open(&log_path) {
+                    let _ = writeln!(f, "export failed: {e}");
+                }
+                json!({
+                    "status": "failed",
+                    "exit_code": Value::Null,
+                    "error": e.to_string(),
+                    "finished_at": chrono::Utc::now().to_rfc3339(),
+                })
+            }
         };
         if let Ok(mut f) = std::fs::File::create(&status_path) {
             let _ = f.write_all(result.to_string().as_bytes());

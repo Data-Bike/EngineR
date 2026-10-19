@@ -851,9 +851,13 @@ MCP-level fallback; keep both in mind when touching
 - `POST|GET|DELETE /api/v1/admin/dump[/<id>[/<file>]]`
   (`apps/api/src/dump_routes.rs`) — gated by `security.manage`;
   `/admin/dump` is in `dataperm::ADMIN_URL_PREFIXES` (superuser blocked).
-  POST spawns `enginer-dump export` (env `ENGINER_DUMP_BIN`) into
-  `ENGINER_DUMP_DIR/<id>/`, stdout/stderr → `export.log`, completion →
-  `status.json`. One concurrent run (409 if busy). Restore stays CLI-only.
+  POST runs `enginer_dump::export` IN-PROCESS on a dedicated thread
+  (`async_std::task::block_on` — the dump crate's sqlx async-std reactor
+  is independent of Rocket's runtime) into `ENGINER_DUMP_DIR/<id>/`,
+  completion → `status.json`; failures also land in `export.log`.
+  `apps/dump` is lib+bin: the API links `enginer-dump` as a crate, the
+  `enginer-dump` binary remains for CLI export/import (restore).
+  One concurrent run (409 if busy). Restore stays CLI-only.
 - Requires `ENGINER_DUMP_DATABASE_URL` (superuser/BYPASSRLS DSN) —
   set on the api container in docker-compose; dumps land in the
   `dump-data` volume. Never expose that DSN through the API.

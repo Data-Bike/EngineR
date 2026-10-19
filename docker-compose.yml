@@ -45,7 +45,6 @@ services:
       # DB dump export (POST /api/v1/admin/dump spawns /app/enginer-dump).
       # Needs a superuser/BYPASSRLS role — dumps span every tenant.
       ENGINER_DUMP_DATABASE_URL: postgres://enginer_admin:enginer_admin@postgres:5432/enginer
-      ENGINER_DUMP_BIN: /app/enginer-dump
       ENGINER_DUMP_DIR: /app/dumps
       ROCKET_PORT: "8010"
       ROCKET_ADDRESS: "0.0.0.0"
