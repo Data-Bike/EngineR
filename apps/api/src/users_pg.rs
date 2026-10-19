@@ -219,23 +219,97 @@ pub struct UserInput {
     pub email: Option<String>,
 }
 
+/// The value the PDP uses to detect special roles on an effective group:
+/// `COALESCE(NULLIF(special,''), alias)`.
+const SPECIAL_ROLE_SQL: &str =
+    "COALESCE(NULLIF(g.special,''), g.alias) IN ('superadmin','superuser')";
+
+/// Is `caller` an effective member of the `superadmin` preset role
+/// (membership or role-tree inheritance)? Only such principals may assign
+/// or manage special roles / special-role members — otherwise any holder
+/// of `users.manage` could mint itself a superadmin.
+async fn caller_is_superadmin(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    tenant: uuid::Uuid,
+    caller: uuid::Uuid,
+) -> Result<bool, DbError> {
+    let ok: bool = sqlx::query_scalar(
+        "WITH RECURSIVE eff AS (
+             SELECT g.group_id, g.parent_id
+             FROM sec.principal_group_membership m
+             JOIN sec.\"group\" g ON g.group_id = m.group_id
+             WHERE m.tenant_id=$1 AND m.principal_id=$2
+               AND (m.valid_to IS NULL OR m.valid_to >= now())
+               AND (m.valid_from <= now() + interval '120 seconds')
+             UNION
+             SELECT p.group_id, p.parent_id
+             FROM sec.\"group\" p JOIN eff e ON e.parent_id = p.group_id
+             WHERE p.tenant_id=$1
+         )
+         SELECT EXISTS(
+             SELECT 1 FROM eff e JOIN sec.\"group\" g ON g.group_id=e.group_id
+             WHERE COALESCE(NULLIF(g.special,''), g.alias)='superadmin')",
+    )
+    .bind(tenant)
+    .bind(caller)
+    .fetch_one(&mut **tx)
+    .await
+    .map_err(db_err)?;
+    Ok(ok)
+}
+
+/// Is `principal` an effective member of ANY special role
+/// (superadmin/superuser)? Mutating such accounts — status, groups,
+/// password reset, API tokens — is restricted to superadmins.
+async fn principal_is_special(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    tenant: uuid::Uuid,
+    principal: uuid::Uuid,
+) -> Result<bool, DbError> {
+    let flag = format!(
+        "WITH RECURSIVE eff AS (
+             SELECT g.group_id, g.parent_id
+             FROM sec.principal_group_membership m
+             JOIN sec.\"group\" g ON g.group_id = m.group_id
+             WHERE m.tenant_id=$1 AND m.principal_id=$2
+               AND (m.valid_to IS NULL OR m.valid_to >= now())
+               AND (m.valid_from <= now() + interval '120 seconds')
+             UNION
+             SELECT p.group_id, p.parent_id
+             FROM sec.\"group\" p JOIN eff e ON e.parent_id = p.group_id
+             WHERE p.tenant_id=$1
+         )
+         SELECT EXISTS(
+             SELECT 1 FROM eff e JOIN sec.\"group\" g ON g.group_id=e.group_id
+             WHERE {SPECIAL_ROLE_SQL})"
+    );
+    sqlx::query_scalar(&flag)
+        .bind(tenant)
+        .bind(principal)
+        .fetch_one(&mut **tx)
+        .await
+        .map_err(db_err)
+}
+
 async fn resolve_group_ids(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     tenant: uuid::Uuid,
     groups: &[String],
-) -> Result<Vec<uuid::Uuid>, DbError> {
+) -> Result<Vec<(uuid::Uuid, bool)>, DbError> {
+    let sql = format!(
+        "SELECT group_id, {SPECIAL_ROLE_SQL} AS is_special
+         FROM sec.\"group\" g
+         WHERE tenant_id=$1 AND (group_id::text=$2 OR alias=$2)"
+    );
     let mut out = Vec::new();
     for g in groups {
-        let row: Option<(uuid::Uuid,)> = sqlx::query_as(
-            "SELECT group_id FROM sec.\"group\"
-             WHERE tenant_id=$1 AND (group_id::text=$2 OR alias=$2)",
-        )
-        .bind(tenant)
-        .bind(g.trim())
-        .fetch_optional(&mut **tx)
-        .await
-        .map_err(db_err)?;
-        let Some((gid,)) = row else {
+        let row: Option<(uuid::Uuid, bool)> = sqlx::query_as(&sql)
+            .bind(tenant)
+            .bind(g.trim())
+            .fetch_optional(&mut **tx)
+            .await
+            .map_err(db_err)?;
+        let Some(gid) = row else {
             // Unknown role must fail loudly — silently dropping it would
             // mislead the admin about the user's actual grants.
             return Err(http_err(422, "unknown group"));
@@ -250,12 +324,21 @@ async fn set_memberships(
     tenant: uuid::Uuid,
     principal: uuid::Uuid,
     groups: &[String],
+    caller: uuid::Uuid,
 ) -> Result<(), DbError> {
     // Memberships are versioned rows: close those no longer present instead
     // of deleting, so role history stays auditable (valid_to is honored by
     // all effective-membership queries).
     let now = chrono::Utc::now();
-    let gids = resolve_group_ids(tx, tenant, groups).await?;
+    let resolved = resolve_group_ids(tx, tenant, groups).await?;
+    // Assigning a special role is a privilege grant equivalent to becoming
+    // superadmin — restrict it to effective superadmins.
+    if resolved.iter().any(|(_, special)| *special)
+        && !caller_is_superadmin(tx, tenant, caller).await?
+    {
+        return Err(http_err(403, "special roles require superadmin"));
+    }
+    let gids: Vec<uuid::Uuid> = resolved.iter().map(|(id, _)| *id).collect();
     sqlx::query(
         "UPDATE sec.principal_group_membership SET valid_to = $3
          WHERE tenant_id=$1 AND principal_id=$2
@@ -381,7 +464,7 @@ pub async fn create_user(
             .execute(&mut *tx)
             .await
             .map_err(db_err)?;
-            set_memberships(&mut tx, ctx.tenant_id, pid, &body.groups).await?;
+            set_memberships(&mut tx, ctx.tenant_id, pid, &body.groups, ctx.principal_id).await?;
             tx.commit().await.map_err(db_err)?;
             Ok(json!({
                 "principal_id": pid.to_string(),
@@ -579,6 +662,14 @@ pub async fn update_user(
             if exists.is_none() {
                 return Err(http_err(404, "user not found"));
             }
+            // Special-role members (superadmin/superuser) may only be
+            // mutated by an effective superadmin — otherwise `users.manage`
+            // becomes a privilege-escalation path.
+            if principal_is_special(&mut tx, ctx.tenant_id, pid).await?
+                && !caller_is_superadmin(&mut tx, ctx.tenant_id, ctx.principal_id).await?
+            {
+                return Err(http_err(403, "special-role accounts require superadmin"));
+            }
             if let Some(name) = body.get("display_name").and_then(Value::as_str) {
                 if name.trim().is_empty() {
                     return Err(http_err(422, "display_name empty"));
@@ -666,7 +757,7 @@ pub async fn update_user(
                 .map_err(db_err)?;
             }
             if has_groups {
-                set_memberships(&mut tx, ctx.tenant_id, pid, &groups).await?;
+                set_memberships(&mut tx, ctx.tenant_id, pid, &groups, ctx.principal_id).await?;
             }
             tx.commit().await.map_err(db_err)?;
             Ok(json!({ "principal_id": pid.to_string(), "updated": true }))
@@ -698,6 +789,11 @@ pub async fn delete_user(
     let v = exec
         .run(Deadline::in_secs(10), move |pool| async move {
             let mut tx = audit_tx(&pool, &ctx, "users.delete").await?;
+            if principal_is_special(&mut tx, ctx.tenant_id, pid).await?
+                && !caller_is_superadmin(&mut tx, ctx.tenant_id, ctx.principal_id).await?
+            {
+                return Err(http_err(403, "special-role accounts require superadmin"));
+            }
             let changed = sqlx::query(
                 "UPDATE sec.principal SET status='disabled'
                  WHERE tenant_id=$1 AND principal_id=$2",
@@ -963,6 +1059,13 @@ pub async fn create_token(
             if exists.is_none() {
                 return Err(http_err(404, "user not found"));
             }
+            // Minting an API token for a special-role member hands the
+            // caller a superadmin credential — restrict to superadmins.
+            if principal_is_special(&mut tx, ctx.tenant_id, pid).await?
+                && !caller_is_superadmin(&mut tx, ctx.tenant_id, ctx.principal_id).await?
+            {
+                return Err(http_err(403, "special-role accounts require superadmin"));
+            }
             let token_id = uuid::Uuid::now_v7();
             let row: (
                 chrono::DateTime<chrono::Utc>,
@@ -1084,6 +1187,11 @@ pub async fn revoke_token(
     let v = exec
         .run(Deadline::in_secs(10), move |pool| async move {
             let mut tx = audit_tx(&pool, &ctx, "users.token.revoke").await?;
+            if principal_is_special(&mut tx, ctx.tenant_id, pid).await?
+                && !caller_is_superadmin(&mut tx, ctx.tenant_id, ctx.principal_id).await?
+            {
+                return Err(http_err(403, "special-role accounts require superadmin"));
+            }
             let changed = sqlx::query(
                 "UPDATE sec.api_token SET revoked_at=now()
                  WHERE tenant_id=$1 AND principal_id=$2 AND token_id=$3

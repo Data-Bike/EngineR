@@ -37,25 +37,42 @@ impl<'r> rocket::request::FromRequest<'r> for Bearer {
     }
 }
 
+/// MCP responses: JSON-RPC results carry a body; notifications are acked
+/// with bare 202 (no message body, per the streamable-HTTP spec).
+#[derive(rocket::response::Responder)]
+enum McpResponse {
+    #[response(status = 200, content_type = "json")]
+    Json(Json<Value>),
+    #[response(status = 202)]
+    Accepted(()),
+    #[response(status = 401, content_type = "json")]
+    Unauthorized(Json<Value>),
+}
+
 #[post("/mcp", data = "<body>")]
 async fn mcp_post(
     state: &State<McpState>,
     bearer: Bearer,
     body: Json<Value>,
-) -> Result<(Status, Json<Value>), Status> {
+) -> Result<McpResponse, Status> {
     let Some(ctx) = state.validate_token(&bearer.0).await else {
-        return Ok((
-            Status::Unauthorized,
-            Json(serde_json::json!({
-                "jsonrpc": "2.0",
-                "id": null,
-                "error": { "code": -32001, "message": "invalid or expired API token" },
-            })),
-        ));
+        return Ok(McpResponse::Unauthorized(Json(serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": null,
+            "error": { "code": -32001, "message": "invalid or expired API token" },
+        }))));
     };
     let msg = body.into_inner();
     // Batch requests are supported: array in → array out.
     if let Value::Array(items) = msg {
+        // JSON-RPC: an empty batch is an Invalid Request, and an
+        // unbounded batch is a resource drain — cap it.
+        if items.is_empty() || items.len() > 128 {
+            return Ok(McpResponse::Json(Json(serde_json::json!({
+                "jsonrpc": "2.0", "id": null,
+                "error": { "code": -32600, "message": "invalid batch (empty or >128 messages)" },
+            }))));
+        }
         let mut out = Vec::new();
         for m in items {
             if let Some(r) = handle_rpc(state, &bearer.0, &ctx, &m).await {
@@ -63,13 +80,13 @@ async fn mcp_post(
             }
         }
         if out.is_empty() {
-            return Ok((Status::Accepted, Json(Value::Null)));
+            return Ok(McpResponse::Accepted(()));
         }
-        return Ok((Status::Ok, Json(Value::Array(out))));
+        return Ok(McpResponse::Json(Json(Value::Array(out))));
     }
     match handle_rpc(state, &bearer.0, &ctx, &msg).await {
-        Some(res) => Ok((Status::Ok, Json(res))),
-        None => Ok((Status::Accepted, Json(Value::Null))),
+        Some(res) => Ok(McpResponse::Json(Json(res))),
+        None => Ok(McpResponse::Accepted(())),
     }
 }
 

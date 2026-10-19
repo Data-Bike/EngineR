@@ -469,7 +469,10 @@ impl DataPerm {
         if self.superadmin || self.superuser {
             return true;
         }
-        for k in keys {
+        // Deny checks must include the wildcard keys too — a
+        // `deny data.type.<op> {type:"*"}` rule overrides every specific
+        // allow (deny-overrides), not just rules on the same key.
+        for k in keys.iter().chain(["", "*"].iter()) {
             if let Some(s) = self.type_rules.get(*k) {
                 if s.denied(op) {
                     return false;
@@ -502,8 +505,18 @@ impl DataPerm {
         if !self.can_type(type_keys, op) && op == Op::Read {
             return false;
         }
-        // denies win — specific then wildcard
-        for tk in type_keys {
+        // Type-level deny blocks every field op (deny-overrides), not only
+        // reads — previously a `deny data.type.update` could be bypassed
+        // by a field-level or wildcard allow.
+        for tk in type_keys.iter().chain(["", "*"].iter()) {
+            if let Some(s) = self.type_rules.get(*tk) {
+                if s.denied(op) {
+                    return false;
+                }
+            }
+        }
+        // Field denies win — specific type, then wildcard types ("*"/"").
+        for tk in type_keys.iter().chain(["", "*"].iter()) {
             for fk in [field, "*", ""] {
                 if let Some(s) = self.field_rules.get(&(tk.to_string(), fk.to_string())) {
                     if s.denied(op) {
@@ -529,6 +542,18 @@ impl DataPerm {
                 }
             }
         }
+        // A field rule with a wildcard type grants the field on every type.
+        for tk in ["", "*"] {
+            for fk in [field, "*"] {
+                if self
+                    .field_rules
+                    .get(&(tk.to_string(), fk.to_string()))
+                    .is_some_and(|s| s.granted(op))
+                {
+                    return true;
+                }
+            }
+        }
         false
     }
 
@@ -537,11 +562,13 @@ impl DataPerm {
         if self.superadmin || self.superuser {
             return true;
         }
-        !self.all_rules.denied(op)
-            && self
-                .entity_rules
-                .get(public_id)
-                .is_none_or(|s| !s.denied(op))
+        if self.all_rules.denied(op) {
+            return false;
+        }
+        // Wildcard instance rules ("*"/"") deny every instance too.
+        [public_id, "*", ""]
+            .iter()
+            .all(|k| self.entity_rules.get(*k).is_none_or(|s| !s.denied(op)))
     }
 
     /// CRUD on a relation type (predicate) (1.4) — default deny.
@@ -594,11 +621,12 @@ impl DataPerm {
         if self.superadmin || self.superuser {
             return true;
         }
-        !self.all_rules.denied(op)
-            && self
-                .rel_inst_rules
-                .get(relation_id)
-                .is_none_or(|s| !s.denied(op))
+        if self.all_rules.denied(op) {
+            return false;
+        }
+        [relation_id, "*", ""]
+            .iter()
+            .all(|k| self.rel_inst_rules.get(*k).is_none_or(|s| !s.denied(op)))
     }
 
     /// URL access (2.1/2.2): superuser loses admin URL prefixes;
@@ -1077,6 +1105,71 @@ mod tests {
         );
         assert!(p.can_relation_dir("owns", Op::Read, Some(true)));
         assert!(!p.can_relation_dir("owns", Op::Read, Some(false)));
+    }
+
+    #[test]
+    fn wildcard_type_deny_overrides_specific_allow() {
+        // deny data.type.read {type:"*"} must beat allow on a concrete type.
+        let mut p = DataPerm::default();
+        rule(&mut p, "data.type.read", "deny", json!({"type":"*"}));
+        rule(&mut p, "data.type.read", "allow", json!({"type":"person"}));
+        assert!(!p.can_type(&["person"], Op::Read));
+        assert!(!p.can_type(&["other"], Op::Read));
+        // Reads are off, writes still follow their own rules.
+        rule(
+            &mut p,
+            "data.type.update",
+            "allow",
+            json!({"type":"person"}),
+        );
+        assert!(p.can_type(&["person"], Op::Update));
+    }
+
+    #[test]
+    fn type_deny_blocks_field_ops_not_just_read() {
+        // deny data.type.update + allow data.field.update must not write.
+        let mut p = DataPerm::default();
+        rule(&mut p, "data.type.update", "deny", json!({"type":"person"}));
+        rule(
+            &mut p,
+            "data.field.update",
+            "allow",
+            json!({"type":"person","field":"inn"}),
+        );
+        assert!(!p.can_field(&["person"], "inn", Op::Update));
+        // wildcard type deny also blocks fields on any type.
+        let mut p = DataPerm::default();
+        rule(&mut p, "data.type.update", "deny", json!({"type":"*"}));
+        rule(&mut p, "data.*", "allow", json!({}));
+        assert!(!p.can_field(&["person"], "inn", Op::Update));
+    }
+
+    #[test]
+    fn wildcard_field_deny_applies_to_every_type() {
+        let mut p = DataPerm::default();
+        rule(&mut p, "data.type.read", "allow", json!({"type":"person"}));
+        rule(
+            &mut p,
+            "data.field.read",
+            "allow",
+            json!({"type":"person","field":"*"}),
+        );
+        rule(
+            &mut p,
+            "data.field.read",
+            "deny",
+            json!({"type":"*","field":"salary"}),
+        );
+        assert!(!p.can_field(&["person"], "salary", Op::Read));
+        assert!(p.can_field(&["person"], "name", Op::Read));
+    }
+
+    #[test]
+    fn wildcard_entity_deny_hides_every_instance() {
+        let mut p = DataPerm::default();
+        rule(&mut p, "data.entity.read", "deny", json!({"entity":"*"}));
+        assert!(!p.can_entity("e-1", Op::Read));
+        assert!(p.can_entity("e-1", Op::Update)); // op still defaults allow
     }
 
     #[test]

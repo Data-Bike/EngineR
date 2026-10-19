@@ -793,3 +793,30 @@ the dump format, bump `FORMAT`. Python MCP tools
 (`docs/testing/warehouse/dump_all.py` / `restore_dump.py`) remain as an
 MCP-level fallback; keep both in mind when touching
 `entities`/`relations` semantics.
+
+## Security model — special roles & user admin (review 2026-10)
+
+- The PDP detects special roles by `COALESCE(NULLIF(g.special,''),
+  g.alias) IN ('superadmin','superuser')` — a group's ALIAS alone grants
+  the flag. Therefore `permissions.group_create/update` reject the
+  reserved aliases `superadmin`/`superuser` (case-insensitive), and
+  `parent_id` may never point at a special-flagged group (role-tree
+  inheritance would otherwise grant the flag). Real presets are seeded
+  with `sec.group.special` set and are not editable/deletable.
+- `users.manage` mutations against special-role members are gated:
+  only an effective `superadmin` may change status/groups/password of a
+  special-role principal, mint/revoke their API tokens, or delete them
+  (`principal_is_special` / `caller_is_superadmin` in `users_pg.rs`).
+  Assigning a special-role group via `users.create`/`users.update`
+  likewise requires effective superadmin (in `set_memberships`).
+- Caveat (by design): `users.manage` may grant any NON-special role —
+  including ones the caller doesn't hold (`admins` = all capabilities).
+  Treat `users.manage` as a fully trusted capability; the superadmin
+  flag is the tier above it.
+- Login: 5 consecutive failures lock the credential for 15 min
+  (`failed_attempts`/`locked_until` on `sec.principal_credential`); a
+  dummy argon2 verify burns equal time on unknown/locked/disabled
+  logins — no timing oracle.
+- MCP bridge: JSON-RPC notifications (no `id`) are executed but MUST
+  NOT produce a response — the server replies bare HTTP 202 with an
+  empty body (`McpResponse::Accepted`), including error paths.

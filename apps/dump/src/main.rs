@@ -308,6 +308,38 @@ struct Importer<'a> {
     buf_table: Option<String>,
     buf: Vec<Value>,
     rows_read: u64,
+    /// table -> quoted column list (non-generated columns only).
+    /// A future migration adding a `GENERATED ALWAYS AS (expr) STORED`
+    /// column must not break restores: `OVERRIDING SYSTEM VALUE` covers
+    /// identity columns only, so generated columns are excluded from the
+    /// insert list and recomputed by `PostgreSQL`.
+    col_cache: std::collections::HashMap<String, String>,
+}
+
+impl Importer<'_> {
+    /// Insertable columns for `schema.table`, cached per import run.
+    async fn col_list(&mut self, schema: &str, table: &str) -> Result<String, DynError> {
+        let key = format!("{schema}.{table}");
+        if let Some(c) = self.col_cache.get(&key) {
+            return Ok(c.clone());
+        }
+        let cols: Vec<String> = sqlx::query_scalar(
+            "SELECT column_name::text FROM information_schema.columns \
+             WHERE table_schema=$1 AND table_name=$2 \
+               AND is_generated <> 'ALWAYS' \
+             ORDER BY ordinal_position",
+        )
+        .bind(schema)
+        .bind(table)
+        .fetch_all(&mut *self.conn)
+        .await?;
+        if cols.is_empty() {
+            return Err(format!("table {key} not found or has no insertable columns").into());
+        }
+        let list = cols.iter().map(qident).collect::<Vec<_>>().join(",");
+        self.col_cache.insert(key, list.clone());
+        Ok(list)
+    }
 }
 
 impl Importer<'_> {
@@ -361,8 +393,10 @@ impl Importer<'_> {
         // A single jsonb array parameter — one round-trip per batch.
         // Column mapping is derived from the table's composite type, so
         // dumps keep working when migrations add columns.
+        let cols = self.col_list(schema, name).await?;
         let sql = format!(
-            "INSERT INTO {}.{} OVERRIDING SYSTEM VALUE SELECT * FROM \
+            "INSERT INTO {}.{} ({cols}) OVERRIDING SYSTEM VALUE \
+             SELECT {cols} FROM \
              jsonb_populate_recordset(NULL::{}.{}, $1::jsonb) \
              ON CONFLICT DO NOTHING",
             qident(schema),
@@ -436,6 +470,7 @@ async fn run_import(cli: &Cli) -> Result<(), DynError> {
         buf_table: None,
         buf: Vec::with_capacity(cli.batch),
         rows_read: 0,
+        col_cache: std::collections::HashMap::new(),
     };
     for f in [FILE_SCHEMA, FILE_DATA, FILE_SYSTEM] {
         let n = import_file(cli, &mut imp, f).await?;

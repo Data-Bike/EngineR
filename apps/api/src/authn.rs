@@ -130,6 +130,65 @@ pub fn verify_password(phc: &str, password: &str) -> bool {
         .is_ok()
 }
 
+/// A valid argon2id PHC used to burn the same amount of time when the
+/// login does not exist — without it the missing-credential path returns
+/// ~100ms faster and leaks login existence (timing oracle).
+pub const DUMMY_PHC: &str = "$argon2id$v=19$m=19456,t=2,p=1$hGwD26d6YfzJ6ELfX4YzAw$\
+     YdzxNEgp10S+wBa6s0pmUqH0RCaMCV2apCvNJm41Oh0";
+
+/// After this many consecutive failures the credential locks for
+/// `LOGIN_LOCK_MINUTES`. Columns live on `sec.principal_credential`
+/// (outside RLS — the login directory is pre-auth).
+pub const LOGIN_LOCK_THRESHOLD: i32 = 5;
+pub const LOGIN_LOCK_MINUTES: i64 = 15;
+
+/// Increment `failed_attempts`; when the threshold is reached set
+/// `locked_until`. Best-effort — a failed counter write must not change
+/// the auth decision.
+pub async fn record_failed_login(exec: &Arc<AsyncStdDbExecutor>, login: &str) {
+    let login = login.to_string();
+    let _ = exec
+        .run(Deadline::in_secs(5), move |pool| async move {
+            sqlx::query(
+                "UPDATE sec.principal_credential
+                 SET failed_attempts = failed_attempts + 1,
+                     locked_until = CASE
+                         WHEN failed_attempts + 1 >= $2
+                         THEN now() + ($3 || ' minutes')::interval
+                         ELSE locked_until END,
+                     updated_at = now()
+                 WHERE login = $1",
+            )
+            .bind(&login)
+            .bind(LOGIN_LOCK_THRESHOLD)
+            .bind(LOGIN_LOCK_MINUTES)
+            .execute(&pool)
+            .await
+            .map_err(to_db_error)?;
+            Ok(serde_json::json!({ "ok": true }))
+        })
+        .await;
+}
+
+/// Clear the failure counter on a successful login.
+pub async fn reset_failed_logins(exec: &Arc<AsyncStdDbExecutor>, login: &str) {
+    let login = login.to_string();
+    let _ = exec
+        .run(Deadline::in_secs(5), move |pool| async move {
+            sqlx::query(
+                "UPDATE sec.principal_credential
+                 SET failed_attempts = 0, locked_until = NULL, updated_at = now()
+                 WHERE login = $1 AND (failed_attempts > 0 OR locked_until IS NOT NULL)",
+            )
+            .bind(&login)
+            .execute(&pool)
+            .await
+            .map_err(to_db_error)?;
+            Ok(serde_json::json!({ "ok": true }))
+        })
+        .await;
+}
+
 /// Load principal row (active check + display name) under tenant context.
 pub async fn load_principal(
     exec: &Arc<AsyncStdDbExecutor>,

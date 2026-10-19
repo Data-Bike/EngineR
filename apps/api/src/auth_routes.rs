@@ -163,9 +163,13 @@ pub async fn login(
         Err(Status::Unauthorized)
     };
     if cred.is_null() {
+        // Burn an argon2 verify anyway so a missing login takes the same
+        // time as a wrong password — no timing oracle on existence.
+        let _ = authn::verify_password(authn::DUMMY_PHC, &body.password);
         return unauthorized();
     }
     if cred["status"].as_str() != Some("active") {
+        let _ = authn::verify_password(authn::DUMMY_PHC, &body.password);
         return unauthorized();
     }
     if let Some(locked) = cred["locked_until"].as_str() {
@@ -173,13 +177,16 @@ pub async fn login(
             .map(|t| t > chrono::Utc::now())
             .unwrap_or(false)
         {
+            let _ = authn::verify_password(authn::DUMMY_PHC, &body.password);
             return unauthorized();
         }
     }
     let hash = cred["password_hash"].as_str().unwrap_or_default();
     if !authn::verify_password(hash, &body.password) {
+        authn::record_failed_login(&exec, &login_name).await;
         return unauthorized();
     }
+    authn::reset_failed_logins(&exec, &login_name).await;
 
     let tenant: uuid::Uuid = cred["tenant_id"]
         .as_str()
@@ -322,10 +329,11 @@ pub async fn refresh(
             move |pool| async move {
                 let res = sqlx::query(
                     "UPDATE sec.session
-                     SET expires_at = now() + interval '12 hours', last_seen_at = now()
+                     SET expires_at = now() + ($2 || ' hours')::interval, last_seen_at = now()
                      WHERE session_id = $1 AND ended_at IS NULL AND expires_at > now()",
                 )
                 .bind(sid)
+                .bind(SESSION_TTL_HOURS)
                 .execute(&pool)
                 .await
                 .map_err(|e| enginer_db_runtime::DbError::Other {

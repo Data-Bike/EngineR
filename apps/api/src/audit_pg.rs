@@ -755,7 +755,15 @@ fn parse_rule(action: &str, resource: &Value) -> (String, String) {
 }
 
 fn validate_group_input(input: &PermissionGroupInput) -> Result<(), Status> {
-    if input.name.trim().is_empty()
+    // The PDP resolves special roles by `COALESCE(special, alias)`: a group
+    // merely NAMED 'superadmin'/'superuser' grants its members the special
+    // powers, so the aliases are reserved and cannot be created or renamed
+    // into through this endpoint (the real presets are seeded, flagged via
+    // `sec.group.special`, and not editable/deletable).
+    let name = input.name.trim();
+    if name.is_empty()
+        || name.eq_ignore_ascii_case("superadmin")
+        || name.eq_ignore_ascii_case("superuser")
         || !matches!(input.class.as_str(), "capability" | "data")
         || input.rules.iter().any(|rule| {
             !matches!(rule.effect.as_str(), "allow" | "deny")
@@ -767,6 +775,43 @@ fn validate_group_input(input: &PermissionGroupInput) -> Result<(), Status> {
         return Err(Status::UnprocessableEntity);
     }
     Ok(())
+}
+
+/// `parent_id` must reference an existing non-special group in the same
+/// tenant. Inheriting from a special preset role would grant the child (and
+/// every principal under it) superadmin/superuser powers — the flags are
+/// resolved through the parent chain. A missing/cross-tenant parent is a
+/// 422, not a foreign-key 500.
+async fn validate_parent_group(
+    tx: &mut Transaction<'_, Postgres>,
+    tenant: uuid::Uuid,
+    parent: Option<uuid::Uuid>,
+) -> Result<(), DbError> {
+    let Some(pid) = parent else { return Ok(()) };
+    let row: Option<(String, String)> = sqlx::query_as(
+        "SELECT COALESCE(special,''), alias FROM sec.\"group\"
+         WHERE tenant_id=$1 AND group_id=$2",
+    )
+    .bind(tenant)
+    .bind(pid)
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(db)?;
+    match row {
+        None => Err(DbError::Other {
+            message: "HTTP422:parent group not found".into(),
+        }),
+        Some((special, alias))
+            if !special.is_empty()
+                || alias.eq_ignore_ascii_case("superadmin")
+                || alias.eq_ignore_ascii_case("superuser") =>
+        {
+            Err(DbError::Other {
+                message: "HTTP422:cannot inherit from a special role".into(),
+            })
+        }
+        _ => Ok(()),
+    }
 }
 
 async fn load_groups(
@@ -1017,6 +1062,7 @@ pub async fn create_permission_group(
                 .as_deref()
                 .filter(|s| !s.trim().is_empty())
                 .and_then(|s| s.parse().ok());
+            validate_parent_group(&mut tx, ctx.tenant_id, parent).await?;
             sqlx::query(
                 "INSERT INTO sec.\"group\" (group_id, tenant_id, class, alias, description, parent_id)
                  VALUES ($1,$2,$3,$4,$5,$6)",
@@ -1100,6 +1146,7 @@ pub async fn update_permission_group(
                 .as_deref()
                 .filter(|s| !s.trim().is_empty())
                 .and_then(|s| s.parse().ok());
+            validate_parent_group(&mut tx, ctx.tenant_id, parent).await?;
             let changed = sqlx::query(
                 "UPDATE sec.\"group\" SET alias=$3, description=$4, class=$5, parent_id=$6
                  WHERE tenant_id=$1 AND group_id=$2",

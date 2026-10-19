@@ -25,6 +25,9 @@ use tools::ToolDef;
 pub const PROTOCOL_VERSION: &str = "2025-06-18";
 /// How long a validated token context is cached.
 const CONTEXT_CACHE_TTL: Duration = Duration::from_secs(30);
+/// Hard cap on cached token contexts — an unauthenticated client could
+/// otherwise grow the map forever with garbage bearer strings.
+const CONTEXT_CACHE_MAX: usize = 4096;
 
 /// Shared server state.
 pub struct McpState {
@@ -70,10 +73,19 @@ impl McpState {
                 .and_then(|env| env.get("data").cloned()),
             _ => None,
         };
-        self.contexts
-            .lock()
-            .unwrap()
-            .insert(token.to_string(), (Instant::now(), ctx.clone()));
+        {
+            let mut cache = self.contexts.lock().unwrap();
+            if cache.len() >= CONTEXT_CACHE_MAX {
+                // Drop expired entries first; if the map is still full of
+                // fresh (mostly junk) tokens, clear it — the cache is an
+                // optimisation, correctness is unaffected.
+                cache.retain(|_, (at, _)| at.elapsed() < CONTEXT_CACHE_TTL);
+                if cache.len() >= CONTEXT_CACHE_MAX {
+                    cache.clear();
+                }
+            }
+            cache.insert(token.to_string(), (Instant::now(), ctx.clone()));
+        }
         ctx
     }
 
@@ -169,13 +181,14 @@ pub fn prepare_call(api_base: &str, tool: &ToolDef, args: &Value) -> Result<Prep
                         _ => return Err(format!("argument '{}' must be a string", p.name)),
                     };
                     // Path segments are ids/aliases — anything containing
-                    // '/', '..', '?' or '#' could reroute the call to a
-                    // different endpoint after client-side normalization.
+                    // '/', '..', '?', '#' or '%' could reroute the call to
+                    // a different endpoint after decoding/normalisation.
                     if raw.is_empty()
                         || raw.contains('/')
                         || raw.contains("..")
                         || raw.contains('?')
                         || raw.contains('#')
+                        || raw.contains('%')
                     {
                         return Err(format!("invalid path argument '{}'", p.name));
                     }
@@ -296,6 +309,7 @@ pub async fn handle_rpc(state: &McpState, token: &str, ctx: &Value, msg: &Value)
     let is_notification = msg.get("id").is_none();
 
     match method {
+        "initialize" if is_notification => None,
         "initialize" => Some(rpc_result(
             &id,
             json!({
@@ -305,7 +319,9 @@ pub async fn handle_rpc(state: &McpState, token: &str, ctx: &Value, msg: &Value)
                 "instructions": "EngineR MCP bridge. Tools are filtered by the token's capabilities; calls run as the token's principal.",
             }),
         )),
+        "ping" if is_notification => None,
         "ping" => Some(rpc_result(&id, json!({}))),
+        "tools/list" if is_notification => None,
         "tools/list" => {
             let caps: Vec<String> = ctx
                 .get("capabilities")
@@ -327,7 +343,11 @@ pub async fn handle_rpc(state: &McpState, token: &str, ctx: &Value, msg: &Value)
             let name = params.get("name").and_then(Value::as_str).unwrap_or("");
             let args = params.get("arguments").cloned().unwrap_or(json!({}));
             let Some(tool) = tools::TOOLS.iter().find(|t| t.name == name) else {
-                return Some(rpc_error(&id, -32602, &format!("unknown tool '{name}'")));
+                return if is_notification {
+                    None
+                } else {
+                    Some(rpc_error(&id, -32602, &format!("unknown tool '{name}'")))
+                };
             };
             // Pre-flight capability check for a clean error — the API still
             // enforces authoritatively on the proxied call.
@@ -344,14 +364,23 @@ pub async fn handle_rpc(state: &McpState, token: &str, ctx: &Value, msg: &Value)
                 let ok = caps.iter().any(|c| c == cap)
                     || (cap.starts_with("user.") && caps.iter().any(|c| c == "users.manage"));
                 if !ok {
-                    return Some(rpc_error(
-                        &id,
-                        -32602,
-                        &format!("capability '{cap}' not granted to this token"),
-                    ));
+                    return if is_notification {
+                        None
+                    } else {
+                        Some(rpc_error(
+                            &id,
+                            -32602,
+                            &format!("capability '{cap}' not granted to this token"),
+                        ))
+                    };
                 }
             }
             let out = state.call_tool(token, tool, &args).await;
+            // A notification form of tools/call is still executed (the
+            // side effect is requested) but must not produce a reply.
+            if is_notification {
+                return None;
+            }
             let text = serde_json::to_string_pretty(&out.payload)
                 .unwrap_or_else(|_| out.payload.to_string());
             Some(rpc_result(
