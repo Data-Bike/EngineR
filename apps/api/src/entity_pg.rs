@@ -1706,6 +1706,20 @@ pub async fn pg_merge_entity(
 
 // --- Relations (edge statements) ---
 
+/// Accept a full RFC3339 timestamp or a bare `YYYY-MM-DD` date (what an
+/// `input[type=date]` produces). A bare date means "as of that day" —
+/// interpreted as the end of the day UTC so an `as_of` of *today* still
+/// sees relations created earlier today.
+fn parse_as_of(s: &str) -> Option<chrono::DateTime<chrono::Utc>> {
+    if let Ok(dt) = s.parse::<chrono::DateTime<chrono::Utc>>() {
+        return Some(dt);
+    }
+    chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d")
+        .ok()?
+        .and_hms_nano_opt(23, 59, 59, 999_999_999)
+        .map(|dt| dt.and_utc())
+}
+
 #[get("/entities/<public_id>/relations?<direction>&<as_of>")]
 pub async fn pg_get_relations(
     cap: CapabilityGuard,
@@ -1715,9 +1729,8 @@ pub async fn pg_get_relations(
     as_of: Option<String>,
 ) -> Result<Json<ApiEnvelope<Vec<RelationRecord>>>, Status> {
     let as_of = as_of
-        .map(|s| s.parse::<chrono::DateTime<chrono::Utc>>())
-        .transpose()
-        .map_err(|_| Status::UnprocessableEntity)?;
+        .map(|s| parse_as_of(&s).ok_or(Status::UnprocessableEntity))
+        .transpose()?;
     let exec = exec_of(state)?;
     let ctx = cap.ctx.clone();
     let pid: uuid::Uuid = public_id.parse().map_err(|_| Status::NotFound)?;
@@ -2149,6 +2162,11 @@ pub async fn pg_get_entity_graph(
         .and_then(Value::as_str)
         .unwrap_or("ru")
         .to_string();
+    let as_of = req
+        .get("as_of")
+        .and_then(Value::as_str)
+        .map(|s| parse_as_of(s).ok_or(Status::UnprocessableEntity))
+        .transpose()?;
     let pid: uuid::Uuid = public_id.parse().map_err(|_| Status::NotFound)?;
     let v = exec
         .run(Deadline::in_secs(15), move |pool| async move {
@@ -2209,16 +2227,23 @@ pub async fn pg_get_entity_graph(
             };
 
             // All active edges (bounded) — BFS in memory like the UI expects.
-            let edges: Vec<(i64, String, i64, i64)> = sqlx::query_as(
+            // `as_of` narrows to edges whose validity window covers t.
+            let as_of_clause = if as_of.is_some() {
+                " AND s.valid_from <= $2 AND (s.valid_to IS NULL OR s.valid_to > $2)"
+            } else {
+                ""
+            };
+            let edges: Vec<(i64, String, i64, i64)> = sqlx::query_as(&format!(
                 "SELECT s.statement_id, pd.stable_alias, s.subject,
                         (s.object->>'entity_id')::bigint
                  FROM core.statement s
                  JOIN meta.predicate_definition pd
                    ON pd.tenant_id=s.tenant_id AND pd.predicate_id=s.predicate
-                 WHERE s.tenant_id=$1 AND s.object_kind='entity' AND s.status='active'
-                 LIMIT 5000",
-            )
+                 WHERE s.tenant_id=$1 AND s.object_kind='entity' AND s.status='active'{as_of_clause}
+                 LIMIT 5000"
+            ))
             .bind(tenant)
+            .bind(as_of.unwrap_or(chrono::DateTime::<chrono::Utc>::UNIX_EPOCH))
             .fetch_all(&mut *tx)
             .await
             .map_err(db_err)?;
