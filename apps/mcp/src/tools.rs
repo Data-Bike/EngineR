@@ -195,7 +195,7 @@ pub static TOOLS: &[ToolDef] = &[
         params: &[
             ID,
             Param { name: "direction", loc: Q, ty: "string", required: false, desc: "outgoing|incoming|both." },
-            Param { name: "as_of", loc: Q, ty: "string", required: false, desc: "RFC3339 timestamp." },
+            Param { name: "as_of", loc: Q, ty: "string", required: false, desc: "RFC3339 timestamp or YYYY-MM-DD (end of day UTC)." },
         ],
     },
     ToolDef {

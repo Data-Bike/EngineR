@@ -309,14 +309,13 @@ const schemaPredicates = ref<Array<{
   is_edge: boolean;
 }>>([]);
 const schemaTypes = ref<Array<{ id: string; display_name: string }>>([]);
-
-// Display order for well-known relation groups; unknown groups append
-// alphabetically at the end.
-const GROUP_ORDER = ['employment', 'contacts', 'ownership', 'documents', 'workflow', 'general'];
+/** Relation-group registry from the published schema: id → {order, label}. */
+const groupRegistry = ref(new Map<string, { order: number; label: string }>());
 
 function groupLabel(id: string): string {
   const key = `entity.relations.group.${id}`;
-  return te(key) ? t(key) : id;
+  if (te(key)) return t(key);
+  return groupRegistry.value.get(id)?.label || id;
 }
 
 function predicateLabel(alias: string): string {
@@ -545,9 +544,11 @@ async function fetchRelations() {
         sections: Array.from(sections.values()),
       }))
       .sort((a, b) => {
-        const ia = GROUP_ORDER.indexOf(a.id);
-        const ib = GROUP_ORDER.indexOf(b.id);
-        if (ia !== -1 || ib !== -1) return (ia === -1 ? 999 : ia) - (ib === -1 ? 999 : ib);
+        const oa = groupRegistry.value.get(a.id)?.order;
+        const ob = groupRegistry.value.get(b.id)?.order;
+        if (oa !== undefined || ob !== undefined) {
+          return (oa ?? Number.MAX_SAFE_INTEGER) - (ob ?? Number.MAX_SAFE_INTEGER);
+        }
         return a.label.localeCompare(b.label);
       });
     collapsedGroups.value = new Set();
@@ -565,10 +566,16 @@ function setHistorical(value: boolean) {
 
 async function fetchRelationMetadata() {
   try {
-    const [predicatesResponse, typesResponse] = await Promise.all([
+    const [predicatesResponse, typesResponse, published] = await Promise.all([
       api.schemas.listPredicates(),
       api.schemas.listTypes(),
+      api.schemas.listPublished(),
     ]);
+    groupRegistry.value = new Map(
+      (((published.data?.[0]?.relation_groups ?? []) as any[]) ?? [])
+        .map((g) => [String(g.id ?? ''), { order: Number(g.order ?? 0), label: String(g.label ?? '') }])
+        .filter(([id]) => id) as [string, { order: number; label: string }][],
+    );
     schemaPredicates.value = (predicatesResponse.data ?? []).map((predicate: any) => ({
       alias: predicate.alias ?? predicate.predicate_id ?? '',
       label: predicate.label ?? predicate.display_name ?? predicate.alias ?? '',

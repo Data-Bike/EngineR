@@ -318,9 +318,10 @@ function entryFromForm(): Record<string, unknown> {
     label: formData.value.display_name,
     description: formData.value.description,
     trans: formData.value.trans,
-    // Empty list omitted → the relations API falls back to its field-order
-    // heuristic instead of showing no preview at all.
-    ...(previewAliases.value.length ? { preview: previewAliases.value } : {}),
+    // Always present: an empty list explicitly clears the declared preview —
+    // the relations API then falls back to its field-order heuristic, and the
+    // merge in `mutate` must not resurrect the previous list.
+    preview: previewAliases.value,
     fields: formData.value.fields.map((field) => ({
       alias: field.alias,
       label: field.label,

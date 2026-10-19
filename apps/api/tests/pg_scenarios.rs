@@ -450,7 +450,9 @@ fn relations_include_group_preview_and_trans_through() {
         &h,
         "person",
         vec![
-            json!({"predicate_id": "full_name", "value": {"kind": "text", "value": "Сидоров Сидор"}}),
+            // full_name is an identity field — a fixed name would dedup to a
+            // previous run's person (with someone else's relations).
+            json!({"predicate_id": "full_name", "value": {"kind": "text", "value": format!("Сидоров {}", uniq("sid"))}}),
             json!({"predicate_id": "inn", "value": {"kind": "text", "value": uniq("84")}}),
         ],
     );
@@ -517,6 +519,62 @@ fn relations_include_group_preview_and_trans_through() {
     assert_eq!(incoming["direction"], "incoming");
     assert_eq!(incoming["group"], "employment");
     assert_eq!(incoming["trans"], true); // the position is still a trans-object
+}
+
+#[test]
+fn relations_to_same_target_keep_fields_on_every_record() {
+    let Some(h) = harness() else { return };
+    // Two relations from the person to the SAME company: the second record
+    // must still carry display_name + preview (fields_map reuse regression).
+    let (_, b) = create_entity(&h, &uniq("85"), "ООО «Дубль»", vec![]);
+    let org = b["data"]["public_id"].as_str().unwrap().to_string();
+    let (st, b) = create_typed(
+        &h,
+        "person",
+        vec![
+            json!({"predicate_id": "full_name", "value": {"kind": "text", "value": format!("Кузнецов {}", uniq("kuz"))}}),
+            json!({"predicate_id": "inn", "value": {"kind": "text", "value": uniq("86")}}),
+        ],
+    );
+    assert_eq!(st, Status::Ok, "{b}");
+    let person = b["data"]["public_id"].as_str().unwrap().to_string();
+
+    for pred in ["works_for", "owns"] {
+        let (st, b) = req(
+            &h,
+            Method::Post,
+            &format!("/api/v1/entities/{person}/relations"),
+            Some(json!({"predicate": pred, "target_entity_id": org})),
+        );
+        assert_eq!(st, Status::Ok, "{pred}: {b}");
+    }
+
+    let (st, body) = req(
+        &h,
+        Method::Get,
+        &format!("/api/v1/entities/{person}/relations"),
+        None,
+    );
+    assert_eq!(st, Status::Ok);
+    let rels = body["data"].as_array().unwrap();
+    let to_org: Vec<&Value> = rels
+        .iter()
+        .filter(|r| r["target_entity_id"] == org)
+        .collect();
+    assert_eq!(to_org.len(), 2, "{body}");
+    for r in to_org {
+        assert_eq!(
+            r["target_display_name"], "ООО «Дубль»",
+            "second relation to same target lost its display name: {r}"
+        );
+        assert!(
+            r["preview"]
+                .as_array()
+                .map(|a| !a.is_empty())
+                .unwrap_or(false),
+            "second relation to same target lost its preview: {r}"
+        );
+    }
 }
 
 #[test]

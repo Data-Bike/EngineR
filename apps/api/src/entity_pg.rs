@@ -1889,77 +1889,101 @@ async fn load_trans_through(
         ""
     };
     let junction_ids: Vec<i64> = trans_ids.iter().map(|(id, _)| *id).collect();
-    let edge_rows: Vec<(i64, String, i64, i64, i64, uuid::Uuid, String)> =
-        sqlx::query_as(&format!(
-            "SELECT s.statement_id, pd.stable_alias, s.subject,
-                    (s.object->>'entity_id')::bigint AS object_id,
-                    te.entity_id, te.public_id,
-                    COALESCE(td.stable_alias, te.type_id::text)
-             FROM core.statement s
-             JOIN meta.predicate_definition pd
-               ON pd.tenant_id=s.tenant_id AND pd.predicate_id=s.predicate
-             JOIN core.entity te
-               ON te.tenant_id=s.tenant_id
-              AND te.entity_id = CASE WHEN s.subject = ANY($2)
-                                      THEN (s.object->>'entity_id')::bigint
-                                      ELSE s.subject END
-             LEFT JOIN meta.type_definition td
-               ON td.tenant_id=te.tenant_id AND td.type_id=te.type_id
-             WHERE s.tenant_id=$1 AND s.object_kind='entity' AND s.status='active'
-               AND (s.subject = ANY($2) OR (s.object->>'entity_id')::bigint = ANY($2))
-               AND te.entity_id <> $3{as_of_clause}
-               LIMIT 200"
-        ))
-        .bind(tenant)
-        .bind(&junction_ids)
-        .bind(root_eid)
-        .bind(as_of.unwrap_or(chrono::DateTime::<chrono::Utc>::UNIX_EPOCH))
-        .fetch_all(&mut **tx)
-        .await
-        .map_err(db_err)?;
+    let edge_rows: Vec<TransEdgeRow> = sqlx::query_as(&format!(
+        "SELECT s.statement_id, pd.stable_alias, s.subject,
+                (s.object->>'entity_id')::bigint AS object_id,
+                se.public_id, COALESCE(sd.stable_alias, se.type_id::text),
+                oe.public_id, COALESCE(od.stable_alias, oe.type_id::text)
+         FROM core.statement s
+         JOIN meta.predicate_definition pd
+           ON pd.tenant_id=s.tenant_id AND pd.predicate_id=s.predicate
+         JOIN core.entity se
+           ON se.tenant_id=s.tenant_id AND se.entity_id = s.subject
+         JOIN core.entity oe
+           ON oe.tenant_id=s.tenant_id
+          AND oe.entity_id = (s.object->>'entity_id')::bigint
+         LEFT JOIN meta.type_definition sd
+           ON sd.tenant_id=se.tenant_id AND sd.type_id=se.type_id
+         LEFT JOIN meta.type_definition od
+           ON od.tenant_id=oe.tenant_id AND od.type_id=oe.type_id
+         WHERE s.tenant_id=$1 AND s.object_kind='entity' AND s.status='active'
+           AND (s.subject = ANY($2) OR (s.object->>'entity_id')::bigint = ANY($2))
+           AND s.subject <> $3 AND oe.entity_id <> $3{as_of_clause}
+           LIMIT 200"
+    ))
+    .bind(tenant)
+    .bind(&junction_ids)
+    .bind(root_eid)
+    .bind(as_of.unwrap_or(chrono::DateTime::<chrono::Utc>::UNIX_EPOCH))
+    .fetch_all(&mut **tx)
+    .await
+    .map_err(db_err)?;
 
-    let peers: Vec<i64> = edge_rows.iter().map(|r| r.4).collect();
-    let mut peer_fields = load_fields(tx, tenant, &peers).await?;
+    let peers: Vec<i64> = edge_rows.iter().flat_map(|r| [r.2, r.3]).collect();
+    let peer_fields = load_fields(tx, tenant, &peers).await?;
     let rec_idx: HashMap<i64, usize> = trans_ids.iter().copied().collect();
-    for (sid, alias, subj, object_id, peer, peer_public, peer_type) in edge_rows {
-        let junction = if junction_ids.contains(&subj) {
-            subj
-        } else {
-            object_id
-        };
-        let Some(&rec_i) = rec_idx.get(&junction) else {
-            continue;
-        };
-        if records[rec_i].through.len() >= 20 {
-            continue;
-        }
-        let outgoing = subj == junction;
-        if !perm.can_relation_dir(&alias, crate::dataperm::Op::Read, Some(outgoing))
-            || !perm.can_relation_instance(&sid.to_string(), crate::dataperm::Op::Read)
-            || !perm.can_entity(&peer_public.to_string(), crate::dataperm::Op::Read)
-            || !perm.can_type(&[&peer_type], crate::dataperm::Op::Read)
-        {
-            continue;
-        }
-        let mut f = peer_fields.remove(&peer).unwrap_or_default();
-        perm.filter_fields(&[&peer_type], &mut f);
-        perm.mask_fields(&[&peer_type], &mut f);
-        records[rec_i].through.push(RelationThroughEdge {
-            relation_id: sid.to_string(),
-            predicate: alias,
-            direction: if outgoing {
-                "outgoing".to_string()
+    for (sid, alias, subj, object_id, s_public, s_type, o_public, o_type) in edge_rows {
+        // An edge may touch two junctions (junction → junction): attach it
+        // to the through-list of every junction it touches, with the peer
+        // resolved relative to that junction.
+        let junctions: std::collections::BTreeSet<i64> = [subj, object_id]
+            .into_iter()
+            .filter(|j| junction_ids.contains(j))
+            .collect();
+        for junction in junctions {
+            let Some(&rec_i) = rec_idx.get(&junction) else {
+                continue;
+            };
+            if records[rec_i].through.len() >= 20 {
+                continue;
+            }
+            let outgoing = subj == junction;
+            let (peer, peer_public, peer_type) = if outgoing {
+                (object_id, o_public, o_type.clone())
             } else {
-                "incoming".to_string()
-            },
-            target_entity_id: peer_public.to_string(),
-            target_display_name: display_name_of(&peer_type, &f, peer),
-            preview: preview_fields_for(view_meta, &peer_type, type_field_order, &f),
-            target_type: peer_type,
-        });
+                (subj, s_public, s_type.clone())
+            };
+            if !perm.can_relation_dir(&alias, crate::dataperm::Op::Read, Some(outgoing))
+                || !perm.can_relation_instance(&sid.to_string(), crate::dataperm::Op::Read)
+                || !perm.can_entity(&peer_public.to_string(), crate::dataperm::Op::Read)
+                || !perm.can_type(&[&peer_type], crate::dataperm::Op::Read)
+            {
+                continue;
+            }
+            let mut f = peer_fields.get(&peer).cloned().unwrap_or_default();
+            perm.filter_fields(&[&peer_type], &mut f);
+            perm.mask_fields(&[&peer_type], &mut f);
+            records[rec_i].through.push(RelationThroughEdge {
+                relation_id: sid.to_string(),
+                predicate: alias.clone(),
+                direction: if outgoing {
+                    "outgoing".to_string()
+                } else {
+                    "incoming".to_string()
+                },
+                target_entity_id: peer_public.to_string(),
+                target_display_name: display_name_of(&peer_type, &f, peer),
+                preview: preview_fields_for(view_meta, &peer_type, type_field_order, &f),
+                target_type: peer_type,
+            });
+        }
     }
     Ok(())
 }
+
+/// One edge row from the through-query: statement id, predicate alias,
+/// subject/object entity ids, then public id + type alias of both ends —
+/// a junction → junction edge resolves its "peer" per junction.
+type TransEdgeRow = (
+    i64,
+    String,
+    i64,
+    i64,
+    uuid::Uuid,
+    String,
+    uuid::Uuid,
+    String,
+);
 
 /// One edge row from the relations query: statement id, predicate alias,
 /// subject, peer entity id/public id/type alias, validity window.
@@ -1984,7 +2008,7 @@ fn build_relation_records(
     eid: i64,
     direction: Option<&str>,
     perm: &crate::dataperm::DataPerm,
-    fields_map: &mut HashMap<i64, Map<String, Value>>,
+    fields_map: &HashMap<i64, Map<String, Value>>,
     view_meta: &RelationViewMeta,
     type_field_order: &HashMap<String, Vec<String>>,
 ) -> (Vec<RelationRecord>, Vec<(i64, usize)>) {
@@ -2007,7 +2031,9 @@ fn build_relation_records(
         {
             continue;
         }
-        let mut f = fields_map.remove(&other).unwrap_or_default();
+        // Clone, not remove: the same entity can be the peer of several
+        // relations — every record needs its fields.
+        let mut f = fields_map.get(&other).cloned().unwrap_or_default();
         perm.filter_fields(&[&other_type], &mut f);
         perm.mask_fields(&[&other_type], &mut f);
         let type_visible = perm.can_type(&[&other_type], crate::dataperm::Op::Read);
@@ -2058,6 +2084,24 @@ fn build_relation_records(
 /// `input[type=date]` produces). A bare date means "as of that day" —
 /// interpreted as the end of the day UTC so an `as_of` of *today* still
 /// sees relations created earlier today.
+/// Stable order: registry `relation_groups[].order` first, then predicate —
+/// grouped clients and flat-list consumers (MCP) get the same sequence.
+fn order_relation_records(records: &mut [RelationRecord], view_meta: &RelationViewMeta) {
+    let group_rank = |g: &str| {
+        view_meta
+            .group_order
+            .iter()
+            .position(|id| id == g)
+            .unwrap_or(usize::MAX)
+    };
+    records.sort_by(|a, b| {
+        group_rank(&a.group)
+            .cmp(&group_rank(&b.group))
+            .then_with(|| a.predicate.cmp(&b.predicate))
+            .then_with(|| a.direction.cmp(&b.direction))
+    });
+}
+
 fn parse_as_of(s: &str) -> Option<chrono::DateTime<chrono::Utc>> {
     if let Ok(dt) = s.parse::<chrono::DateTime<chrono::Utc>>() {
         return Some(dt);
@@ -2079,6 +2123,12 @@ pub async fn pg_get_relations(
     let as_of = as_of
         .map(|s| parse_as_of(&s).ok_or(Status::UnprocessableEntity))
         .transpose()?;
+    if let Some(d) = direction.as_deref() {
+        if !matches!(d, "outgoing" | "incoming" | "both") {
+            return Err(Status::UnprocessableEntity);
+        }
+    }
+    let direction = direction.filter(|d| d != "both");
     let exec = exec_of(state)?;
     let ctx = cap.ctx.clone();
     let pid: uuid::Uuid = public_id.parse().map_err(|_| Status::NotFound)?;
@@ -2130,7 +2180,7 @@ pub async fn pg_get_relations(
             .map_err(db_err)?;
 
             let others: Vec<i64> = rows.iter().map(|r| r.3).collect();
-            let mut fields_map = load_fields(&mut tx, tenant, &others).await?;
+            let fields_map = load_fields(&mut tx, tenant, &others).await?;
 
             let (view_meta, type_field_order) = load_relation_view_meta(&mut tx, tenant).await?;
 
@@ -2139,7 +2189,7 @@ pub async fn pg_get_relations(
                 eid,
                 direction.as_deref(),
                 &perm,
-                &mut fields_map,
+                &fields_map,
                 &view_meta,
                 &type_field_order,
             );
@@ -2160,6 +2210,7 @@ pub async fn pg_get_relations(
                 )
                 .await?;
             }
+            order_relation_records(&mut records, &view_meta);
             ok_json(serde_json::to_value(records).unwrap_or(Value::Null))
         })
         .await

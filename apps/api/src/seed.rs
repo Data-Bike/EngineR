@@ -987,24 +987,17 @@ async fn seed_schema(conn: &mut Conn, tenant: uuid::Uuid) -> Result<(), DbError>
     Ok(())
 }
 
-/// Merge demo presentation metadata (type `preview`/`trans`, predicate
-/// `group`, `relation_groups`) into whichever revision is published.
-/// Revision 1 content is the source of truth; when a different revision is
-/// published (e.g. one created via the schema-admin UI), its entries are
-/// patched by alias and missing demo types/predicates are appended so the
-/// relations UI always has the full demo metadata.
+/// Backfill demo presentation metadata (type `preview`/`trans`, predicate
+/// `group`, `relation_groups`) into a legacy published revision — one that
+/// predates relation-metadata support and has no `relation_groups` key.
+/// Once a revision carries `relation_groups` (seed revision, or any
+/// revision published through the auditable draft flow, which inherits it),
+/// the revision is considered admin-managed and is never touched again:
+/// schema edits made via /admin must not be reverted by a restart.
 async fn seed_relation_metadata(conn: &mut Conn, tenant: uuid::Uuid) -> Result<(), DbError> {
     let db = |e: sqlx::Error| DbError::Other {
         message: e.to_string(),
     };
-    let demo: Option<serde_json::Value> = sqlx::query_scalar(
-        "SELECT content FROM meta.schema_revision WHERE tenant_id=$1 AND revision_id=1",
-    )
-    .bind(tenant)
-    .fetch_optional(&mut *conn)
-    .await
-    .map_err(db)?;
-    let Some(demo) = demo else { return Ok(()) };
     let row: Option<(i64, serde_json::Value)> = sqlx::query_as(
         "SELECT revision_id, content FROM meta.schema_revision
          WHERE tenant_id=$1 AND state='published'",
@@ -1016,9 +1009,17 @@ async fn seed_relation_metadata(conn: &mut Conn, tenant: uuid::Uuid) -> Result<(
     let Some((rev, mut published)) = row else {
         return Ok(());
     };
-    if rev == 1 {
+    if rev == 1 || published.get("relation_groups").is_some() {
         return Ok(());
     }
+    let demo: Option<serde_json::Value> = sqlx::query_scalar(
+        "SELECT content FROM meta.schema_revision WHERE tenant_id=$1 AND revision_id=1",
+    )
+    .bind(tenant)
+    .fetch_optional(&mut *conn)
+    .await
+    .map_err(db)?;
+    let Some(demo) = demo else { return Ok(()) };
 
     let alias_of = |v: &serde_json::Value| {
         v.get("stable_alias")
@@ -1049,6 +1050,7 @@ async fn seed_relation_metadata(conn: &mut Conn, tenant: uuid::Uuid) -> Result<(
     let Some(obj) = published.as_object_mut() else {
         return Ok(());
     };
+    let mut changed = false;
     let type_count = {
         let types = obj.entry("types").or_insert_with(|| serde_json::json!([]));
         let mut count = 0usize;
@@ -1056,13 +1058,21 @@ async fn seed_relation_metadata(conn: &mut Conn, tenant: uuid::Uuid) -> Result<(
             for (alias, dt) in &demo_types {
                 match arr.iter_mut().find(|t| alias_of(t) == *alias) {
                     Some(existing) => {
+                        // Fill missing keys only — never overwrite what the
+                        // published revision already declares.
                         for k in ["preview", "trans"] {
-                            if let Some(v) = dt.get(k) {
-                                existing[k] = v.clone();
+                            if existing.get(k).is_none() {
+                                if let Some(v) = dt.get(k) {
+                                    existing[k] = v.clone();
+                                    changed = true;
+                                }
                             }
                         }
                     }
-                    None => arr.push(dt.clone()),
+                    None => {
+                        arr.push(dt.clone());
+                        changed = true;
+                    }
                 }
             }
             count = arr.len();
@@ -1080,14 +1090,18 @@ async fn seed_relation_metadata(conn: &mut Conn, tenant: uuid::Uuid) -> Result<(
                 match arr.iter_mut().find(|p| alias_of(p) == *alias) {
                     Some(existing) => {
                         for k in ["group", "label", "inverse_label", "domain", "range"] {
-                            if let Some(v) = dp.get(k) {
-                                if existing.get(k).is_none() || k == "group" {
+                            if existing.get(k).is_none() {
+                                if let Some(v) = dp.get(k) {
                                     existing[k] = v.clone();
+                                    changed = true;
                                 }
                             }
                         }
                     }
-                    None => arr.push(dp.clone()),
+                    None => {
+                        arr.push(dp.clone());
+                        changed = true;
+                    }
                 }
             }
             count = arr.len();
@@ -1097,6 +1111,10 @@ async fn seed_relation_metadata(conn: &mut Conn, tenant: uuid::Uuid) -> Result<(
     obj.insert("predicate_count".to_string(), serde_json::json!(pred_count));
     if let Some(groups) = demo.get("relation_groups") {
         obj.insert("relation_groups".to_string(), groups.clone());
+        changed = true;
+    }
+    if !changed {
+        return Ok(());
     }
 
     sqlx::query(

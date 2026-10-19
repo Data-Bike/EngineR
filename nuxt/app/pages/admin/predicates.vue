@@ -473,8 +473,15 @@ async function savePredicate() {
         const idx = predicates.findIndex(
           (item) => (item.stable_alias ?? item.alias) === alias,
         );
-        if (idx >= 0) predicates[idx] = { ...predicates[idx], ...entry };
-        else predicates.push(entry);
+        if (idx >= 0) {
+          const merged = { ...predicates[idx], ...entry };
+          // Clearing the group selector must remove the key — a missing
+          // `group` is what falls back to the 'general' bucket.
+          if (!formData.value.group) delete merged.group;
+          predicates[idx] = merged;
+        } else {
+          predicates.push(entry);
+        }
       },
     });
     showDialog.value = false;
