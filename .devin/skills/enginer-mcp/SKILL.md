@@ -30,6 +30,10 @@ Every request needs `Authorization: Bearer <egr_...>` — an EngineR API token.
 - Missing/garbage auth → HTTP `401`; a **revoked** token may return HTTP `200`
   with `result.isError` for up to ~30 s because the MCP context cache is warm —
   treat that as expired too.
+- This very document is served by the server itself:
+  `GET http://localhost:8020/agent-tool.md` with the same Bearer header →
+  `text/markdown` (embedded at build time). Useful to bootstrap an agent
+  that only knows the endpoint + token; `401` on a bad token.
 
 ## 2. Request shape
 

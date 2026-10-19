@@ -23,6 +23,10 @@ use tools::ToolDef;
 
 /// MCP protocol revision advertised at `initialize`.
 pub const PROTOCOL_VERSION: &str = "2025-06-18";
+/// Agent-tooling documentation — `.devin/skills/enginer-mcp/SKILL.md` from
+/// the repository, embedded at build time (the Dockerfile copies it into
+/// the builder stage; it is not present in the runtime image).
+pub const AGENT_TOOL_MD: &str = include_str!("../../../.devin/skills/enginer-mcp/SKILL.md");
 /// How long a validated token context is cached.
 const CONTEXT_CACHE_TTL: Duration = Duration::from_secs(30);
 /// Hard cap on cached token contexts — an unauthenticated client could

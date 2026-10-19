@@ -1,15 +1,17 @@
 //! EngineR MCP server — Streamable HTTP endpoint.
 //!
 //! Routes:
-//! - `POST /mcp`   — JSON-RPC (initialize / tools/list / tools/call / ping).
-//! - `GET  /mcp`   — 405: this server does not open SSE streams.
-//! - `DELETE /mcp` — 200: sessions are stateless, nothing to terminate.
-//! - `GET  /health`— liveness probe for Docker.
+//! - `POST /mcp`          — JSON-RPC (initialize / tools/list / tools/call / ping).
+//! - `GET  /mcp`          — 405: this server does not open SSE streams.
+//! - `DELETE /mcp`        — 200: sessions are stateless, nothing to terminate.
+//! - `GET  /agent-tool.md`— agent-tooling documentation (the enginer-mcp
+//!   SKILL.md), served as `text/markdown` to any caller with a valid token.
+//! - `GET  /health`       — liveness probe for Docker.
 //!
 //! Auth: `Authorization: Bearer egr_…` (EngineR API token) on every call.
 
-use enginer_mcp::{handle_rpc, McpState};
-use rocket::http::Status;
+use enginer_mcp::{handle_rpc, McpState, AGENT_TOOL_MD};
+use rocket::http::{ContentType, Status};
 use rocket::serde::json::Json;
 use rocket::{delete, get, post, routes, State};
 use serde_json::Value;
@@ -102,6 +104,30 @@ fn mcp_delete() -> Status {
     Status::Ok
 }
 
+/// Markdown doc vs. auth rejection for `GET /agent-tool.md`.
+#[derive(rocket::response::Responder)]
+enum AgentDocResponse {
+    #[response(status = 200)]
+    Markdown((ContentType, String)),
+    #[response(status = 401, content_type = "json")]
+    Unauthorized(Json<Value>),
+}
+
+/// `GET /agent-tool.md` — the SKILL.md an agent reads before driving this
+/// server. Any valid token suffices: it is documentation, not domain data.
+#[get("/agent-tool.md")]
+async fn agent_tool_md(state: &State<McpState>, bearer: Bearer) -> AgentDocResponse {
+    if state.validate_token(&bearer.0).await.is_none() {
+        return AgentDocResponse::Unauthorized(Json(serde_json::json!({
+            "error": "invalid or expired API token"
+        })));
+    }
+    AgentDocResponse::Markdown((
+        ContentType::new("text", "markdown"),
+        AGENT_TOOL_MD.to_string(),
+    ))
+}
+
 #[get("/health")]
 fn health() -> Json<Value> {
     Json(serde_json::json!({ "status": "ok" }))
@@ -119,7 +145,7 @@ async fn main() -> Result<(), rocket::Error> {
 
     rocket::build()
         .manage(McpState::new(&api_base))
-        .mount("/", routes![mcp_post, mcp_get, mcp_delete, health])
+        .mount("/", routes![mcp_post, mcp_get, mcp_delete, agent_tool_md, health])
         .launch()
         .await
         .map(|_| ())

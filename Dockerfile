@@ -16,6 +16,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY Cargo.toml Cargo.lock ./
 COPY crates/ ./crates/
 COPY apps/ ./apps/
+# Embedded into enginer-mcp via include_str! (GET /agent-tool.md).
+COPY .devin/skills/enginer-mcp/SKILL.md ./.devin/skills/enginer-mcp/SKILL.md
 
 # Build the API, worker and MCP binaries.
 RUN cargo build --release --bin enginer-api --bin enginer-worker --bin enginer-mcp --bin enginer-dump

@@ -338,3 +338,20 @@ fn prepare_call_lifts_if_match_header() {
     assert_eq!(ok.if_match.as_deref(), Some("\"schema:27:1\""));
     assert!(ok.body.get("if_match").is_none());
 }
+
+#[test]
+fn embedded_agent_tool_doc_is_the_real_skill_md() {
+    // The GET /agent-tool.md route serves this constant — make sure the
+    // include_str! path resolves to the actual skill document.
+    use enginer_mcp::AGENT_TOOL_MD;
+    assert!(AGENT_TOOL_MD.len() > 2000, "skill doc suspiciously small");
+    assert!(AGENT_TOOL_MD.starts_with("---\nname: enginer-mcp"));
+    for marker in [
+        "## 1. Authentication",
+        "POST /mcp",
+        "/agent-tool.md",
+        "relation_groups",
+    ] {
+        assert!(AGENT_TOOL_MD.contains(marker), "missing marker: {marker}");
+    }
+}
