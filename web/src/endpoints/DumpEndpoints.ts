@@ -13,7 +13,7 @@ export interface DumpFileInfo {
 
 export interface DumpInfo {
   dump_id: string;
-  status: 'running' | 'done' | 'failed' | string;
+  status: 'running' | 'restoring' | 'done' | 'restored' | 'failed' | string;
   exit_code?: number | null;
   finished_at?: string | null;
   files: DumpFileInfo[];
@@ -31,6 +31,18 @@ export class DumpEndpoints {
   /** GET /admin/dump — list dump runs. */
   async list(): Promise<ParsedResponse<DumpInfo[]>> {
     return this.client.get<DumpInfo[]>('/admin/dump');
+  }
+
+  /** POST /admin/dump/upload — store an uploaded dump file (streamed). */
+  async upload(body: Blob): Promise<ParsedResponse<{ dump_id: string; status: string }>> {
+    return this.client.post('/admin/dump/upload', body);
+  }
+
+  /** POST /admin/dump/{id}/restore — replay a dump into the database. */
+  async restore(dumpId: string): Promise<ParsedResponse<{ dump_id: string; status: string }>> {
+    return this.client.post(`/admin/dump/${encodeURIComponent(dumpId)}/restore`, {
+      confirm: 'RESTORE',
+    });
   }
 
   /** DELETE /admin/dump/{id} — remove a finished dump. */

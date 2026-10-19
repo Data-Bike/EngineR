@@ -1,37 +1,50 @@
-//! Database dump administration (export side of `enginer-dump`).
+//! Database dump administration (export/upload/restore of `enginer-dump`).
 //!
 //! `POST /admin/dump` runs `enginer_dump::export` in-process on a
-//! dedicated thread into `ENGINER_DUMP_DIR/<dump_id>/`, tracked by a
-//! `status.json` marker. `GET /admin/dump` lists runs;
-//! `GET /admin/dump/<id>/<file>` streams a part file;
-//! `DELETE /admin/dump/<id>` removes a finished run.
+//! dedicated thread into `ENGINER_DUMP_DIR/<dump_id>/dump.ndjson.xz`,
+//! tracked by a `status.json` marker. `POST /admin/dump/upload` stores
+//! an uploaded dump file as `upload-<ts>/`; `POST /admin/dump/<id>/restore`
+//! replays it via `enginer_dump::import` in-process.
+//! `GET /admin/dump` lists runs; `GET /admin/dump/<id>/<file>` streams
+//! a file; `DELETE /admin/dump/<id>` removes a finished run.
 //!
-//! The export connects with `ENGINER_DUMP_DATABASE_URL` — a superuser /
-//! BYPASSRLS DSN (dumps span every tenant and contain credential hashes).
-//! That DSN is never exposed through the API. Gated by `security.manage`.
-//! Restore stays CLI-only: replaying a dump can overwrite production data.
+//! Both export and import connect with `ENGINER_DUMP_DATABASE_URL` — a
+//! superuser / BYPASSRLS DSN (dumps span every tenant and contain
+//! credential hashes). That DSN is never exposed through the API.
+//! Gated by `security.manage`. Restore additionally requires a
+//! `{"confirm":"RESTORE"}` body — replaying a dump mutates the database.
 
 use crate::workspace_routes::{meta, ApiEnvelope, CapabilityGuard};
+use rocket::data::{Data, ToByteUnit};
 use rocket::fs::NamedFile;
 use rocket::http::Status;
 use rocket::serde::json::Json;
 use rocket::{delete, get, post, routes};
 use serde_json::{json, Value};
-use std::io::Write;
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 
 const PART_FILES: &[&str] = &[
+    // Current single-artifact layout.
+    "dump.ndjson.xz",
+    "dump.ndjson",
+    // Legacy enginer-dump/1 three-part layout — listed so older dumps
+    // remain downloadable.
     "01_schema.ndjson.xz",
     "02_data.ndjson.xz",
     "03_system.ndjson.xz",
-    // Legacy uncompressed layout from before xz was introduced.
     "01_schema.ndjson",
     "02_data.ndjson",
     "03_system.ndjson",
     "manifest.json",
     "export.log",
+    "restore.log",
+    "upload.log",
     "status.json",
 ];
+
+/// XZ stream magic — sniffed on upload to pick the stored file name.
+const XZ_MAGIC: [u8; 6] = [0xFD, 0x37, 0x7A, 0x58, 0x5A, 0x00];
 
 fn dump_root() -> PathBuf {
     std::env::var("ENGINER_DUMP_DIR").map_or_else(|_| PathBuf::from("./dumps"), PathBuf::from)
@@ -83,13 +96,44 @@ fn describe_dump(dir: &Path) -> Value {
     })
 }
 
-fn any_running() -> bool {
+/// Export and restore share the same database — never run concurrently.
+fn any_busy() -> bool {
     std::fs::read_dir(dump_root()).is_ok_and(|rd| {
         rd.flatten()
             .map(|e| e.path())
             .filter(|p| p.is_dir())
-            .any(|p| status_of(&p)["status"] == "running")
+            .any(|p| {
+                matches!(
+                    status_of(&p)["status"].as_str(),
+                    Some("running" | "restoring")
+                )
+            })
     })
+}
+
+fn write_status(dir: &Path, v: &Value) {
+    if let Ok(mut f) = std::fs::File::create(dir.join("status.json")) {
+        let _ = f.write_all(v.to_string().as_bytes());
+    }
+}
+
+/// The directory contains something restorable: a single-file dump
+/// (either compression) or at least one legacy part.
+fn has_dump_payload(dir: &Path) -> bool {
+    [
+        "dump.ndjson.xz",
+        "dump.ndjson",
+        "01_schema.ndjson.xz",
+        "01_schema.ndjson",
+    ]
+    .iter()
+    .any(|f| dir.join(f).exists())
+}
+
+/// First dump line must be a JSON object with a `table` field — cheap
+/// sanity gate so an uploaded arbitrary blob can't reach restore.
+fn validate_dump_file(path: &Path) -> bool {
+    enginer_dump::probe_dump(path)
 }
 
 #[post("/admin/dump")]
@@ -99,7 +143,7 @@ pub fn run_dump(cap: CapabilityGuard) -> Result<Json<ApiEnvelope<Value>>, Status
         tracing::warn!("dump requested but ENGINER_DUMP_DATABASE_URL is unset");
         Status::ServiceUnavailable
     })?;
-    if any_running() {
+    if any_busy() {
         return Err(Status::Conflict);
     }
 
@@ -107,12 +151,10 @@ pub fn run_dump(cap: CapabilityGuard) -> Result<Json<ApiEnvelope<Value>>, Status
     let dir = dump_root().join(&dump_id);
     std::fs::create_dir_all(&dir).map_err(|_| Status::InternalServerError)?;
     let log_path = dir.join("export.log");
-    std::fs::File::create(&log_path).map_err(|_| Status::InternalServerError)?;
 
     // In-process export on a dedicated OS thread: the dump crate uses
     // async-std/sqlx which has its own global reactor, so block_on here
     // works independently of Rocket's runtime.
-    let status_path = dir.join("status.json");
     std::thread::spawn(move || {
         let result = match async_std::task::block_on(enginer_dump::export(&dsn, &dir)) {
             Ok(()) => json!({
@@ -135,9 +177,7 @@ pub fn run_dump(cap: CapabilityGuard) -> Result<Json<ApiEnvelope<Value>>, Status
                 })
             }
         };
-        if let Ok(mut f) = std::fs::File::create(&status_path) {
-            let _ = f.write_all(result.to_string().as_bytes());
-        }
+        write_status(&dir, &result);
     });
 
     Ok(Json(ApiEnvelope {
@@ -180,6 +220,133 @@ pub async fn download_dump_part(
         .map_err(|_| Status::NotFound)
 }
 
+/// Store an uploaded dump file as `upload-<ts>/dump.ndjson[.xz]`.
+/// Streams to disk — never buffers the body in memory.
+#[post("/admin/dump/upload", data = "<data>")]
+pub async fn upload_dump(
+    cap: CapabilityGuard,
+    data: Data<'_>,
+) -> Result<Json<ApiEnvelope<Value>>, Status> {
+    let _ = &cap.ctx;
+    let base = chrono::Utc::now()
+        .format("upload-%Y%m%dT%H%M%SZ")
+        .to_string();
+    // Second-precision ids can collide on rapid successive uploads.
+    let mut dump_id = base.clone();
+    for i in 0..100 {
+        if !dump_root().join(&dump_id).exists() {
+            break;
+        }
+        dump_id = format!("{base}-{i}");
+    }
+    let dir = dump_root().join(&dump_id);
+    std::fs::create_dir_all(&dir).map_err(|_| Status::InternalServerError)?;
+
+    let tmp = dir.join("upload.part");
+    {
+        let mut stream = data.open(100_u64.gibibytes());
+        let mut file = rocket::tokio::fs::File::create(&tmp)
+            .await
+            .map_err(|_| Status::InternalServerError)?;
+        rocket::tokio::io::copy(&mut stream, &mut file)
+            .await
+            .map_err(|_| Status::InternalServerError)?;
+    }
+
+    // Sniff the container type, then verify the first NDJSON line.
+    let mut magic = [0u8; 6];
+    let n = std::fs::File::open(&tmp)
+        .and_then(|mut f| f.read(&mut magic))
+        .map_err(|_| Status::InternalServerError)?;
+    let name = if n == 6 && magic == XZ_MAGIC {
+        "dump.ndjson.xz"
+    } else {
+        "dump.ndjson"
+    };
+    let target = dir.join(name);
+    std::fs::rename(&tmp, &target).map_err(|_| Status::InternalServerError)?;
+    if !validate_dump_file(&target) {
+        let _ = std::fs::remove_dir_all(&dir);
+        return Err(Status::UnprocessableEntity);
+    }
+
+    let size = target.metadata().map_or(0, |m| m.len());
+    let _ = std::fs::write(
+        dir.join("upload.log"),
+        format!("uploaded {name} size={size}\n"),
+    );
+    write_status(
+        &dir,
+        &json!({
+            "status": "done",
+            "source": "upload",
+            "finished_at": chrono::Utc::now().to_rfc3339(),
+        }),
+    );
+    Ok(Json(ApiEnvelope {
+        data: json!({"dump_id": dump_id, "status": "done"}),
+        meta: meta(),
+    }))
+}
+
+/// Replay a stored dump into the database — in-process
+/// `enginer_dump::import`. Requires `{"confirm":"RESTORE"}` because it
+/// mutates production data (merge semantics: `ON CONFLICT DO NOTHING` +
+/// sequence replay).
+#[post("/admin/dump/<dump_id>/restore", data = "<body>")]
+pub fn restore_dump(
+    cap: CapabilityGuard,
+    dump_id: &str,
+    body: Json<Value>,
+) -> Result<Json<ApiEnvelope<Value>>, Status> {
+    let _ = &cap.ctx;
+    if body["confirm"].as_str() != Some("RESTORE") {
+        return Err(Status::UnprocessableEntity);
+    }
+    let dsn = std::env::var("ENGINER_DUMP_DATABASE_URL").map_err(|_| {
+        tracing::warn!("restore requested but ENGINER_DUMP_DATABASE_URL is unset");
+        Status::ServiceUnavailable
+    })?;
+    if !valid_dump_id(dump_id) {
+        return Err(Status::NotFound);
+    }
+    let dir = dump_root().join(dump_id);
+    if !dir.is_dir() || !has_dump_payload(&dir) {
+        return Err(Status::NotFound);
+    }
+    if any_busy() {
+        return Err(Status::Conflict);
+    }
+
+    write_status(&dir, &json!({"status": "restoring"}));
+    let log_path = dir.join("restore.log");
+    std::thread::spawn(move || {
+        let result = match async_std::task::block_on(enginer_dump::import(&dsn, &dir, 500)) {
+            Ok(()) => json!({
+                "status": "restored",
+                "finished_at": chrono::Utc::now().to_rfc3339(),
+            }),
+            Err(e) => {
+                tracing::warn!("dump restore failed: {e}");
+                if let Ok(mut f) = std::fs::OpenOptions::new().append(true).open(&log_path) {
+                    let _ = writeln!(f, "restore failed: {e}");
+                }
+                json!({
+                    "status": "failed",
+                    "error": e.to_string(),
+                    "finished_at": chrono::Utc::now().to_rfc3339(),
+                })
+            }
+        };
+        write_status(&dir, &result);
+    });
+
+    Ok(Json(ApiEnvelope {
+        data: json!({"dump_id": dump_id, "status": "restoring"}),
+        meta: meta(),
+    }))
+}
+
 #[delete("/admin/dump/<dump_id>")]
 pub fn delete_dump(
     cap: CapabilityGuard,
@@ -193,7 +360,10 @@ pub fn delete_dump(
     if !dir.is_dir() {
         return Err(Status::NotFound);
     }
-    if status_of(&dir)["status"] == "running" {
+    if matches!(
+        status_of(&dir)["status"].as_str(),
+        Some("running" | "restoring")
+    ) {
         return Err(Status::Conflict);
     }
     std::fs::remove_dir_all(&dir).map_err(|_| Status::InternalServerError)?;
@@ -204,5 +374,12 @@ pub fn delete_dump(
 }
 
 pub fn routes() -> Vec<rocket::Route> {
-    routes![run_dump, list_dumps, download_dump_part, delete_dump]
+    routes![
+        run_dump,
+        list_dumps,
+        download_dump_part,
+        upload_dump,
+        restore_dump,
+        delete_dump
+    ]
 }

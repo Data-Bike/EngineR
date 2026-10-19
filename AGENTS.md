@@ -854,10 +854,22 @@ MCP-level fallback; keep both in mind when touching
   POST runs `enginer_dump::export` IN-PROCESS on a dedicated thread
   (`async_std::task::block_on` — the dump crate's sqlx async-std reactor
   is independent of Rocket's runtime) into `ENGINER_DUMP_DIR/<id>/`,
-  completion → `status.json`; failures also land in `export.log`.
-  `apps/dump` is lib+bin: the API links `enginer-dump` as a crate, the
-  `enginer-dump` binary remains for CLI export/import (restore).
-  One concurrent run (409 if busy). Restore stays CLI-only.
+  completion → `status.json`. `apps/dump` is lib+bin: the API links it
+  as a crate; the `enginer-dump` binary is the CLI over the same lib.
+  Format enginer-dump/2 = ONE artifact `dump.ndjson.xz` (xz -9e):
+  `_header` line (format+created_at), all table rows, `_sequences`,
+  `_manifest` trailer; `manifest.json` is an uncompressed sidecar,
+  `export.log`/`restore.log` get real per-table progress. Upload:
+  `POST /admin/dump/upload` (octet-stream, streamed to disk, xz-magic
+  sniffed, first NDJSON line validated) → `upload-<ts>` id. Restore:
+  `POST /admin/dump/<id>/restore` with body {"confirm":"RESTORE"} —
+  in-process `enginer_dump::import` (merge: ON CONFLICT DO NOTHING;
+  sequences only move FORWARD so a merge into a live db cannot reissue
+  ids). Legacy 3-part dumps (format /1) still list/restore.
+  Export and restore serialize via `any_busy()` (status running|
+  restoring) — one operation at a time (409 if busy).
+  MCP parity: admin.dump_run/list/delete/restore (restore needs the
+  literal confirm=RESTORE arg).
 - Requires `ENGINER_DUMP_DATABASE_URL` (superuser/BYPASSRLS DSN) —
   set on the api container in docker-compose; dumps land in the
   `dump-data` volume. Never expose that DSN through the API.

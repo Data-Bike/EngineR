@@ -66,6 +66,15 @@ const ALIAS: Param = Param {
     desc: "Stable alias, e.g. legal_entity or owns.",
 };
 
+/// Destructive-restore confirmation — sent in the request body.
+const CONFIRM_RESTORE: Param = Param {
+    name: "confirm",
+    loc: B,
+    ty: "string",
+    required: true,
+    desc: "Must be the literal string RESTORE — confirms a destructive database replay.",
+};
+
 /// Optimistic-locking precondition — lifted out of the body into the
 /// `If-Match` header by `prepare_call`.
 const IF_MATCH: Param = Param {
@@ -780,6 +789,12 @@ pub static TOOLS: &[ToolDef] = &[
         desc: "Delete a finished dump run and its files.",
         method: "DELETE", path: "/admin/dump/{id}", capability: Some("security.manage"),
         params: &[ID],
+    },
+    ToolDef {
+        name: "admin.dump_restore",
+        desc: "Replay a stored dump into the database (merge: ON CONFLICT DO NOTHING + sequence replay). Destructive — mutates production data.",
+        method: "POST", path: "/admin/dump/{id}/restore", capability: Some("security.manage"),
+        params: &[ID, CONFIRM_RESTORE],
     },
 
     // --- Permission groups -----------------------------------------------------------------

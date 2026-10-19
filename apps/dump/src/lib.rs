@@ -1,35 +1,37 @@
 //! `EngineR` database dump/restore — library core.
 //!
 //! The `enginer-dump` binary is a thin CLI over this; the API calls
-//! [`export`] in-process for `POST /api/v1/admin/dump`.
+//! [`export`]/[`import`] in-process for `POST /api/v1/admin/dump` and
+//! `POST /api/v1/admin/dump/<id>/restore`.
 //!
-//! Streams every application table out to NDJSON files (one JSON object
-//! per line: `{"table":"<schema>.<name>","row":{...}}`) and can replay
-//! them back into a database. Rows are never materialised in memory as a
-//! set — export uses a lazy `fetch()` stream, import batches rows through
-//! `jsonb_populate_recordset`, so the tool scales to arbitrarily large
-//! databases.
+//! Streams every application table out to a single xz-compressed NDJSON
+//! file (one JSON object per line: `{"table":"<schema>.<name>","row":{...}}`)
+//! and can replay it back into a database. Rows are never materialised
+//! in memory as a set — export uses a lazy `fetch()` stream, import
+//! batches rows through `jsonb_populate_recordset`, so the tool scales
+//! to arbitrarily large databases.
 //!
-//! Layout (mirrors the normative split):
-//!   `01_schema.ndjson.xz` — meta.* : object types, predicates, identity
-//!                       policies, schema revisions, reference data.
-//!   `02_data.ndjson.xz` — core.* : entities, statements (object graph
-//!                       edges), files, workflow/domain instances.
-//!   `03_system.ndjson.xz` — sec/ops/audit/integration/report : users,
-//!                       credentials, roles/policies, sessions, outbox,
-//!                       audit chain, connectors — everything else.
-//!   manifest.json     — format version, counts, table->file map
-//!                       (uncompressed for inspectability).
+//! Single-file layout (`enginer-dump/2`):
+//!   `dump.ndjson.xz` — the whole dump: a `_header` line (format,
+//!                       `created_at`), then every table's rows grouped
+//!                       by table, then `_sequences` lines, then a
+//!                       `_manifest` trailer with per-table row counts.
+//!   `manifest.json`  — uncompressed sidecar for quick inspection
+//!                       (same data as the `_manifest` trailer).
+//!   `export.log`     — human-readable export progress (per table).
 //!
-//! Parts are xz-compressed at level `9 | PRESET_EXTREME` (equivalent to
+//! Legacy layouts still restore: `01/02/03_*.ndjson[.xz]` parts from
+//! format `enginer-dump/1` are detected when `dump.ndjson[.xz]` is
+//! absent.
+//!
+//! Compression is xz at level `9 | PRESET_EXTREME` (equivalent to
 //! `xz -9e`) via `liblzma` — the maintained fork vendoring XZ Utils
 //! 5.8.x, i.e. a post-backdoor upstream (the March-2024 backdoor only
-//! shipped in the 5.6.0/5.6.1 tarballs). Import auto-detects `.xz` and
-//! falls back to plain `.ndjson` for backward compatibility.
+//! shipped in the 5.6.0/5.6.1 tarballs).
 //!
-//! Tables are discovered at runtime from `information_schema` and routed
-//! by schema, so new migrations are picked up automatically — keep the
-//! SCHEMA_* grouping in sync when adding a new schema.
+//! Tables are discovered at runtime from `information_schema`, so new
+//! migrations are picked up automatically — keep `SCHEMAS` in sync when
+//! adding a new schema.
 //!
 //! Export runs inside a single `REPEATABLE READ READ ONLY` transaction —
 //! the dump is one consistent snapshot even while the source is written.
@@ -43,7 +45,7 @@
 
 use std::collections::BTreeMap;
 use std::io::{BufRead, BufReader, BufWriter, Write};
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use futures::StreamExt;
 use liblzma::read::XzDecoder;
@@ -53,12 +55,16 @@ use serde_json::{json, Value};
 use sqlx::postgres::PgConnection;
 use sqlx::{Connection, Row};
 
-const FORMAT: &str = "enginer-dump/1";
+const FORMAT: &str = "enginer-dump/2";
+/// Single-artifact dump file produced by [`export`].
+const DUMP_FILE: &str = "dump.ndjson.xz";
+/// Uncompressed twin accepted on import (e.g. an uploaded plain dump).
+const DUMP_FILE_PLAIN: &str = "dump.ndjson";
+// Legacy `enginer-dump/1` three-part layout — import fallback only.
 const FILE_SCHEMA: &str = "01_schema.ndjson.xz";
 const FILE_DATA: &str = "02_data.ndjson.xz";
 const FILE_SYSTEM: &str = "03_system.ndjson.xz";
 const FILE_MANIFEST: &str = "manifest.json";
-const DEFAULT_BATCH: usize = 500;
 
 /// Application schemas in dump order. `public` intentionally excluded —
 /// `_sqlx_migrations` bookkeeping is re-applied by the app's own
@@ -73,23 +79,7 @@ const SCHEMAS: &[&str] = &[
     "report",
 ];
 
-fn part_for(schema: &str) -> &'static str {
-    match schema {
-        "meta" => FILE_SCHEMA,
-        "core" => FILE_DATA,
-        _ => FILE_SYSTEM,
-    }
-}
-
 type DynError = Box<dyn std::error::Error + Send + Sync>;
-
-struct Cli {
-    #[allow(dead_code)]
-    command: String,
-    dsn: String,
-    dir: PathBuf,
-    batch: usize,
-}
 
 fn qident(s: impl AsRef<str>) -> String {
     format!("\"{}\"", s.as_ref().replace('"', "\"\""))
@@ -187,21 +177,25 @@ async fn export_sequences(
     Ok(n)
 }
 
-/// Export the whole database into `dir` (3 xz-compressed NDJSON parts
-/// + manifest.json). `dsn` must be a superuser/BYPASSRLS connection.
+/// Human-readable progress line → both `export.log`/`restore.log` and
+/// the process tracing stream (the API surfaces the file; CLI users get
+/// stderr).
+fn log_line(log: &mut impl Write, msg: &str) {
+    let _ = writeln!(log, "{} {msg}", chrono::Utc::now().to_rfc3339());
+    let _ = log.flush();
+    tracing::info!("{msg}");
+}
+
+/// Export the whole database into `dir` as a single xz-compressed
+/// `dump.ndjson.xz` (plus a `manifest.json` sidecar and `export.log`
+/// progress). `dsn` must be a superuser/BYPASSRLS connection.
 ///
 /// # Errors
 /// Returns an error on connection, query, IO, or serialization failure.
 pub async fn export(dsn: &str, dir: &Path) -> Result<(), DynError> {
-    let cli = Cli {
-        command: String::new(),
-        dsn: dsn.into(),
-        dir: dir.into(),
-        batch: DEFAULT_BATCH,
-    };
-    let cli = &cli;
-    std::fs::create_dir_all(&cli.dir)?;
-    let mut conn = PgConnection::connect(&cli.dsn).await?;
+    std::fs::create_dir_all(dir)?;
+    let mut log = BufWriter::new(std::fs::File::create(dir.join("export.log"))?);
+    let mut conn = PgConnection::connect(dsn).await?;
     // Consistent snapshot: without this, each table streams at its own
     // commit point and a concurrent writer could produce a dump whose
     // rows violate FK relationships between tables. REPEATABLE READ
@@ -211,79 +205,63 @@ pub async fn export(dsn: &str, dir: &Path) -> Result<(), DynError> {
         .execute(&mut conn)
         .await?;
     let tables = list_tables(&mut conn).await?;
-    tracing::info!(tables = tables.len(), "tables discovered");
+    log_line(&mut log, &format!("tables discovered: {}", tables.len()));
 
-    let mut writers: BTreeMap<&'static str, XzEncoder<BufWriter<std::fs::File>>> = BTreeMap::new();
-    let mut manifest_files: BTreeMap<String, Value> = BTreeMap::new();
-    let mut table_map: BTreeMap<String, String> = BTreeMap::new();
+    let created_at = chrono::Utc::now().to_rfc3339();
+    let mut w = XzEncoder::new(
+        BufWriter::with_capacity(1 << 20, std::fs::File::create(dir.join(DUMP_FILE))?),
+        9 | PRESET_EXTREME, // xz -9e — maximal compression for storage
+    );
+    let header = json!({
+        "table": "_header",
+        "row": {"format": FORMAT, "created_at": created_at, "schemas": SCHEMAS},
+    });
+    w.write_all(serde_json::to_string(&header)?.as_bytes())?;
+    w.write_all(b"\n")?;
 
-    for f in [FILE_SCHEMA, FILE_DATA, FILE_SYSTEM] {
-        let path = cli.dir.join(f);
-        // xz -9e equivalent — maximal compression for long-term storage.
-        writers.insert(
-            f,
-            XzEncoder::new(
-                BufWriter::with_capacity(1 << 20, std::fs::File::create(&path)?),
-                9 | PRESET_EXTREME,
-            ),
-        );
-    }
-
+    let mut table_rows: BTreeMap<String, u64> = BTreeMap::new();
+    let mut total = 0u64;
     for (schema, table) in &tables {
-        let f = part_for(schema);
         let fq = format!("{schema}.{table}");
-        tracing::info!(table = %fq, file = f, "exporting");
-        let w = writers
-            .get_mut(f)
-            .ok_or_else(|| format!("no writer for part {f}"))?;
-        let n = export_table(&mut conn, w, schema, table).await?;
-        table_map.insert(fq.clone(), f.to_string());
-        let entry = manifest_files
-            .entry(f.to_string())
-            .or_insert_with(|| json!({"rows": 0, "tables": []}));
-        entry["rows"] = json!(entry["rows"].as_u64().unwrap_or(0) + n);
-        if let Some(arr) = entry["tables"].as_array_mut() {
-            arr.push(json!({"table": fq, "rows": n}));
-        }
-        tracing::info!(table = %fq, rows = n, "exported");
+        let n = export_table(&mut conn, &mut w, schema, table).await?;
+        table_rows.insert(fq.clone(), n);
+        total += n;
+        log_line(&mut log, &format!("exported {fq} rows={n}"));
     }
 
-    // Sequences go last in each part so a single-pass importer replays
-    // them after the table rows.
+    // Sequences go last so a single-pass importer replays them after
+    // the table rows.
+    let mut sequence_rows: BTreeMap<String, u64> = BTreeMap::new();
     for schema in SCHEMAS {
-        let f = part_for(schema);
-        let w = writers
-            .get_mut(f)
-            .ok_or_else(|| format!("no writer for part {f}"))?;
-        let n = export_sequences(&mut conn, w, schema).await?;
-        // or_insert_with: a schema may own sequences but zero tables
-        // (e.g. an empty `report` schema) — entry must exist regardless.
-        let entry = manifest_files
-            .entry(f.to_string())
-            .or_insert_with(|| json!({"rows": 0, "tables": []}));
-        entry["rows"] = json!(entry["rows"].as_u64().unwrap_or(0) + n);
+        let n = export_sequences(&mut conn, &mut w, schema).await?;
+        sequence_rows.insert((*schema).to_string(), n);
+        total += n;
+        log_line(&mut log, &format!("exported sequences {schema} rows={n}"));
     }
-
-    for w in writers.into_values() {
-        // finish() writes the xz stream footer (index + CRC64) — without
-        // it the file is not a valid .xz container.
-        w.finish()?;
-    }
-    sqlx::query("COMMIT").execute(&mut conn).await?;
 
     let manifest = json!({
         "format": FORMAT,
-        "created_at": chrono::Utc::now().to_rfc3339(),
-        "files": manifest_files,
-        "tables": table_map,
-        "note": "NDJSON lines {\"table\":\"<schema>.<name>\",\"row\":{..}}; \
-                 row order within a file is grouped by table.",
+        "created_at": created_at,
+        "file": DUMP_FILE,
+        "tables": table_rows,
+        "sequences": sequence_rows,
+        "total_rows": total,
     });
+    // Trailer line inside the artifact — the dump is self-describing
+    // even without the manifest.json sidecar.
+    let trailer = json!({"table": "_manifest", "row": manifest});
+    w.write_all(serde_json::to_string(&trailer)?.as_bytes())?;
+    w.write_all(b"\n")?;
+    // finish() writes the xz stream footer (index + CRC64) — without
+    // it the file is not a valid .xz container.
+    w.finish()?;
+    sqlx::query("COMMIT").execute(&mut conn).await?;
+
     std::fs::write(
-        cli.dir.join(FILE_MANIFEST),
+        dir.join(FILE_MANIFEST),
         serde_json::to_string_pretty(&manifest)?,
     )?;
-    tracing::info!(dir = %cli.dir.display(), "export complete");
+    log_line(&mut log, &format!("export complete total_rows={total}"));
     Ok(())
 }
 
@@ -331,6 +309,11 @@ impl Importer<'_> {
 
 impl Importer<'_> {
     async fn push(&mut self, table: &str, row: Value) -> Result<(), DynError> {
+        // Pseudo-records: _header/_manifest describe the dump itself;
+        // only _sequences carries replayable state.
+        if table.starts_with('_') && table != "_sequences" {
+            return Ok(());
+        }
         if self.buf_table.as_deref() != Some(table) {
             self.flush().await?;
             self.buf_table = Some(table.to_string());
@@ -349,27 +332,48 @@ impl Importer<'_> {
         }
         let table = self.buf_table.take().unwrap();
         if table == "_sequences" {
-            // Replay exact sequence state (covers app-managed sequences
-            // like core.entity_id_seq that no column default owns).
+            // Replay sequence state (covers app-managed sequences like
+            // core.entity_id_seq that no column default owns). Never
+            // rewind a sequence: a merge-restore into a live database
+            // must not hand out ids that already exist (inserts would
+            // then be silently dropped by ON CONFLICT / dedup), so the
+            // dump value only wins when it is ahead of the current one.
             for row in self.buf.drain(..) {
                 let name = row["name"].as_str().unwrap_or_default();
                 if name.is_empty() {
                     continue;
                 }
-                match row["last_value"].as_i64() {
-                    Some(v) => sqlx::query("SELECT setval($1::text::regclass, $2, $3)")
+                let Some(v) = row["last_value"].as_i64() else {
+                    continue;
+                };
+                let is_called = row["is_called"].as_bool().unwrap_or(true);
+                let Some((schema, seq)) = name.split_once('.') else {
+                    continue;
+                };
+                // Effective next value is last_value+1 when is_called.
+                // Only move the sequence forward, never back — a merge
+                // restore into a live db must not reissue existing ids.
+                let cur = sqlx::query(&format!(
+                    "SELECT last_value, is_called FROM {}.{}",
+                    qident(schema),
+                    qident(seq)
+                ))
+                .fetch_optional(&mut *self.conn)
+                .await?;
+                let Some(cur) = cur else {
+                    tracing::warn!(sequence = name, "sequence missing in target — skipped");
+                    continue;
+                };
+                let cur_next =
+                    cur.get::<i64, _>("last_value") + i64::from(cur.get::<bool, _>("is_called"));
+                let dump_next = v + i64::from(is_called);
+                if dump_next > cur_next {
+                    sqlx::query("SELECT setval($1::text::regclass, $2, $3)")
                         .bind(name.to_string())
                         .bind(v)
-                        .bind(row["is_called"].as_bool().unwrap_or(true))
+                        .bind(is_called)
                         .execute(&mut *self.conn)
-                        .await
-                        .map(|_| ())?,
-                    // never called: setval(1, is_called=false)
-                    None => sqlx::query("SELECT setval($1::text::regclass, 1, false)")
-                        .bind(name.to_string())
-                        .execute(&mut *self.conn)
-                        .await
-                        .map(|_| ())?,
+                        .await?;
                 }
             }
             return Ok(());
@@ -399,14 +403,14 @@ impl Importer<'_> {
     }
 }
 
-async fn import_file(cli: &Cli, imp: &mut Importer<'_>, name: &str) -> Result<u64, DynError> {
-    // Prefer the compressed part; fall back to the pre-xz plain layout
-    // ("01_schema.ndjson") so older dumps still restore.
+async fn import_file(dir: &Path, imp: &mut Importer<'_>, name: &str) -> Result<u64, DynError> {
+    // Prefer the compressed file; fall back to a plain `.ndjson` twin
+    // so older dumps and hand-unpacked files still restore.
     let plain = name.strip_suffix(".xz").unwrap_or(name);
-    let (path, xz) = if cli.dir.join(name).exists() {
-        (cli.dir.join(name), true)
-    } else if cli.dir.join(plain).exists() {
-        (cli.dir.join(plain), false)
+    let (path, xz) = if dir.join(name).exists() {
+        (dir.join(name), true)
+    } else if dir.join(plain).exists() {
+        (dir.join(plain), false)
     } else {
         tracing::warn!(file = name, "dump part missing — skipped");
         return Ok(0);
@@ -432,6 +436,12 @@ async fn import_file(cli: &Cli, imp: &mut Importer<'_>, name: &str) -> Result<u6
         }
         let mut v: Value = serde_json::from_str(line)?;
         let table = v["table"].as_str().unwrap_or("").to_string();
+        if table == "_header" {
+            let fmt = v["row"]["format"].as_str().unwrap_or("");
+            if !fmt.starts_with("enginer-dump/") {
+                tracing::warn!(format = %fmt, "unrecognised dump format — continuing anyway");
+            }
+        }
         // take() moves the row out without cloning — the row can be a
         // multi-KB statement object.
         imp.push(&table, v["row"].take()).await?;
@@ -443,31 +453,61 @@ async fn import_file(cli: &Cli, imp: &mut Importer<'_>, name: &str) -> Result<u6
     Ok(n)
 }
 
+/// Cheap sanity check on a would-be dump file: the first NDJSON line
+/// must parse as `{"table": ...}` — for `.xz` the container is opened
+/// and the first line actually decoded. Used by the upload endpoint to
+/// reject arbitrary blobs before they can reach [`import`].
+#[must_use]
+pub fn probe_dump(path: &Path) -> bool {
+    let Ok(file) = std::fs::File::open(path) else {
+        return false;
+    };
+    let mut reader: Box<dyn BufRead> = if path.extension().is_some_and(|e| e == "xz") {
+        Box::new(BufReader::with_capacity(1 << 16, XzDecoder::new(file)))
+    } else {
+        Box::new(BufReader::with_capacity(1 << 16, file))
+    };
+    let mut line = String::new();
+    if reader.read_line(&mut line).is_err() || line.trim_end().is_empty() {
+        return false;
+    }
+    serde_json::from_str::<Value>(line.trim_end())
+        .ok()
+        .and_then(|v| v["table"].as_str().map(String::from))
+        .is_some_and(|t| !t.is_empty())
+}
+
 /// Replay a dump directory into the database at `dsn`.
 /// Idempotent (`ON CONFLICT DO NOTHING`); needs superuser for
-/// `session_replication_role=replica`.
+/// `session_replication_role=replica`. Accepts both the single-file
+/// layout (`dump.ndjson[.xz]`) and the legacy three-part layout.
+/// Progress lands in `<dir>/restore.log`.
 ///
 /// # Errors
 /// Returns an error on connection, query, IO, decode, or parse failure.
 pub async fn import(dsn: &str, dir: &Path, batch: usize) -> Result<(), DynError> {
-    let cli = Cli {
-        command: String::new(),
-        dsn: dsn.into(),
-        dir: dir.into(),
-        batch,
-    };
-    let cli = &cli;
-    let manifest_path = cli.dir.join(FILE_MANIFEST);
-    if manifest_path.exists() {
-        let m: Value = serde_json::from_str(&std::fs::read_to_string(manifest_path)?)?;
-        if m["format"].as_str() != Some(FORMAT) {
-            tracing::warn!(format = %m["format"], "manifest format mismatch — continuing anyway");
-        }
+    let files: Vec<&str> = if dir.join(DUMP_FILE).exists() || dir.join(DUMP_FILE_PLAIN).exists() {
+        vec![DUMP_FILE]
     } else {
-        tracing::warn!("no manifest.json in dump dir — format unchecked");
-    }
+        // Legacy enginer-dump/1 three-part layout.
+        let manifest_path = dir.join(FILE_MANIFEST);
+        if manifest_path.exists() {
+            let m: Value = serde_json::from_str(&std::fs::read_to_string(manifest_path)?)?;
+            let fmt = m["format"].as_str().unwrap_or("");
+            if !fmt.starts_with("enginer-dump/") {
+                tracing::warn!(format = %fmt, "manifest format mismatch — continuing anyway");
+            }
+        } else {
+            tracing::warn!("no manifest.json in dump dir — format unchecked");
+        }
+        vec![FILE_SCHEMA, FILE_DATA, FILE_SYSTEM]
+    };
 
-    let mut conn = PgConnection::connect(&cli.dsn).await?;
+    std::fs::create_dir_all(dir)?;
+    let mut log = BufWriter::new(std::fs::File::create(dir.join("restore.log"))?);
+    log_line(&mut log, &format!("restore started files={files:?}"));
+
+    let mut conn = PgConnection::connect(dsn).await?;
     // Disable FK/constraint triggers so row order within a file does not
     // matter; requires superuser. Warn only — ordered files still work
     // for most datasets when it fails.
@@ -475,26 +515,26 @@ pub async fn import(dsn: &str, dir: &Path, batch: usize) -> Result<(), DynError>
         .execute(&mut conn)
         .await
     {
-        tracing::warn!(
-            "could not disable triggers ({e}) — \
-                        continuing with constraint checks on"
+        log_line(
+            &mut log,
+            &format!("could not disable triggers ({e}) — continuing with constraint checks on"),
         );
     }
 
     let mut imp = Importer {
         conn: &mut conn,
-        batch: cli.batch,
+        batch,
         buf_table: None,
-        buf: Vec::with_capacity(cli.batch),
+        buf: Vec::with_capacity(batch),
         rows_read: 0,
         col_cache: std::collections::HashMap::new(),
     };
-    for f in [FILE_SCHEMA, FILE_DATA, FILE_SYSTEM] {
-        let n = import_file(cli, &mut imp, f).await?;
+    for f in files {
+        let n = import_file(dir, &mut imp, f).await?;
         imp.rows_read += n;
-        tracing::info!(file = f, rows = n, "imported");
+        log_line(&mut log, &format!("imported {f} rows={n}"));
     }
     imp.flush().await?;
-    tracing::info!(rows = imp.rows_read, "import complete");
+    log_line(&mut log, &format!("import complete rows={}", imp.rows_read));
     Ok(())
 }
