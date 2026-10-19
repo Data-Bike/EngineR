@@ -228,3 +228,82 @@ describe('i18n locale files', () => {
     }
   });
 });
+
+describe('i18n translation completeness', () => {
+  type LeafMap = Map<string, string>;
+
+  // Flatten nested locale objects into "section.sub.key" -> value pairs.
+  function flatten(obj: Record<string, unknown>, prefix = ''): LeafMap {
+    const out: LeafMap = new Map();
+    for (const [key, value] of Object.entries(obj)) {
+      const path = prefix ? `${prefix}.${key}` : key;
+      if (typeof value === 'string') {
+        out.set(path, value);
+      } else if (typeof value === 'object' && value !== null) {
+        for (const [k, v] of flatten(value as Record<string, unknown>, path)) {
+          out.set(k, v);
+        }
+      }
+    }
+    return out;
+  }
+
+  const ruFlat = flatten(ru as Record<string, unknown>);
+  const nonRuLocales = Object.entries(allLocales).filter(([c]) => c !== 'ru');
+
+  it('every locale has every ru key (no missing translations)', () => {
+    for (const [code, locale] of nonRuLocales) {
+      const flat = flatten(locale as Record<string, unknown>);
+      const missing = [...ruFlat.keys()].filter((k) => !flat.has(k));
+      expect(
+        missing,
+        `locale ${code} is missing ${missing.length} keys`,
+      ).toEqual([]);
+    }
+  });
+
+  it('no locale has keys absent from ru (no orphans)', () => {
+    for (const [code, locale] of nonRuLocales) {
+      const flat = flatten(locale as Record<string, unknown>);
+      const orphans = [...flat.keys()].filter((k) => !ruFlat.has(k));
+      expect(
+        orphans,
+        `locale ${code} has ${orphans.length} extra keys`,
+      ).toEqual([]);
+    }
+  });
+
+  it('non-ru locales contain no untranslated Cyrillic text', () => {
+    const cyrillic = /[Ѐ-ӿ]/;
+    for (const [code, locale] of nonRuLocales) {
+      const flat = flatten(locale as Record<string, unknown>);
+      const untranslated = [...flat.entries()]
+        .filter(([, v]) => cyrillic.test(v))
+        .map(([k]) => k);
+      expect(
+        untranslated,
+        `locale ${code} still has Russian text in ${untranslated.length} keys`,
+      ).toEqual([]);
+    }
+  });
+
+  it('interpolation placeholders match the ru source', () => {
+    const placeholders = (s: string) =>
+      [...s.matchAll(/\{[^}]+\}/g)].map((m) => m[0]).sort();
+    for (const [code, locale] of nonRuLocales) {
+      const flat = flatten(locale as Record<string, unknown>);
+      const mismatched: string[] = [];
+      for (const [key, ruValue] of ruFlat) {
+        const expected = placeholders(ruValue);
+        const actual = placeholders(flat.get(key) ?? '');
+        if (JSON.stringify(expected) !== JSON.stringify(actual)) {
+          mismatched.push(`${key}: ru ${JSON.stringify(expected)} vs ${code} ${JSON.stringify(actual)}`);
+        }
+      }
+      expect(
+        mismatched,
+        `locale ${code} has placeholder mismatches`,
+      ).toEqual([]);
+    }
+  });
+});
