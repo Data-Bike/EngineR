@@ -110,6 +110,9 @@ const { t } = useI18n();
 const route = useRoute();
 const toast = useToast();
 const api = useApi();
+// The catalog selector scopes *listings*; an entity page must resolve the
+// entity wherever the principal can read it — passing the selected catalog
+// here would 404 readable entities that live in another catalog.
 
 const publicId = computed(() => route.params.publicId as string);
 // True while a nested route (e.g. `edit`) matched underneath this page —

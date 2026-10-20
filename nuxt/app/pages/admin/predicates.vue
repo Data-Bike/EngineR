@@ -132,7 +132,7 @@
           </div>
 
           <UFormField v-if="formData.is_edge" :label="t('admin.relation_group')" :hint="t('admin.relation_group_hint')">
-            <USelect v-model="formData.group" :items="groupOptions" class="w-full" />
+            <USelect v-model="groupChoice" :items="groupOptions" class="w-full" />
           </UFormField>
 
           <!-- Cardinality -->
@@ -214,6 +214,7 @@ definePageMeta({
 const { t } = useI18n();
 const toast = useToast();
 const api = useApi();
+const { catalogParams, selected: selectedCatalog } = useCatalog();
 
 interface Predicate {
   alias: string;
@@ -319,8 +320,14 @@ function groupLabel(id: string): string {
   return relationGroups.value.find((g) => g.id === id)?.label || id;
 }
 
+// SelectItem rejects empty-string values — '__none__' maps to '' on write.
+const NO_GROUP = '__none__';
+const groupChoice = computed({
+  get: () => formData.value.group || NO_GROUP,
+  set: (v: string) => { formData.value.group = v === NO_GROUP ? '' : v; },
+});
 const groupOptions = computed(() => [
-  { label: t('admin.no_group'), value: '' },
+  { label: t('admin.no_group'), value: NO_GROUP },
   ...[...relationGroups.value]
     .sort((a, b) => a.order - b.order)
     .map((g) => ({ label: groupLabel(g.id), value: g.id })),
@@ -349,9 +356,9 @@ async function fetchPredicates() {
   loading.value = true;
   try {
     const [res, typesResponse, published] = await Promise.all([
-      api.schemas.listPredicates(),
-      api.schemas.listTypes(),
-      api.schemas.listPublished(),
+      api.schemas.listPredicates(catalogParams()),
+      api.schemas.listTypes(catalogParams()),
+      api.schemas.listPublished(catalogParams()),
     ]);
     relationGroups.value = ((published.data?.[0]?.relation_groups ?? []) as any[])
       .map((g) => ({
@@ -556,4 +563,6 @@ async function deletePredicate(pred: Predicate) {
 }
 
 onMounted(fetchPredicates);
+// Header catalog switch re-scopes the predicate list.
+watch(selectedCatalog, fetchPredicates);
 </script>

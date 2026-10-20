@@ -1,4 +1,4 @@
-import { schemaRu } from '../schema';
+import { catalogRu, schemaRu } from '../schema';
 
 export default {
   app: {
@@ -329,6 +329,7 @@ export default {
     },
   },
   schema: schemaRu,
+  catalog: catalogRu,
   common: {
     save: 'Сохранить',
     cancel: 'Отмена',
@@ -789,6 +790,8 @@ export default {
     default_managers_desc: 'Создание заявок и просмотр объектов',
     group_class: 'Класс группы',
     class_capability: 'Системная',
+    tab_data: 'Доступ к данным',
+    tab_system: 'Доступ к системе',
     inherits: 'Наследует',
     parent_role: 'Родительская роль',
     parent_role_hint: 'Наследует все права родителя, можно добавлять и переопределять',
@@ -797,6 +800,7 @@ export default {
     res_relation: 'Тип связи',
     res_relation_instance: 'Конкретная связь',
     res_url: 'URL',
+    res_url_placeholder: '/admin или /api/v1/...',
     res_capability: 'Системная функция',
     act_all: 'Все действия',
     effect_allow: 'Разрешить',

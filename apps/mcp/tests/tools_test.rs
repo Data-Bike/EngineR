@@ -300,6 +300,122 @@ fn tool_params_match_api_contract_names() {
 }
 
 #[test]
+fn prepare_call_forwards_catalog_on_post_and_get() {
+    // `catalog` is a Query param even on POST tools — it must land in
+    // the query string, not the JSON body, or the API ignores it and
+    // the call silently operates on the wrong catalog scope.
+    let create = TOOLS.iter().find(|t| t.name == "entities.create").unwrap();
+    let out = prepare_call(
+        "http://a/api/v1",
+        create,
+        &json!({ "type_id": "legal_entity", "catalog": "wh", "fields": {} }),
+    )
+    .unwrap();
+    assert!(
+        out.query.contains(&("catalog".into(), "wh".into())),
+        "catalog must be a query param: {:?}",
+        out.query
+    );
+    assert!(
+        out.body.get("catalog").is_none(),
+        "catalog must not leak into body"
+    );
+
+    let audit = TOOLS.iter().find(|t| t.name == "audit.query").unwrap();
+    let out = prepare_call(
+        "http://a/api/v1",
+        audit,
+        &json!({ "catalog": "qa_t", "limit": 5 }),
+    )
+    .unwrap();
+    assert!(out.query.contains(&("catalog".into(), "qa_t".into())));
+}
+
+#[test]
+fn prepare_call_restore_sends_confirm_in_body() {
+    let tool = TOOLS
+        .iter()
+        .find(|t| t.name == "admin.dump_restore")
+        .unwrap();
+    let out = prepare_call(
+        "http://a/api/v1",
+        tool,
+        &json!({ "id": "dump-1", "confirm": "RESTORE" }),
+    )
+    .unwrap();
+    assert_eq!(out.url, "http://a/api/v1/admin/dump/dump-1/restore");
+    assert_eq!(out.body["confirm"], "RESTORE");
+    // Missing/wrong confirm must fail fast at the API — but a missing
+    // argument is caught earlier by required-param validation.
+    let err = prepare_call("http://a", tool, &json!({ "id": "d" })).unwrap_err();
+    assert!(err.contains("confirm"), "{err}");
+}
+
+#[test]
+fn dump_tools_require_security_manage() {
+    let viewer = vec!["entity.read".to_string()];
+    let names: Vec<_> = tools_for_capabilities(&viewer)
+        .iter()
+        .map(|t| t.name)
+        .collect();
+    for t in [
+        "admin.dump_run",
+        "admin.dump_list",
+        "admin.dump_delete",
+        "admin.dump_restore",
+    ] {
+        assert!(
+            !names.contains(&t),
+            "{t} must not be visible to entity.read"
+        );
+    }
+    let admin = vec!["security.manage".to_string()];
+    let names: Vec<_> = tools_for_capabilities(&admin)
+        .iter()
+        .map(|t| t.name)
+        .collect();
+    for t in [
+        "admin.dump_run",
+        "admin.dump_list",
+        "admin.dump_delete",
+        "admin.dump_restore",
+    ] {
+        assert!(names.contains(&t), "{t} must be visible to security.manage");
+    }
+}
+
+#[test]
+fn catalog_tools_present_and_scoped() {
+    let find = |n: &str| TOOLS.iter().find(|t| t.name == n);
+    for n in ["catalogs.list", "catalogs.get", "catalogs.create"] {
+        assert!(find(n).is_some(), "missing tool {n}");
+    }
+    // Catalog-aware tools declare the `catalog` query param.
+    for n in [
+        "entities.list",
+        "entities.create",
+        "entities.update",
+        "entities.query",
+        "audit.query",
+    ] {
+        let t = find(n).unwrap_or_else(|| panic!("missing tool {n}"));
+        assert!(
+            t.params.iter().any(|p| p.name == "catalog"),
+            "{n} missing catalog param"
+        );
+    }
+    // Entity-detail tools keyed by uuid don't take a catalog selector
+    // — the selector is a listing filter, not a security scope.
+    for n in ["entities.retire", "entities.merge"] {
+        let t = find(n).unwrap_or_else(|| panic!("missing tool {n}"));
+        assert!(
+            !t.params.iter().any(|p| p.name == "catalog"),
+            "{n} should not take a catalog selector"
+        );
+    }
+}
+
+#[test]
 fn prepare_call_decodes_binary_body() {
     let tool = TOOLS
         .iter()

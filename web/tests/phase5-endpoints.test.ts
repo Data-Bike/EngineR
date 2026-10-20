@@ -318,7 +318,7 @@ describe('AuditEndpoints', () => {
         resource_kind: 'entity', resource_id: 'ent-1', effect: 'allow',
         reason_ids: [], policy_revision: null, request_id: null,
         correlation_id: null, query_fingerprint: null, row_count: null,
-        bytes: null, client: null, service: null, metadata: {},
+        bytes: null, client: null, service: null, catalog: 'wh', metadata: {},
       }],
       meta: {},
     });
@@ -326,6 +326,15 @@ describe('AuditEndpoints', () => {
     const res = await api.audit.query({ kind: 'decision', limit: 10 });
     expect(res.data).toHaveLength(1);
     expect(res.data[0].kind).toBe('decision');
+  });
+
+  it('query audit sends the catalog filter in the query string', async () => {
+    const fetchImpl = makeFetch({ data: [], meta: {} });
+    const api = createEnginerClient(configWithMock(fetchImpl));
+    await api.audit.query({ catalog: 'qa_t' });
+    const url = String((fetchImpl as ReturnType<typeof vi.fn>).mock.calls[0][0]);
+    expect(url).toContain('catalog=qa_t');
+    expect(url).toContain('/audit?');
   });
 
   it('latest checkpoint', async () => {

@@ -116,8 +116,11 @@ async fn export_table(
     );
     let mut stream = sqlx::query_scalar::<_, serde_json::Value>(&sql).fetch(&mut *conn);
     // Precompute the line envelope once — building a json!{} object and a
-    // format!() string per row would double allocations at scale.
-    let prefix = format!("{{\"table\":\"{schema}.{table}\",\"row\":");
+    // format!() string per row would double allocations at scale. The
+    // table key is JSON-encoded, not interpolated raw — an exotic table
+    // name containing '"' or '\' would corrupt the NDJSON line.
+    let key = serde_json::to_string(&format!("{schema}.{table}"))?;
+    let prefix = format!("{{\"table\":{key},\"row\":");
     let mut n = 0u64;
     while let Some(row) = stream.next().await {
         let row = row?;
@@ -537,4 +540,88 @@ pub async fn import(dsn: &str, dir: &Path, batch: usize) -> Result<(), DynError>
     imp.flush().await?;
     log_line(&mut log, &format!("import complete rows={}", imp.rows_read));
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tmp_dir(tag: &str) -> std::path::PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("enginer-dump-test-{}-{tag}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn qident_quotes() {
+        assert_eq!(qident("entity"), "\"entity\"");
+        assert_eq!(qident("a\"b"), "\"a\"\"b\"");
+        assert_eq!(qident(""), "\"\"");
+    }
+
+    #[test]
+    fn probe_accepts_plain_ndjson() {
+        let dir = tmp_dir("plain");
+        let p = dir.join("dump.ndjson");
+        std::fs::write(
+            &p,
+            "{\"table\":\"_header\",\"row\":{}}\n{\"table\":\"core.entity\",\"row\":{}}\n",
+        )
+        .unwrap();
+        assert!(probe_dump(&p));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn probe_accepts_xz_ndjson() {
+        let dir = tmp_dir("xz");
+        let p = dir.join("dump.ndjson.xz");
+        let mut enc = XzEncoder::new(std::fs::File::create(&p).unwrap(), 6);
+        enc.write_all(b"{\"table\":\"_header\",\"row\":{\"format\":\"enginer-dump/2\"}}\n")
+            .unwrap();
+        enc.finish().unwrap();
+        assert!(probe_dump(&p));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn probe_rejects_garbage_and_empty() {
+        let dir = tmp_dir("bad");
+        for (name, bytes) in [
+            ("empty.ndjson", b"".as_slice()),
+            ("json_obj.ndjson", b"{\"not\":\"a dump\"}\n".as_slice()),
+            ("json_no_table.ndjson", b"{\"row\":{}}\n".as_slice()),
+            (
+                "empty_table.ndjson",
+                b"{\"table\":\"\",\"row\":{}}\n".as_slice(),
+            ),
+            ("text.ndjson", b"hello world\n".as_slice()),
+            ("binary.ndjson", &[0u8, 159, 146, 150][..]),
+        ] {
+            let p = dir.join(name);
+            std::fs::write(&p, bytes).unwrap();
+            assert!(!probe_dump(&p), "{name} must be rejected");
+        }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn probe_rejects_truncated_xz() {
+        let dir = tmp_dir("xztrunc");
+        let p = dir.join("dump.ndjson.xz");
+        // xz magic + truncated stream: the container opens but yields
+        // no decodable first line.
+        std::fs::write(&p, [0xFD, 0x37, 0x7A, 0x58, 0x5A, 0x00, 0x01]).unwrap();
+        assert!(!probe_dump(&p));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn probe_rejects_missing_file() {
+        let dir = tmp_dir("missing");
+        assert!(!probe_dump(&dir.join("nope.ndjson")));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

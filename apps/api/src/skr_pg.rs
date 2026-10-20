@@ -20,7 +20,83 @@ use rocket::{get, post, routes, State};
 use serde_json::{json, Value};
 use sqlx::postgres::{PgPool, PgRow};
 use sqlx::{Postgres, Row, Transaction};
+use std::collections::HashMap;
 use std::sync::Arc;
+
+/// Per-request catalog gate for domain rows that reference an entity
+/// (docs/28 §8): a row is dropped when its target entity lives in a
+/// catalog the caller cannot read — list endpoints must not leak the
+/// target's existence or display name. Rows with no entity pass.
+struct RowCatalogGate {
+    perm: crate::dataperm::DataPerm,
+    entities: HashMap<i64, bool>,
+}
+
+impl RowCatalogGate {
+    async fn load(tx: &mut Transaction<'_, Postgres>, ctx: &AuthContext) -> Result<Self, DbError> {
+        let perm = crate::dataperm::DataPerm::load(tx, ctx.tenant_id, ctx.principal_id).await?;
+        Ok(Self {
+            perm,
+            entities: HashMap::new(),
+        })
+    }
+
+    /// Full visibility check on the row's target entity (catalog + type +
+    /// instance rules). Stronger than [`Self::allows`]: an entity denied at
+    /// the instance level inside a readable catalog must still not leak
+    /// its display name through a domain listing. Cached per entity.
+    async fn entity_ok(
+        &mut self,
+        tx: &mut Transaction<'_, Postgres>,
+        tenant: uuid::Uuid,
+        entity_id: Option<i64>,
+    ) -> Result<bool, DbError> {
+        let Some(eid) = entity_id else {
+            return Ok(true);
+        };
+        if let Some(ok) = self.entities.get(&eid) {
+            return Ok(*ok);
+        }
+        let rows: Vec<crate::entity_pg::EntityRowTuple> = sqlx::query_as(&format!(
+            "{} AND e.entity_id = $2",
+            crate::entity_pg::ENTITY_SELECT
+        ))
+        .bind(tenant)
+        .bind(eid)
+        .fetch_all(&mut **tx)
+        .await
+        .map_err(db_err)?;
+        let ok = rows.into_iter().next().is_some_and(|r| {
+            crate::entity_pg::entity_visible(&self.perm, &crate::entity_pg::row_to_entity_row(r))
+        });
+        self.entities.insert(eid, ok);
+        Ok(ok)
+    }
+
+    /// COUNT(*) over a domain subquery, filtered through [`Self::entity_ok`]
+    /// — dashboard aggregates must not count rows whose target entity is
+    /// invisible, or they leak hidden-catalog existence in aggregate.
+    /// `q` is a SELECT returning the domain row's entity id under `col`.
+    async fn count_visible(
+        &mut self,
+        tx: &mut Transaction<'_, Postgres>,
+        tenant: uuid::Uuid,
+        q: &str,
+    ) -> Result<i64, DbError> {
+        let ids: Vec<Option<i64>> = sqlx::query_scalar(q)
+            .bind(tenant)
+            .fetch_all(&mut **tx)
+            .await
+            .map_err(db_err)?;
+        let mut n = 0i64;
+        for id in ids {
+            if self.entity_ok(tx, tenant, id).await? {
+                n += 1;
+            }
+        }
+        Ok(n)
+    }
+}
 
 fn pg(state: &State<AppState>) -> Result<Arc<AsyncStdDbExecutor>, Status> {
     state.db_executor.clone().ok_or(Status::ServiceUnavailable)
@@ -91,7 +167,8 @@ fn check_row(r: &PgRow, target_public: &str, target_name: &str) -> Value {
     })
 }
 
-const CHECK_SELECT: &str = "SELECT c.*, e.public_id AS entity_public
+const CHECK_SELECT: &str =
+    "SELECT c.*, e.public_id AS entity_public, e.catalog_id AS entity_catalog
      FROM core.check_instance c
      LEFT JOIN core.entity e ON e.tenant_id=c.tenant_id AND e.entity_id=c.entity_id
      WHERE c.tenant_id=$1";
@@ -120,6 +197,7 @@ pub async fn query_checks(
                     .await?;
             }
             let cursor_uuid = cursor.as_deref().and_then(|s| s.parse::<uuid::Uuid>().ok());
+            let mut gate = RowCatalogGate::load(&mut t, &ctx).await?;
             let rows = sqlx::query(&format!(
                 "{CHECK_SELECT}
                    AND ($2::uuid IS NULL OR e.public_id=$2)
@@ -148,6 +226,9 @@ pub async fn query_checks(
                 }
                 let ep: Option<uuid::Uuid> = r.try_get("entity_public").ok().flatten();
                 let eid: Option<i64> = r.try_get("entity_id").ok().flatten();
+                if !gate.entity_ok(&mut t, ctx.tenant_id, eid).await? {
+                    continue;
+                }
                 let name = if let Some(eid) = eid {
                     load_fields(&mut t, ctx.tenant_id, &[eid])
                         .await?
@@ -426,6 +507,7 @@ fn assessment_json(
 
 const ASSESSMENT_SELECT: &str =
     "SELECT a.*, a.score::float8 AS score_f, e.public_id AS entity_public,
+        e.catalog_id AS entity_catalog,
         COALESCE(c.login, a.assessor::text) AS assessor_login
      FROM core.risk_assessment a
      LEFT JOIN core.entity e ON e.tenant_id=a.tenant_id AND e.entity_id=a.entity_id
@@ -447,6 +529,7 @@ pub async fn query_assessments(
     let v = exec
         .run(Deadline::in_secs(10), move |pool| async move {
             let mut t = tx(&pool, &ctx).await?;
+            let mut gate = RowCatalogGate::load(&mut t, &ctx).await?;
             let rows = sqlx::query(&format!(
                 "{ASSESSMENT_SELECT}
                    AND ($2::text IS NULL OR a.status=$2)
@@ -461,6 +544,9 @@ pub async fn query_assessments(
             let mut out = Vec::new();
             for r in &rows {
                 let eid: i64 = r.try_get("entity_id").unwrap_or_default();
+                if !gate.entity_ok(&mut t, ctx.tenant_id, Some(eid)).await? {
+                    continue;
+                }
                 let ep: Option<uuid::Uuid> = r.try_get("entity_public").ok().flatten();
                 let fields = load_fields(&mut t, ctx.tenant_id, &[eid]).await?;
                 let name = fields
@@ -1292,7 +1378,8 @@ pub async fn get_workflow_tasks(
                     .await?;
             }
             let rows = sqlx::query(
-                "SELECT t.*, e.public_id AS entity_public FROM core.task t
+                "SELECT t.*, e.public_id AS entity_public, e.catalog_id AS entity_catalog
+                 FROM core.task t
                  LEFT JOIN core.entity e ON e.tenant_id=t.tenant_id AND e.entity_id=t.entity_id
                  WHERE t.tenant_id=$1 AND t.workflow_id=$2 ORDER BY t.created_at",
             )
@@ -1301,14 +1388,17 @@ pub async fn get_workflow_tasks(
             .fetch_all(&mut *t)
             .await
             .map_err(db_err)?;
-            Ok(Value::Array(
-                rows.iter()
-                    .map(|r| {
-                        let ep: Option<uuid::Uuid> = r.try_get("entity_public").ok().flatten();
-                        task_row(r, &ep.map(|u| u.to_string()).unwrap_or_default())
-                    })
-                    .collect(),
-            ))
+            let mut gate = RowCatalogGate::load(&mut t, &ctx).await?;
+            let mut out = Vec::new();
+            for r in &rows {
+                let eid: Option<i64> = r.try_get("entity_id").ok().flatten();
+                if !gate.entity_ok(&mut t, ctx.tenant_id, eid).await? {
+                    continue;
+                }
+                let ep: Option<uuid::Uuid> = r.try_get("entity_public").ok().flatten();
+                out.push(task_row(r, &ep.map(|u| u.to_string()).unwrap_or_default()));
+            }
+            Ok(Value::Array(out))
         })
         .await
         .map_err(|e| to_status(&e))?;
@@ -1340,6 +1430,7 @@ pub async fn query_requests(
             let rows = sqlx::query(
                 "SELECT r.*, r.requested_limit::float8 AS requested_limit_f,
                         e.public_id AS entity_public, e.entity_id AS eid,
+                        e.catalog_id AS entity_catalog,
                         COALESCE(c.login,'') AS initiator_login
                  FROM core.request r
                  LEFT JOIN core.entity e ON e.tenant_id=r.tenant_id AND e.entity_id=r.entity_id
@@ -1353,9 +1444,13 @@ pub async fn query_requests(
             .fetch_all(&mut *t)
             .await
             .map_err(db_err)?;
+            let mut gate = RowCatalogGate::load(&mut t, &ctx).await?;
             let mut out = Vec::new();
             for r in &rows {
                 let eid: Option<i64> = r.try_get("eid").ok().flatten();
+                if !gate.entity_ok(&mut t, ctx.tenant_id, eid).await? {
+                    continue;
+                }
                 let name = if let Some(eid) = eid {
                     load_fields(&mut t, ctx.tenant_id, &[eid])
                         .await?
@@ -1508,7 +1603,8 @@ pub async fn list_monitors(
         .run(Deadline::in_secs(10), move |pool| async move {
             let mut t = tx(&pool, &ctx).await?;
             let rows = sqlx::query(
-                "SELECT m.*, e.public_id AS entity_public FROM integration.monitor m
+                "SELECT m.*, e.public_id AS entity_public, e.catalog_id AS entity_catalog
+                 FROM integration.monitor m
                  LEFT JOIN core.entity e ON e.tenant_id=m.tenant_id AND e.entity_id=m.target_entity_id
                  WHERE m.tenant_id=$1 ORDER BY m.next_run_at NULLS LAST",
             )
@@ -1516,7 +1612,16 @@ pub async fn list_monitors(
             .fetch_all(&mut *t)
             .await
             .map_err(db_err)?;
-            Ok(Value::Array(rows.iter().map(monitor_row).collect()))
+            let mut gate = RowCatalogGate::load(&mut t, &ctx).await?;
+            let mut out = Vec::new();
+            for r in &rows {
+                let eid: Option<i64> = r.try_get("target_entity_id").ok().flatten();
+                if !gate.entity_ok(&mut t, ctx.tenant_id, eid).await? {
+                    continue;
+                }
+                out.push(monitor_row(r));
+            }
+            Ok(Value::Array(out))
         })
         .await
         .map_err(|e| to_status(&e))?;
@@ -1551,9 +1656,33 @@ pub async fn run_monitor(
                 Some("active") => {}
                 _ => return Err(http_err(409, "monitor inactive")),
             }
-            let frequency: String = sqlx::query_scalar(
-                "SELECT frequency FROM integration.monitor WHERE monitor_id=$1",
+            // A monitor bound to an entity in a catalog the caller cannot
+            // read is not theirs to run — 404 like any hidden row.
+            let target: Option<(Option<i64>, Option<uuid::Uuid>)> = sqlx::query_as(
+                "SELECT m.target_entity_id, e.public_id FROM integration.monitor m
+                 LEFT JOIN core.entity e ON e.tenant_id=m.tenant_id
+                   AND e.entity_id=m.target_entity_id
+                 WHERE m.tenant_id=$1 AND m.monitor_id=$2",
             )
+            .bind(ctx.tenant_id)
+            .bind(mid)
+            .fetch_optional(&mut *t)
+            .await
+            .map_err(db_err)?;
+            if let Some((_, Some(pid))) = target {
+                crate::entity_pg::checked_entity(
+                    &mut t,
+                    &ctx,
+                    pid,
+                    crate::dataperm::Op::Read,
+                )
+                .await
+                .map_err(|_| http_err(404, "monitor not found"))?;
+            }
+            let frequency: String = sqlx::query_scalar(
+                "SELECT frequency FROM integration.monitor WHERE tenant_id=$1 AND monitor_id=$2",
+            )
+            .bind(ctx.tenant_id)
             .bind(mid)
             .fetch_one(&mut *t)
             .await
@@ -1988,61 +2117,69 @@ pub async fn dashboard_stats(
     let v = exec
         .run(Deadline::in_secs(10), move |pool| async move {
             let mut t = tx(&pool, &ctx).await?;
-            let one = |q: &'static str| {
-                let tenant = ctx.tenant_id;
-                let fut = sqlx::query_scalar::<_, i64>(q).bind(tenant);
-                fut
-            };
-            let my_tasks: i64 = one(
-                "SELECT count(*) FROM core.task WHERE tenant_id=$1
-                 AND status NOT IN ('completed','cancelled')",
-            )
-            .fetch_one(&mut *t)
-            .await
-            .map_err(db_err)?;
-            let overdue: i64 = one(
-                "SELECT count(*) FROM core.task WHERE tenant_id=$1
-                 AND (status='overdue' OR (due_date < now() AND status NOT IN ('completed','cancelled')))",
-            )
-            .fetch_one(&mut *t)
-            .await
-            .map_err(db_err)?;
-            let new_requests: i64 = one(
-                "SELECT count(*) FROM core.request WHERE tenant_id=$1 AND status='pending'",
-            )
-            .fetch_one(&mut *t)
-            .await
-            .map_err(db_err)?;
-            let checks_in_progress: i64 = one(
-                "SELECT count(*) FROM core.check_instance WHERE tenant_id=$1
-                 AND status IN ('pending','running')",
-            )
-            .fetch_one(&mut *t)
-            .await
-            .map_err(db_err)?;
-            let checks_errors: i64 = one(
-                "SELECT count(*) FROM core.check_instance WHERE tenant_id=$1 AND status='failed'",
-            )
-            .fetch_one(&mut *t)
-            .await
-            .map_err(db_err)?;
-            let critical_factors: i64 = one(
-                "SELECT count(*) FROM core.risk_factor WHERE tenant_id=$1
-                 AND NOT resolved AND level IN ('high','critical')",
-            )
-            .fetch_one(&mut *t)
-            .await
-            .map_err(db_err)?;
-            let monitors_due: i64 = one(
-                "SELECT count(*) FROM integration.monitor WHERE tenant_id=$1
-                 AND status='active' AND next_run_at <= now()",
-            )
-            .fetch_one(&mut *t)
-            .await
-            .map_err(db_err)?;
-            let ready_reports: i64 = one(
+            let mut gate = RowCatalogGate::load(&mut t, &ctx).await?;
+            // Dashboard counts must respect entity visibility — an
+            // unfiltered COUNT leaks hidden-catalog entities in aggregate
+            // (docs/28 §4: no system access without the catalog grant).
+            let my_tasks: i64 = gate
+                .count_visible(
+                    &mut t,
+                    ctx.tenant_id,
+                    "SELECT t.entity_id FROM core.task t WHERE t.tenant_id=$1
+                     AND t.status NOT IN ('completed','cancelled')",
+                )
+                .await?;
+            let overdue: i64 = gate
+                .count_visible(
+                    &mut t,
+                    ctx.tenant_id,
+                    "SELECT t.entity_id FROM core.task t WHERE t.tenant_id=$1
+                     AND (t.status='overdue' OR (t.due_date < now() AND t.status NOT IN ('completed','cancelled')))",
+                )
+                .await?;
+            let new_requests: i64 = gate
+                .count_visible(
+                    &mut t,
+                    ctx.tenant_id,
+                    "SELECT r.entity_id FROM core.request r WHERE r.tenant_id=$1 AND r.status='pending'",
+                )
+                .await?;
+            let checks_in_progress: i64 = gate
+                .count_visible(
+                    &mut t,
+                    ctx.tenant_id,
+                    "SELECT c.entity_id FROM core.check_instance c WHERE c.tenant_id=$1
+                     AND c.status IN ('pending','running')",
+                )
+                .await?;
+            let checks_errors: i64 = gate
+                .count_visible(
+                    &mut t,
+                    ctx.tenant_id,
+                    "SELECT c.entity_id FROM core.check_instance c WHERE c.tenant_id=$1 AND c.status='failed'",
+                )
+                .await?;
+            let critical_factors: i64 = gate
+                .count_visible(
+                    &mut t,
+                    ctx.tenant_id,
+                    "SELECT f.entity_id FROM core.risk_factor f WHERE f.tenant_id=$1
+                     AND NOT f.resolved AND f.level IN ('high','critical')",
+                )
+                .await?;
+            let monitors_due: i64 = gate
+                .count_visible(
+                    &mut t,
+                    ctx.tenant_id,
+                    "SELECT m.target_entity_id AS entity_id FROM integration.monitor m
+                     WHERE m.tenant_id=$1 AND m.status='active' AND m.next_run_at <= now()",
+                )
+                .await?;
+            // Reports are tenant-global like dump — no entity binding.
+            let ready_reports: i64 = sqlx::query_scalar::<_, i64>(
                 "SELECT count(*) FROM core.report_instance WHERE tenant_id=$1 AND status='ready'",
             )
+            .bind(ctx.tenant_id)
             .fetch_one(&mut *t)
             .await
             .map_err(db_err)?;

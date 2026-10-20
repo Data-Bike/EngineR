@@ -114,12 +114,34 @@ async fn insert_event(
     .map_err(|e| DbError::Other {
         message: format!("hash: {e}"),
     })?;
+    // Tag the event with the resource's catalog (docs/28 §8): entity
+    // events inherit their entity's catalog so audit.query can filter by
+    // catalog access. Non-catalog resources stay NULL = visible to all.
+    let catalog_id: Option<i64> = if resource_kind == "entity" {
+        match resource_id {
+            Some(rid) => {
+                let row: Option<(Option<i64>,)> = sqlx::query_as(
+                    "SELECT catalog_id FROM core.entity
+                     WHERE tenant_id=$1 AND public_id=$2",
+                )
+                .bind(tenant)
+                .bind(rid)
+                .fetch_optional(&mut **tx)
+                .await
+                .map_err(db)?;
+                row.and_then(|r| r.0)
+            }
+            None => None,
+        }
+    } else {
+        None
+    };
     sqlx::query(
         "INSERT INTO audit.event
          (tenant_id, sequence, previous_hash, entry_hash, kind, action,
           resource_kind, resource_id, principal_id, session_id, effect,
-          outcome, occurred_at, client, service, metadata)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)",
+          outcome, occurred_at, client, service, metadata, catalog_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)",
     )
     .bind(tenant)
     .bind(sequence)
@@ -137,6 +159,7 @@ async fn insert_event(
     .bind(client)
     .bind(service)
     .bind(metadata)
+    .bind(catalog_id)
     .execute(&mut **tx)
     .await
     .map_err(db)?;
@@ -236,6 +259,7 @@ fn row_to_record(r: &sqlx::postgres::PgRow) -> Value {
         "previous_hash": r.try_get::<Option<String>, _>("previous_hash").ok().flatten().unwrap_or_default(),
         "request_id": request.map(|u| u.to_string()),
         "correlation_id": correlation.map(|u| u.to_string()),
+        "catalog": r.try_get::<Option<String>, _>("catalog_alias").ok().flatten(),
         "policy_revision": r.try_get::<Option<i64>, _>("policy_revision").ok().flatten(),
         "query_fingerprint": r.try_get::<Option<String>, _>("query_fingerprint").ok().flatten(),
         "row_count": r.try_get::<Option<i64>, _>("row_count").ok().flatten(),
@@ -246,7 +270,7 @@ fn row_to_record(r: &sqlx::postgres::PgRow) -> Value {
     })
 }
 
-#[get("/audit?<kind>&<actor>&<action>&<resource_kind>&<resource_id>&<effect>&<from>&<to>&<limit>&<cursor>")]
+#[get("/audit?<kind>&<actor>&<action>&<resource_kind>&<resource_id>&<effect>&<from>&<to>&<limit>&<cursor>&<catalog>")]
 pub async fn query_audit(
     cap: CapabilityGuard,
     state: &State<AppState>,
@@ -260,12 +284,29 @@ pub async fn query_audit(
     to: Option<String>,
     limit: Option<u32>,
     cursor: Option<i64>,
+    catalog: Option<String>,
 ) -> Result<Json<ApiEnvelope<Value>>, Status> {
     let exec = pg(state)?;
     let ctx = cap.ctx.clone();
     let v = exec
         .run(Deadline::in_secs(10), move |pool| async move {
             let mut tx = audit_tx(&pool, &ctx, "audit.read").await?;
+            // Catalog gate (docs/28 §8): rows tagged with a catalog are
+            // visible only when the reader can read that catalog; untagged
+            // rows (non-catalog resources, pre-catalog history) pass.
+            let perm =
+                crate::dataperm::DataPerm::load(&mut tx, ctx.tenant_id, ctx.principal_id).await?;
+            // Optional `?catalog=` filter (docs/28 §9): explicit slice to
+            // one catalog on top of the per-row visibility gate below.
+            // An unresolvable ref is a 422, consistent with entity routes.
+            let catalog_id = match catalog.as_deref() {
+                Some(r) => Some(
+                    crate::entity_pg::resolve_catalog(&mut tx, ctx.tenant_id, r)
+                        .await?
+                        .catalog_id,
+                ),
+                None => None,
+            };
             let limit = limit.unwrap_or(100).clamp(1, 500) as i64;
             let actor_uuid = actor.as_deref().and_then(|s| s.parse::<uuid::Uuid>().ok());
             let actor_login = actor.filter(|s| s.parse::<uuid::Uuid>().is_err());
@@ -284,11 +325,15 @@ pub async fn query_audit(
                         e.effect, e.reason_ids, e.entry_hash, e.previous_hash,
                         e.request_id, e.correlation_id, e.policy_revision,
                         e.query_fingerprint, e.row_count, e.bytes, e.client,
-                        e.service, e.metadata,
-                        c.login AS actor_login
+                        e.service, e.metadata, e.catalog_id,
+                        c.login AS actor_login,
+                        cat.alias AS catalog_alias,
+                        cat.public_id AS catalog_pid
                  FROM audit.event e
                  LEFT JOIN sec.principal_credential c
                      ON c.principal_id = e.principal_id
+                 LEFT JOIN core.catalog cat
+                     ON cat.tenant_id = e.tenant_id AND cat.catalog_id = e.catalog_id
                  WHERE e.tenant_id = $1
                    AND ($2::text IS NULL OR e.kind = $2)
                    AND ($3::uuid IS NULL OR e.principal_id = $3)
@@ -300,6 +345,7 @@ pub async fn query_audit(
                    AND ($9::timestamptz IS NULL OR e.occurred_at >= $9)
                    AND ($10::timestamptz IS NULL OR e.occurred_at <= $10)
                    AND ($11::bigint IS NULL OR e.sequence < $11)
+                   AND ($13::bigint IS NULL OR e.catalog_id = $13)
                  ORDER BY e.sequence DESC NULLS LAST
                  LIMIT $12",
             )
@@ -315,16 +361,40 @@ pub async fn query_audit(
             .bind(to_ts.map(|t| t.with_timezone(&chrono::Utc)))
             .bind(cursor)
             .bind(limit)
+            .bind(catalog_id)
             .fetch_all(&mut *tx)
             .await
             .map_err(db)?;
-            let out: Vec<Value> = rows.iter().map(row_to_record).collect();
+            let out: Vec<Value> = rows
+                .iter()
+                .filter(|r| {
+                    let pid: Option<uuid::Uuid> = r.try_get("catalog_pid").ok().flatten();
+                    let alias: Option<String> = r.try_get("catalog_alias").ok().flatten();
+                    match (pid, alias) {
+                        (Some(p), Some(a)) => {
+                            perm.can_catalog(&[&p.to_string(), &a], crate::dataperm::Op::Read)
+                        }
+                        // Tagged row whose catalog row vanished → hide;
+                        // untagged → visible.
+                        (None, None) => r
+                            .try_get::<Option<i64>, _>("catalog_id")
+                            .ok()
+                            .flatten()
+                            .is_none(),
+                        _ => false,
+                    }
+                })
+                .map(row_to_record)
+                .collect();
             Ok(Value::Array(out))
         })
         .await
         .map_err(|e| {
-            tracing::error!(error = %e, "audit query failed");
-            Status::InternalServerError
+            let st = crate::entity_pg::to_status(&e);
+            if st == Status::InternalServerError {
+                tracing::error!(error = %e, "audit query failed");
+            }
+            st
         })?;
     Ok(Json(ApiEnvelope {
         data: v,
@@ -617,8 +687,12 @@ pub async fn put_retention(
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PermissionRuleRecord {
     pub effect: String,
-    /// `all|type|field|entity|relation|relation_instance|url|capability`
+    /// `all|catalog|type|field|entity|relation|relation_instance|url|capability`
     pub resource_type: String,
+    /// Catalog qualifier (docs/28 §4): scopes a data rule to one catalog —
+    /// or is itself the selector for `catalog` rules. Empty/`"*"` = all.
+    #[serde(default)]
+    pub catalog: String,
     /// Object-type alias (for `type`/`field` scopes).
     #[serde(default)]
     pub type_alias: String,
@@ -691,6 +765,11 @@ fn canonical_rule(rule: &PermissionRuleRecord) -> Option<(String, Value)> {
         _ => return None,
     };
     let mut res = serde_json::Map::new();
+    // Every data rule may be catalog-scoped (docs/28 §4); an absent or "*"
+    // selector keeps the old cross-catalog meaning and is not persisted.
+    if rt != "all" && rt != "catalog" && !rule.catalog.is_empty() && rule.catalog != "*" {
+        res.insert("catalog".into(), json!(rule.catalog));
+    }
     let action = match rt {
         "all" => {
             if op == "*" {
@@ -698,6 +777,17 @@ fn canonical_rule(rule: &PermissionRuleRecord) -> Option<(String, Value)> {
             } else {
                 format!("data.all.{op}")
             }
+        }
+        "catalog" => {
+            res.insert(
+                "catalog".into(),
+                json!(if rule.catalog.is_empty() {
+                    "*".to_string()
+                } else {
+                    rule.catalog.clone()
+                }),
+            );
+            format!("data.catalog.{op}")
         }
         "type" => {
             res.insert("type".into(), json!(rule.type_alias));
@@ -771,6 +861,11 @@ fn validate_group_input(input: &PermissionGroupInput) -> Result<(), Status> {
                 || rule.resource_type.trim().is_empty()
                 || rule.action.trim().is_empty()
                 || canonical_rule(rule).is_none()
+                // ADR-010: group class and rule class must match — a
+                // capability group holding data.* rules (or a data group
+                // holding capability actions) bypasses the class split.
+                || (input.class == "capability")
+                    != (rule.resource_type == "capability")
         })
     {
         return Err(Status::UnprocessableEntity);
@@ -867,6 +962,9 @@ async fn load_groups(
                         "effect": rule["effect"].as_str().unwrap_or("allow"),
                         "resource_type": rt,
                         "action": op,
+                        // Catalog qualifier round-trips so editing a scoped
+                        // rule does not silently widen it to all catalogs.
+                        "catalog": res("catalog"),
                         "type_alias": res("type"),
                         "predicate": res("predicate"),
                         "direction": res("direction"),
@@ -1064,6 +1162,24 @@ pub async fn create_permission_group(
                 .filter(|s| !s.trim().is_empty())
                 .and_then(|s| s.parse().ok());
             validate_parent_group(&mut tx, ctx.tenant_id, parent).await?;
+            // Aliases are the lookup key everywhere (resolve_group_ids,
+            // user group assignment, rule admin). A duplicate alias splits
+            // memberships and rules across two rows — rules written to one
+            // silently never apply to members of the other.
+            let alias_taken: bool = sqlx::query_scalar(
+                "SELECT EXISTS(SELECT 1 FROM sec.\"group\"
+                                WHERE tenant_id=$1 AND alias=$2)",
+            )
+            .bind(ctx.tenant_id)
+            .bind(body.name.trim())
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(db)?;
+            if alias_taken {
+                return Err(DbError::Other {
+                    message: "HTTP409:group alias already exists".into(),
+                });
+            }
             sqlx::query(
                 "INSERT INTO sec.\"group\" (group_id, tenant_id, class, alias, description, parent_id)
                  VALUES ($1,$2,$3,$4,$5,$6)",
@@ -1089,6 +1205,10 @@ pub async fn create_permission_group(
         .await
         .map_err(|e| {
             if let DbError::Other { message } = &e {
+                if let Some(detail) = message.strip_prefix("HTTP409:") {
+                    tracing::warn!(detail = %detail, "permission group conflict");
+                    return Status::Conflict;
+                }
                 if let Some(detail) = message.strip_prefix("HTTP422:") {
                     tracing::warn!(detail = %detail, "permission group rejected");
                     return Status::UnprocessableEntity;
@@ -1148,6 +1268,23 @@ pub async fn update_permission_group(
                 .filter(|s| !s.trim().is_empty())
                 .and_then(|s| s.parse().ok());
             validate_parent_group(&mut tx, ctx.tenant_id, parent).await?;
+            // Renaming onto another group's alias would recreate the same
+            // ambiguity POST rejects (see create_permission_group).
+            let alias_taken: bool = sqlx::query_scalar(
+                "SELECT EXISTS(SELECT 1 FROM sec.\"group\"
+                                WHERE tenant_id=$1 AND alias=$2 AND group_id<>$3)",
+            )
+            .bind(ctx.tenant_id)
+            .bind(body.name.trim())
+            .bind(gid)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(db)?;
+            if alias_taken {
+                return Err(DbError::Other {
+                    message: "HTTP409:group alias already exists".into(),
+                });
+            }
             let changed = sqlx::query(
                 "UPDATE sec.\"group\" SET alias=$3, description=$4, class=$5, parent_id=$6
                  WHERE tenant_id=$1 AND group_id=$2",
@@ -1179,6 +1316,10 @@ pub async fn update_permission_group(
         .await
         .map_err(|e| match e {
             DbError::Other { message } if message == "HTTP404:group" => Status::NotFound,
+            DbError::Other { message } if message.starts_with("HTTP409:") => {
+                tracing::warn!(detail = %message, "permission group conflict");
+                Status::Conflict
+            }
             DbError::Other { message } if message.starts_with("HTTP422:") => {
                 tracing::warn!(detail = %message, "permission group rejected");
                 Status::UnprocessableEntity

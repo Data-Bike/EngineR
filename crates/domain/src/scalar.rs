@@ -5,7 +5,7 @@
 //! `numeric(p,s)` in `PostgreSQL`). Instants are UTC + source IANA zone.
 
 use crate::ids::ContentHash;
-use chrono::{DateTime, NaiveDate, Utc};
+use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
@@ -76,6 +76,13 @@ pub enum CanonicalScalar {
         value: DateTime<Utc>,
         source_zone: Option<String>,
     },
+    /// Local wall-clock datetime tagged with the IANA zone it was recorded in
+    /// (docs/03 §7). Not a UTC instant — the offset may change with DST rules.
+    #[serde(rename = "local_datetime")]
+    LocalDateTime {
+        value: NaiveDateTime,
+        zone: String,
+    },
     Uuid {
         value: uuid::Uuid,
     },
@@ -102,6 +109,11 @@ pub enum CanonicalScalar {
         /// Canonical JSON text (sorted keys, no insignificant whitespace).
         value: String,
     },
+    /// Geo point/shape — canonical GeoJSON text (PostGIS when the profile is
+    /// enabled; stored as canonical JSON meanwhile).
+    Geo {
+        value: String,
+    },
     Blob {
         content_hash: ContentHash,
         size_bytes: u64,
@@ -114,12 +126,17 @@ impl CanonicalScalar {
     #[must_use]
     pub fn kind(&self) -> ScalarKind {
         match self {
+            Self::Text {
+                language_tag: Some(_),
+                ..
+            } => ScalarKind::LocalizedText,
             Self::Text { .. } => ScalarKind::Text,
             Self::Boolean { .. } => ScalarKind::Boolean,
             Self::Integer { .. } => ScalarKind::Integer,
             Self::Decimal { .. } => ScalarKind::Decimal,
             Self::Date { .. } => ScalarKind::Date,
             Self::Instant { .. } => ScalarKind::Instant,
+            Self::LocalDateTime { .. } => ScalarKind::LocalDateTime,
             Self::Uuid { .. } => ScalarKind::Uuid,
             Self::Uri { .. } => ScalarKind::Uri,
             Self::Email { .. } => ScalarKind::Email,
@@ -127,6 +144,7 @@ impl CanonicalScalar {
             Self::Money { .. } => ScalarKind::Money,
             Self::Measurement { .. } => ScalarKind::Measurement,
             Self::Json { .. } => ScalarKind::Json,
+            Self::Geo { .. } => ScalarKind::Geo,
             Self::Blob { .. } => ScalarKind::Blob,
         }
     }
@@ -152,11 +170,20 @@ impl CanonicalScalar {
             }
             Self::Boolean { value } => buf.push(if *value { b'1' } else { b'0' }),
             Self::Integer { value } => buf.extend_from_slice(value.to_string().as_bytes()),
-            Self::Decimal { value } | Self::Uri { value } | Self::Json { value } => {
+            Self::Decimal { value }
+            | Self::Uri { value }
+            | Self::Json { value }
+            | Self::Geo { value } => {
                 buf.extend_from_slice(value.as_bytes());
             }
             Self::Date { value } => buf.extend_from_slice(value.to_string().as_bytes()),
             Self::Instant { value, .. } => buf.extend_from_slice(value.to_rfc3339().as_bytes()),
+            Self::LocalDateTime { value, zone } => {
+                buf.extend_from_slice(value.to_string().as_bytes());
+                buf.push(b'[');
+                buf.extend_from_slice(zone.as_bytes());
+                buf.push(b']');
+            }
             Self::Uuid { value } => buf.extend_from_slice(value.as_bytes()),
             Self::Email { local, domain } => {
                 buf.extend_from_slice(local.as_bytes());
@@ -255,5 +282,60 @@ mod tests {
             extension: Some("123".to_string()),
         };
         assert_ne!(a.canonical_bytes(), b.canonical_bytes());
+    }
+
+    #[test]
+    fn localized_text_reports_localized_kind() {
+        let s = CanonicalScalar::Text {
+            value_nfc: "Привет".to_string(),
+            language_tag: Some("ru".to_string()),
+        };
+        assert_eq!(s.kind(), ScalarKind::LocalizedText);
+        assert!(String::from_utf8_lossy(&s.canonical_bytes()).starts_with("ltext|"));
+    }
+
+    #[test]
+    fn local_datetime_bytes_carry_zone() {
+        let a = CanonicalScalar::LocalDateTime {
+            value: NaiveDate::from_ymd_opt(2026, 10, 20)
+                .unwrap()
+                .and_hms_opt(14, 30, 0)
+                .unwrap(),
+            zone: "Europe/Moscow".to_string(),
+        };
+        let b = CanonicalScalar::LocalDateTime {
+            value: NaiveDate::from_ymd_opt(2026, 10, 20)
+                .unwrap()
+                .and_hms_opt(14, 30, 0)
+                .unwrap(),
+            zone: "UTC".to_string(),
+        };
+        assert_eq!(a.kind(), ScalarKind::LocalDateTime);
+        assert_ne!(a.canonical_bytes(), b.canonical_bytes());
+        assert!(String::from_utf8_lossy(&a.canonical_bytes()).contains("[Europe/Moscow]"));
+    }
+
+    #[test]
+    fn geo_roundtrip_and_kind() {
+        let s = CanonicalScalar::Geo {
+            value: "{\"type\":\"Point\",\"coordinates\":[37.6,55.7]}".to_string(),
+        };
+        assert_eq!(s.kind(), ScalarKind::Geo);
+        // serde tag stays snake_case for the wire/JSONB form.
+        let v = serde_json::to_value(&s).unwrap();
+        assert_eq!(v["kind"], "geo");
+        let back: CanonicalScalar = serde_json::from_value(v).unwrap();
+        assert_eq!(back, s);
+
+        let ldt = CanonicalScalar::LocalDateTime {
+            value: NaiveDate::from_ymd_opt(2026, 1, 1)
+                .unwrap()
+                .and_hms_opt(0, 0, 0)
+                .unwrap(),
+            zone: "UTC".to_string(),
+        };
+        let v = serde_json::to_value(&ldt).unwrap();
+        assert_eq!(v["kind"], "local_datetime");
+        assert_eq!(serde_json::from_value::<CanonicalScalar>(v).unwrap(), ldt);
     }
 }

@@ -296,10 +296,14 @@ async fn resolve_group_ids(
     tenant: uuid::Uuid,
     groups: &[String],
 ) -> Result<Vec<(uuid::Uuid, bool)>, DbError> {
+    // ORDER BY created_at makes alias resolution deterministic when
+    // legacy duplicate-alias groups still exist (new duplicates are
+    // rejected at POST/PUT time): the oldest row is the canonical one.
     let sql = format!(
         "SELECT group_id, {SPECIAL_ROLE_SQL} AS is_special
          FROM sec.\"group\" g
-         WHERE tenant_id=$1 AND (group_id::text=$2 OR alias=$2)"
+         WHERE tenant_id=$1 AND (group_id::text=$2 OR alias=$2)
+         ORDER BY created_at LIMIT 1"
     );
     let mut out = Vec::new();
     for g in groups {
@@ -885,17 +889,24 @@ pub async fn user_activity(
             if !exists {
                 return Err(http_err(404, "user not found"));
             }
-            let row_of = |r: &sqlx::postgres::PgRow| {
+            // The feed lists entities the target principal touched —
+            // each row must still be readable by *this* requester,
+            // otherwise the activity view leaks entity existence and
+            // types across catalog boundaries (docs/28 §4/§8).
+            let perm = crate::entity_pg::perm_for(&mut tx, &ctx).await?;
+            // (entity_id, public_id, type_alias, at) — entity_id is the
+            // join key for the batch visibility check below.
+            type FeedRow = (i64, uuid::Uuid, String, chrono::DateTime<chrono::Utc>);
+            let feed_json = |r: &FeedRow| {
                 json!({
-                    "public_id": r.try_get::<uuid::Uuid,_>("public_id")
-                        .unwrap_or_default().to_string(),
-                    "type": r.try_get::<String,_>("type_alias").unwrap_or_default(),
-                    "at": r.try_get::<chrono::DateTime<chrono::Utc>,_>("at")
-                        .map(|t| t.to_rfc3339()).unwrap_or_default(),
+                    "public_id": r.1.to_string(),
+                    "type": r.2,
+                    "at": r.3.to_rfc3339(),
                 })
             };
-            let created: Vec<Value> = sqlx::query(
-                "SELECT e.public_id, COALESCE(td.stable_alias,'') AS type_alias,
+            let created_rows: Vec<FeedRow> = sqlx::query_as(
+                "SELECT e.entity_id, e.public_id,
+                        COALESCE(td.stable_alias,'') AS type_alias,
                         e.created_at AS at
                  FROM core.entity e
                  LEFT JOIN meta.type_definition td
@@ -908,19 +919,17 @@ pub async fn user_activity(
             .bind(limit)
             .fetch_all(&mut *tx)
             .await
-            .map_err(db_err)?
-            .iter()
-            .map(row_of)
-            .collect();
-            let changed: Vec<Value> = sqlx::query(
-                "SELECT e.public_id, COALESCE(td.stable_alias,'') AS type_alias,
+            .map_err(db_err)?;
+            let changed_rows: Vec<FeedRow> = sqlx::query_as(
+                "SELECT e.entity_id, e.public_id,
+                        COALESCE(td.stable_alias,'') AS type_alias,
                         max(r.occurred_at) AS at
                  FROM core.entity_revision r
                  JOIN core.entity e ON e.tenant_id=r.tenant_id AND e.entity_id=r.entity_id
                  LEFT JOIN meta.type_definition td
                    ON td.tenant_id=e.tenant_id AND td.type_id=e.type_id
                  WHERE r.tenant_id=$1 AND r.actor=$2
-                 GROUP BY e.public_id, td.stable_alias
+                 GROUP BY e.entity_id, e.public_id, td.stable_alias
                  ORDER BY at DESC LIMIT $3",
             )
             .bind(tenant)
@@ -928,14 +937,12 @@ pub async fn user_activity(
             .bind(limit)
             .fetch_all(&mut *tx)
             .await
-            .map_err(db_err)?
-            .iter()
-            .map(row_of)
-            .collect();
+            .map_err(db_err)?;
             // Viewed: audit events logged by the AuditFairing for
             // `GET /api/v1/entities/<public_id>` requests.
-            let viewed: Vec<Value> = sqlx::query(
-                "SELECT e.public_id, COALESCE(td.stable_alias,'') AS type_alias,
+            let viewed_rows: Vec<FeedRow> = sqlx::query_as(
+                "SELECT e.entity_id, e.public_id,
+                        COALESCE(td.stable_alias,'') AS type_alias,
                         max(a.occurred_at) AS at
                  FROM audit.event a
                  JOIN core.entity e
@@ -946,7 +953,7 @@ pub async fn user_activity(
                  WHERE a.tenant_id=$1 AND a.principal_id=$2
                    AND a.action LIKE 'GET /api/v1/entities/%'
                    AND a.outcome='allowed'
-                 GROUP BY e.public_id, td.stable_alias
+                 GROUP BY e.entity_id, e.public_id, td.stable_alias
                  ORDER BY at DESC LIMIT $3",
             )
             .bind(tenant)
@@ -954,18 +961,52 @@ pub async fn user_activity(
             .bind(limit)
             .fetch_all(&mut *tx)
             .await
-            .map_err(db_err)?
-            .iter()
-            .map(row_of)
-            .collect();
+            .map_err(db_err)?;
+            // One batched visibility pass over every entity referenced
+            // by the three feeds (catalog + type + instance rules).
+            let mut all_ids: Vec<i64> =
+                Vec::with_capacity(created_rows.len() + changed_rows.len() + viewed_rows.len());
+            for r in created_rows.iter().chain(&changed_rows).chain(&viewed_rows) {
+                all_ids.push(r.0);
+            }
+            all_ids.sort_unstable();
+            all_ids.dedup();
+            let visible: std::collections::HashSet<i64> = if all_ids.is_empty() {
+                std::collections::HashSet::new()
+            } else {
+                let rows: Vec<crate::entity_pg::EntityRowTuple> = sqlx::query_as(&format!(
+                    "{} AND e.entity_id = ANY($2)",
+                    crate::entity_pg::ENTITY_SELECT
+                ))
+                .bind(tenant)
+                .bind(&all_ids)
+                .fetch_all(&mut *tx)
+                .await
+                .map_err(db_err)?;
+                rows.into_iter()
+                    .map(crate::entity_pg::row_to_entity_row)
+                    .filter(|r| crate::entity_pg::entity_visible(&perm, r))
+                    .map(|r| r.entity_id)
+                    .collect()
+            };
+            let keep = |r: &&FeedRow| visible.contains(&r.0);
+            let created: Vec<Value> = created_rows.iter().filter(keep).map(feed_json).collect();
+            let changed: Vec<Value> = changed_rows.iter().filter(keep).map(feed_json).collect();
+            let viewed: Vec<Value> = viewed_rows.iter().filter(keep).map(feed_json).collect();
+            // Raw audit rows: same catalog gate as GET /audit — tagged
+            // rows are visible only when the requester reads the catalog.
             let log: Vec<Value> = sqlx::query(
-                "SELECT audit_id, kind, action, outcome, occurred_at,
-                        COALESCE(metadata::text,'') AS parameters
-                 FROM audit.event
-                 WHERE tenant_id=$1 AND principal_id=$2
-                   AND ($3 = '' OR lower(action) LIKE '%'||$3||'%'
-                        OR lower(metadata::text) LIKE '%'||$3||'%')
-                 ORDER BY occurred_at DESC LIMIT $4",
+                "SELECT a.audit_id, a.kind, a.action, a.outcome, a.occurred_at,
+                        COALESCE(a.metadata::text,'') AS parameters,
+                        a.catalog_id,
+                        cat.public_id AS catalog_pid, cat.alias AS catalog_alias
+                 FROM audit.event a
+                 LEFT JOIN core.catalog cat
+                   ON cat.tenant_id=a.tenant_id AND cat.catalog_id=a.catalog_id
+                 WHERE a.tenant_id=$1 AND a.principal_id=$2
+                   AND ($3 = '' OR lower(a.action) LIKE '%'||$3||'%'
+                        OR lower(a.metadata::text) LIKE '%'||$3||'%')
+                 ORDER BY a.occurred_at DESC LIMIT $4",
             )
             .bind(tenant)
             .bind(pid)
@@ -975,6 +1016,22 @@ pub async fn user_activity(
             .await
             .map_err(db_err)?
             .iter()
+            .filter(|r| {
+                let pid: Option<uuid::Uuid> = r.try_get("catalog_pid").ok().flatten();
+                let alias: Option<String> = r.try_get("catalog_alias").ok().flatten();
+                match (pid, alias) {
+                    (Some(p), Some(a)) => {
+                        perm.can_catalog(&[&p.to_string(), &a], crate::dataperm::Op::Read)
+                    }
+                    // Tagged row whose catalog vanished → hide; untagged → visible.
+                    (None, None) => r
+                        .try_get::<Option<i64>, _>("catalog_id")
+                        .ok()
+                        .flatten()
+                        .is_none(),
+                    _ => false,
+                }
+            })
             .map(|r| {
                 json!({
                     "audit_id": r.try_get::<i64,_>("audit_id").unwrap_or_default(),

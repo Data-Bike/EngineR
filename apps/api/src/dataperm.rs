@@ -18,12 +18,20 @@
 //!   {entity: "<public_id>"}                for entity instance scope
 //!   {predicate: "<alias>", direction: "out|in|both"} for relation scope
 //!   {relation: "<relation_id>"}            for relation instance scope
+//!   {catalog: "<alias|public_id|*>"}       for catalog scope, and as an
+//!                                        optional qualifier on type/field/
+//!                                        relation rules (docs/28 §4)
 //!   {path: "/prefix"}                      for system.url
 //!
-//! Defaults (per requirements): type/field/relation scopes default DENY;
-//! entity/relation-instance scopes default ALLOW (rules only deny); URL
-//! access is open unless a blanket deny exists, in which case a matching
+//! Defaults (per requirements): catalog/type/field/relation scopes default
+//! DENY; entity/relation-instance scopes default ALLOW (rules only deny);
+//! URL access is open unless a blanket deny exists, in which case a matching
 //! allow rule is required. Deny always overrides allow.
+//!
+//! Catalogs gate every data check: `data.catalog.<op>` rules decide whether
+//! the principal may touch a catalog at all. A `data.*` wildcard allow
+//! implies catalog access (backwards compatibility), but an explicit
+//! `deny data.catalog.<op>` still carves a catalog out — deny wins.
 //!
 //! Special roles (group alias): 'superadmin' → everything allowed;
 //! 'superuser' → everything allowed except administrative capabilities and
@@ -67,6 +75,7 @@ pub const ADMIN_CAPS: &[&str] = &[
     "user.delete",
     "connector.manage",
     "admin.pages.access",
+    "catalog.manage",
 ];
 
 /// URL prefixes reserved for administrative API surface.
@@ -116,18 +125,25 @@ pub struct DataPerm {
     pub superuser: bool,
     /// `data.*` (or `data.all.*`) allow present.
     wildcard_allow: bool,
-    type_rules: HashMap<String, PermSet>,
-    field_rules: HashMap<(String, String), PermSet>,
+    /// Catalog rules keyed by catalog selector (alias, public_id, "*", or
+    /// "" for an unscoped rule). The catalog gate runs before every other
+    /// data check (docs/28 §4).
+    catalog_rules: HashMap<String, PermSet>,
+    /// Type rules keyed by (catalog, type): the catalog element is "" when
+    /// the rule has no `catalog` qualifier — such rules apply everywhere.
+    type_rules: HashMap<(String, String), PermSet>,
+    /// Field rules keyed by (catalog, type, field).
+    field_rules: HashMap<(String, String, String), PermSet>,
     entity_rules: HashMap<String, PermSet>,
-    /// Relation-type rules keyed by (predicate, direction): direction is
-    /// `""` (both), `"out"` or `"in"`.
-    rel_rules: HashMap<(String, String), PermSet>,
+    /// Relation-type rules keyed by (catalog, predicate, direction):
+    /// direction is `""` (both), `"out"` or `"in"`.
+    rel_rules: HashMap<(String, String, String), PermSet>,
     rel_inst_rules: HashMap<String, PermSet>,
     /// `data.all.<op>` — grants/denies one op across every scope.
     all_rules: PermSet,
-    /// Field masks keyed by (type, field) — applied when read is allowed but
-    /// the field must be redacted (policy_rule.field_mask).
-    field_masks: HashMap<(String, String), String>,
+    /// Field masks keyed by (catalog, type, field) — applied when read is
+    /// allowed but the field must be redacted (policy_rule.field_mask).
+    field_masks: HashMap<(String, String, String), String>,
     /// (path prefix, allow) url rules sorted longest-prefix-first.
     url_rules: Vec<(String, bool)>,
     url_blanket_deny: bool,
@@ -393,6 +409,7 @@ impl DataPerm {
         let Some(op) = (if all_ops { Some(Op::Read) } else { op_of(op_s) }) else {
             return;
         };
+        let catalog = str_field(resource, "catalog");
         match scope {
             "all" => {
                 if all_ops {
@@ -401,8 +418,18 @@ impl DataPerm {
                     self.all_rules.apply(op, effect);
                 }
             }
+            "catalog" => {
+                // `data.catalog.<op>` — the gate rule itself. An absent or
+                // "*" selector means "every catalog".
+                let set = self.catalog_rules.entry(catalog).or_default();
+                if all_ops {
+                    set.apply_all(effect);
+                } else {
+                    set.apply(op, effect);
+                }
+            }
             "type" | "entity_type" => {
-                let key = str_field(resource, "type");
+                let key = (catalog, str_field(resource, "type"));
                 let set = self.type_rules.entry(key).or_default();
                 if all_ops {
                     set.apply_all(effect);
@@ -411,7 +438,11 @@ impl DataPerm {
                 }
             }
             "field" => {
-                let key = (str_field(resource, "type"), str_field(resource, "field"));
+                let key = (
+                    catalog,
+                    str_field(resource, "type"),
+                    str_field(resource, "field"),
+                );
                 let set = self.field_rules.entry(key.clone()).or_default();
                 if all_ops {
                     set.apply_all(effect);
@@ -440,7 +471,7 @@ impl DataPerm {
                     "incoming" | "in" => "in",
                     _ => "",
                 };
-                let key = (str_field(resource, "predicate"), dir.to_string());
+                let key = (catalog, str_field(resource, "predicate"), dir.to_string());
                 let set = self.rel_rules.entry(key).or_default();
                 if all_ops {
                     set.apply_all(effect);
@@ -464,17 +495,16 @@ impl DataPerm {
         }
     }
 
-    /// CRUD on an object type (1.1) — default deny.
-    /// `keys` = both the type uuid and its stable alias.
-    pub fn can_type(&self, keys: &[&str], op: Op) -> bool {
+    /// Catalog gate (docs/28 §4): `keys` = the catalog's public_id and
+    /// alias. Default deny — a principal with no catalog rule and no
+    /// wildcard sees no catalog at all; `data.*` allows count as grants but
+    /// an explicit `deny data.catalog.<op>` still wins.
+    pub fn can_catalog(&self, keys: &[&str], op: Op) -> bool {
         if self.superadmin || self.superuser {
             return true;
         }
-        // Deny checks must include the wildcard keys too — a
-        // `deny data.type.<op> {type:"*"}` rule overrides every specific
-        // allow (deny-overrides), not just rules on the same key.
         for k in keys.iter().chain(["", "*"].iter()) {
-            if let Some(s) = self.type_rules.get(*k) {
+            if let Some(s) = self.catalog_rules.get(*k) {
                 if s.denied(op) {
                     return false;
                 }
@@ -487,39 +517,37 @@ impl DataPerm {
             return true;
         }
         for k in keys {
-            if self.type_rules.get(*k).is_some_and(|s| s.granted(op)) {
+            if self.catalog_rules.get(*k).is_some_and(|s| s.granted(op)) {
                 return true;
             }
         }
-        self.type_rules
+        self.catalog_rules
             .get("")
-            .or_else(|| self.type_rules.get("*"))
+            .or_else(|| self.catalog_rules.get("*"))
             .is_some_and(|s| s.granted(op))
     }
 
-    /// CRUD on a field of an object type (1.2) — default deny.
-    /// Falls back to a wildcard field rule (field = '*'/'') for the type.
-    pub fn can_field(&self, type_keys: &[&str], field: &str, op: Op) -> bool {
+    /// Every catalog key applicable to the current object plus the
+    /// global-scope markers — a rule with no `catalog` qualifier (or "*")
+    /// applies in every catalog.
+    fn cat_dims<'a>(cat_keys: &'a [&'a str]) -> impl Iterator<Item = &'a str> + 'a {
+        cat_keys.iter().copied().chain(["", "*"])
+    }
+
+    /// CRUD on an object type (1.1) — default deny.
+    /// `keys` = both the type uuid and its stable alias; `cat_keys` = the
+    /// owning catalog's public_id + alias (empty = unknown/global context).
+    pub fn can_type(&self, keys: &[&str], cat_keys: &[&str], op: Op) -> bool {
         if self.superadmin || self.superuser {
             return true;
         }
-        if !self.can_type(type_keys, op) && op == Op::Read {
-            return false;
-        }
-        // Type-level deny blocks every field op (deny-overrides), not only
-        // reads — previously a `deny data.type.update` could be bypassed
-        // by a field-level or wildcard allow.
-        for tk in type_keys.iter().chain(["", "*"].iter()) {
-            if let Some(s) = self.type_rules.get(*tk) {
-                if s.denied(op) {
-                    return false;
-                }
-            }
-        }
-        // Field denies win — specific type, then wildcard types ("*"/"").
-        for tk in type_keys.iter().chain(["", "*"].iter()) {
-            for fk in [field, "*", ""] {
-                if let Some(s) = self.field_rules.get(&(tk.to_string(), fk.to_string())) {
+        // Deny checks must include the wildcard keys too — a
+        // `deny data.type.<op> {type:"*"}` rule overrides every specific
+        // allow (deny-overrides), and a catalog-scoped deny only applies
+        // inside its own catalog.
+        for ck in Self::cat_dims(cat_keys) {
+            for k in keys.iter().chain(["", "*"].iter()) {
+                if let Some(s) = self.type_rules.get(&(ck.to_string(), (*k).to_string())) {
                     if s.denied(op) {
                         return false;
                     }
@@ -532,26 +560,95 @@ impl DataPerm {
         if self.wildcard_allow || self.all_rules.granted(op) {
             return true;
         }
-        for tk in type_keys {
-            for fk in [field, "*", ""] {
+        for ck in Self::cat_dims(cat_keys) {
+            for k in keys {
                 if self
-                    .field_rules
-                    .get(&(tk.to_string(), fk.to_string()))
+                    .type_rules
+                    .get(&(ck.to_string(), (*k).to_string()))
+                    .is_some_and(|s| s.granted(op))
+                {
+                    return true;
+                }
+            }
+            for k in ["", "*"] {
+                if self
+                    .type_rules
+                    .get(&(ck.to_string(), k.to_string()))
                     .is_some_and(|s| s.granted(op))
                 {
                     return true;
                 }
             }
         }
+        false
+    }
+
+    /// CRUD on a field of an object type (1.2) — default deny.
+    /// Falls back to a wildcard field rule (field = '*'/'') for the type.
+    pub fn can_field(&self, type_keys: &[&str], cat_keys: &[&str], field: &str, op: Op) -> bool {
+        if self.superadmin || self.superuser {
+            return true;
+        }
+        if !self.can_type(type_keys, cat_keys, op) && op == Op::Read {
+            return false;
+        }
+        // Type-level deny blocks every field op (deny-overrides), not only
+        // reads — previously a `deny data.type.update` could be bypassed
+        // by a field-level or wildcard allow.
+        for ck in Self::cat_dims(cat_keys) {
+            for tk in type_keys.iter().chain(["", "*"].iter()) {
+                if let Some(s) = self.type_rules.get(&(ck.to_string(), (*tk).to_string())) {
+                    if s.denied(op) {
+                        return false;
+                    }
+                }
+            }
+        }
+        // Field denies win — specific type, then wildcard types ("*"/"").
+        for ck in Self::cat_dims(cat_keys) {
+            for tk in type_keys.iter().chain(["", "*"].iter()) {
+                for fk in [field, "*", ""] {
+                    if let Some(s) =
+                        self.field_rules
+                            .get(&(ck.to_string(), (*tk).to_string(), fk.to_string()))
+                    {
+                        if s.denied(op) {
+                            return false;
+                        }
+                    }
+                }
+            }
+        }
+        if self.all_rules.denied(op) {
+            return false;
+        }
+        if self.wildcard_allow || self.all_rules.granted(op) {
+            return true;
+        }
+        for ck in Self::cat_dims(cat_keys) {
+            for tk in type_keys {
+                for fk in [field, "*", ""] {
+                    if self
+                        .field_rules
+                        .get(&(ck.to_string(), (*tk).to_string(), fk.to_string()))
+                        .is_some_and(|s| s.granted(op))
+                    {
+                        return true;
+                    }
+                }
+            }
+        }
         // A field rule with a wildcard type grants the field on every type.
-        for tk in ["", "*"] {
-            for fk in [field, "*"] {
-                if self
-                    .field_rules
-                    .get(&(tk.to_string(), fk.to_string()))
-                    .is_some_and(|s| s.granted(op))
-                {
-                    return true;
+        for ck in Self::cat_dims(cat_keys) {
+            for tk in ["", "*"] {
+                for fk in [field, "*"] {
+                    if self
+                        .field_rules
+                        .get(&(ck.to_string(), tk.to_string(), fk.to_string()))
+                        .is_some_and(|s| s.granted(op))
+                    {
+                        return true;
+                    }
                 }
             }
         }
@@ -576,14 +673,22 @@ impl DataPerm {
     /// Direction-agnostic check: consults only rules without a direction scope.
     /// Callers that know the edge direction should use `can_relation_dir`.
     #[allow(dead_code)]
-    pub fn can_relation(&self, predicate: &str, op: Op) -> bool {
-        self.can_relation_dir(predicate, op, None)
+    pub fn can_relation(&self, predicate: &str, cat_keys: &[&str], op: Op) -> bool {
+        self.can_relation_dir(predicate, cat_keys, op, None)
     }
 
     /// Direction-aware variant: `outgoing = Some(true)` checks rules for
     /// outgoing edges (plus direction-agnostic ones), `Some(false)` for
     /// incoming, `None` for rules that apply in both directions only.
-    pub fn can_relation_dir(&self, predicate: &str, op: Op, outgoing: Option<bool>) -> bool {
+    /// `cat_keys` = the catalog keys of the statement's owning catalog —
+    /// catalog-scoped relation rules only apply there.
+    pub fn can_relation_dir(
+        &self,
+        predicate: &str,
+        cat_keys: &[&str],
+        op: Op,
+        outgoing: Option<bool>,
+    ) -> bool {
         if self.superadmin || self.superuser {
             return true;
         }
@@ -593,11 +698,16 @@ impl DataPerm {
             None => "",
         };
         let dirs: [&str; 2] = ["", dir];
-        for p in [predicate, "*", ""] {
-            for d in dirs {
-                if let Some(s) = self.rel_rules.get(&(p.to_string(), d.to_string())) {
-                    if s.denied(op) {
-                        return false;
+        for ck in Self::cat_dims(cat_keys) {
+            for p in [predicate, "*", ""] {
+                for d in dirs {
+                    if let Some(s) =
+                        self.rel_rules
+                            .get(&(ck.to_string(), p.to_string(), d.to_string()))
+                    {
+                        if s.denied(op) {
+                            return false;
+                        }
                     }
                 }
             }
@@ -608,11 +718,13 @@ impl DataPerm {
         if self.wildcard_allow || self.all_rules.granted(op) {
             return true;
         }
-        [predicate, "*", ""].iter().any(|p| {
-            dirs.iter().any(|d| {
-                self.rel_rules
-                    .get(&(p.to_string(), d.to_string()))
-                    .is_some_and(|s| s.granted(op))
+        Self::cat_dims(cat_keys).any(|ck| {
+            [predicate, "*", ""].iter().any(|p| {
+                dirs.iter().any(|d| {
+                    self.rel_rules
+                        .get(&(ck.to_string(), p.to_string(), d.to_string()))
+                        .is_some_and(|s| s.granted(op))
+                })
             })
         })
     }
@@ -674,31 +786,46 @@ impl DataPerm {
     }
 
     /// Strip fields the principal cannot read from a field map.
-    pub fn filter_fields(&self, type_keys: &[&str], fields: &mut serde_json::Map<String, Value>) {
+    pub fn filter_fields(
+        &self,
+        type_keys: &[&str],
+        cat_keys: &[&str],
+        fields: &mut serde_json::Map<String, Value>,
+    ) {
         if self.superadmin || self.superuser {
             return;
         }
-        fields.retain(|k, _| self.can_field(type_keys, k, Op::Read));
+        fields.retain(|k, _| self.can_field(type_keys, cat_keys, k, Op::Read));
     }
 
     /// Mask of a field that is readable but redacted (`policy_rule.field_mask`).
     /// `mask` survives even when the ruleset uses a type wildcard.
-    pub fn mask_for(&self, type_keys: &[&str], field: &str) -> Option<&str> {
+    pub fn mask_for(&self, type_keys: &[&str], cat_keys: &[&str], field: &str) -> Option<&str> {
         if self.superadmin || self.superuser {
             return None;
         }
-        for tk in type_keys {
-            for fk in [field, "*", ""] {
-                if let Some(m) = self.field_masks.get(&(tk.to_string(), fk.to_string())) {
-                    return Some(m.as_str());
+        for ck in Self::cat_dims(cat_keys) {
+            for tk in type_keys {
+                for fk in [field, "*", ""] {
+                    if let Some(m) =
+                        self.field_masks
+                            .get(&(ck.to_string(), (*tk).to_string(), fk.to_string()))
+                    {
+                        return Some(m.as_str());
+                    }
                 }
             }
         }
         // A mask can also be defined across all types.
-        for fk in [field, "*", ""] {
-            for tk in ["*", ""] {
-                if let Some(m) = self.field_masks.get(&(tk.to_string(), fk.to_string())) {
-                    return Some(m.as_str());
+        for ck in Self::cat_dims(cat_keys) {
+            for fk in [field, "*", ""] {
+                for tk in ["*", ""] {
+                    if let Some(m) =
+                        self.field_masks
+                            .get(&(ck.to_string(), tk.to_string(), fk.to_string()))
+                    {
+                        return Some(m.as_str());
+                    }
                 }
             }
         }
@@ -707,13 +834,18 @@ impl DataPerm {
 
     /// Transform readable-but-masked fields in place: `omit` drops the key,
     /// `null-mask` nulls it, `partial-mask` keeps the outer characters.
-    pub fn mask_fields(&self, type_keys: &[&str], fields: &mut serde_json::Map<String, Value>) {
+    pub fn mask_fields(
+        &self,
+        type_keys: &[&str],
+        cat_keys: &[&str],
+        fields: &mut serde_json::Map<String, Value>,
+    ) {
         if self.superadmin || self.superuser {
             return;
         }
         let keys: Vec<String> = fields.keys().cloned().collect();
         for k in keys {
-            let Some(mask) = self.mask_for(type_keys, &k) else {
+            let Some(mask) = self.mask_for(type_keys, cat_keys, &k) else {
                 continue;
             };
             match mask {
@@ -791,31 +923,31 @@ mod tests {
     #[test]
     fn type_default_deny_and_grants() {
         let mut p = DataPerm::default();
-        assert!(!p.can_type(&["person"], Op::Read));
+        assert!(!p.can_type(&["person"], &[], Op::Read));
         rule(&mut p, "data.type.read", "allow", json!({"type":"person"}));
-        assert!(p.can_type(&["person"], Op::Read));
-        assert!(!p.can_type(&["person"], Op::Update));
-        assert!(!p.can_type(&["legal_entity"], Op::Read));
+        assert!(p.can_type(&["person"], &[], Op::Read));
+        assert!(!p.can_type(&["person"], &[], Op::Update));
+        assert!(!p.can_type(&["legal_entity"], &[], Op::Read));
         // deny overrides
         rule(&mut p, "data.type.read", "deny", json!({"type":"person"}));
-        assert!(!p.can_type(&["person"], Op::Read));
+        assert!(!p.can_type(&["person"], &[], Op::Read));
     }
 
     #[test]
     fn type_wildcard_rule_covers_all_types() {
         let mut p = DataPerm::default();
         rule(&mut p, "data.type.read", "allow", json!({"type":"*"}));
-        assert!(p.can_type(&["anything"], Op::Read));
-        assert!(!p.can_type(&["anything"], Op::Delete));
+        assert!(p.can_type(&["anything"], &[], Op::Read));
+        assert!(!p.can_type(&["anything"], &[], Op::Delete));
     }
 
     #[test]
     fn data_star_grants_everything() {
         let mut p = DataPerm::default();
         rule(&mut p, "data.*", "allow", json!({}));
-        assert!(p.can_type(&["x"], Op::Delete));
-        assert!(p.can_field(&["x"], "f", Op::Read));
-        assert!(p.can_relation("works_for", Op::Create));
+        assert!(p.can_type(&["x"], &[], Op::Delete));
+        assert!(p.can_field(&["x"], &[], "f", Op::Read));
+        assert!(p.can_relation("works_for", &[], Op::Create));
     }
 
     #[test]
@@ -825,9 +957,9 @@ mod tests {
         rule(&mut p, "data.type.read", "allow", json!({"type":"person"}));
         rule(&mut p, "data.*", "deny", json!({}));
         // deny data.* beats every allow, including data.all.* and per-scope.
-        assert!(!p.can_type(&["person"], Op::Read));
-        assert!(!p.can_field(&["person"], "f", Op::Read));
-        assert!(!p.can_relation("owns", Op::Read));
+        assert!(!p.can_type(&["person"], &[], Op::Read));
+        assert!(!p.can_field(&["person"], &[], "f", Op::Read));
+        assert!(!p.can_relation("owns", &[], Op::Read));
         assert!(!p.can_entity("e-1", Op::Read));
         assert!(!p.can_entity("e-1", Op::Delete));
     }
@@ -842,15 +974,15 @@ mod tests {
             "allow",
             json!({"type":"person","field":"*"}),
         );
-        assert!(p.can_field(&["person"], "name", Op::Read));
+        assert!(p.can_field(&["person"], &[], "name", Op::Read));
         rule(
             &mut p,
             "data.field.read",
             "deny",
             json!({"type":"person","field":"salary"}),
         );
-        assert!(!p.can_field(&["person"], "salary", Op::Read));
-        assert!(!p.can_field(&["company"], "name", Op::Read));
+        assert!(!p.can_field(&["person"], &[], "salary", Op::Read));
+        assert!(!p.can_field(&["company"], &[], "name", Op::Read));
     }
 
     #[test]
@@ -866,15 +998,15 @@ mod tests {
     #[test]
     fn relation_type_default_deny() {
         let mut p = DataPerm::default();
-        assert!(!p.can_relation("employs", Op::Read));
+        assert!(!p.can_relation("employs", &[], Op::Read));
         rule(
             &mut p,
             "data.relation.read",
             "allow",
             json!({"predicate":"employs"}),
         );
-        assert!(p.can_relation("employs", Op::Read));
-        assert!(!p.can_relation("owns", Op::Read));
+        assert!(p.can_relation("employs", &[], Op::Read));
+        assert!(!p.can_relation("owns", &[], Op::Read));
     }
 
     #[test]
@@ -899,7 +1031,7 @@ mod tests {
         assert_eq!(p.can_capability("users.manage"), Some(true));
         let mut p = DataPerm::default();
         p.superuser = true;
-        assert!(p.can_type(&["x"], Op::Read));
+        assert!(p.can_type(&["x"], &[], Op::Read));
         assert!(p.can_url("/entities/e1"));
         assert!(!p.can_url("/users"));
         assert!(!p.can_url("/api/v1/users")); // API form of the admin surface
@@ -962,13 +1094,13 @@ mod tests {
         fields.insert("inn".to_string(), json!("7712345678"));
         fields.insert("snils".to_string(), json!("123-456-789"));
         fields.insert("salary".to_string(), json!(100));
-        p.mask_fields(&["person"], &mut fields);
+        p.mask_fields(&["person"], &[], &mut fields);
         assert_eq!(fields["name"], json!("Иван Иванов"));
         assert_eq!(fields["inn"], json!("77***78"));
         assert_eq!(fields["snils"], Value::Null);
         assert!(!fields.contains_key("salary"));
         // Masked fields are still readable — the mask is not a deny.
-        assert!(p.can_field(&["person"], "salary", Op::Read));
+        assert!(p.can_field(&["person"], &[], "salary", Op::Read));
     }
 
     #[test]
@@ -982,7 +1114,7 @@ mod tests {
             "null-mask",
         );
         p.superuser = true;
-        assert_eq!(p.mask_for(&["person"], "inn"), None);
+        assert_eq!(p.mask_for(&["person"], &[], "inn"), None);
     }
 
     #[test]
@@ -1018,7 +1150,7 @@ mod tests {
             "deny",
             json!({"entity":"hidden-1"}),
         );
-        assert!(p.can_relation("employs", Op::Read));
+        assert!(p.can_relation("employs", &[], Op::Read));
         // Handler-level: edge listed only if can_entity(other_side) — denied.
         assert!(!p.can_entity("hidden-1", Op::Read));
     }
@@ -1028,8 +1160,8 @@ mod tests {
         // 1.6: without type access, relations to that type are denied unless
         // a relation rule explicitly allows them.
         let mut p = DataPerm::default();
-        assert!(!p.can_type(&["person"], Op::Read));
-        assert!(!p.can_relation("person.works_for", Op::Read));
+        assert!(!p.can_type(&["person"], &[], Op::Read));
+        assert!(!p.can_relation("person.works_for", &[], Op::Read));
         // Explicit relation grant still applies at the relation scope —
         // the endpoint additionally requires entity visibility, so the grant
         // alone cannot expose the target.
@@ -1039,7 +1171,7 @@ mod tests {
             "allow",
             json!({"predicate":"person.works_for"}),
         );
-        assert!(p.can_relation("person.works_for", Op::Read));
+        assert!(p.can_relation("person.works_for", &[], Op::Read));
     }
 
     #[test]
@@ -1051,8 +1183,8 @@ mod tests {
             "allow",
             json!({"type":"person"}),
         );
-        assert!(p.can_type(&["person"], Op::Update));
-        assert!(!p.can_relation("person.works_for", Op::Update));
+        assert!(p.can_type(&["person"], &[], Op::Update));
+        assert!(!p.can_relation("person.works_for", &[], Op::Update));
     }
 
     #[test]
@@ -1064,14 +1196,14 @@ mod tests {
             "allow",
             json!({"type":"person"}),
         );
-        assert!(!p.can_field(&["person"], "inn", Op::Update));
+        assert!(!p.can_field(&["person"], &[], "inn", Op::Update));
         rule(
             &mut p,
             "data.field.update",
             "allow",
             json!({"type":"person","field":"inn"}),
         );
-        assert!(p.can_field(&["person"], "inn", Op::Update));
+        assert!(p.can_field(&["person"], &[], "inn", Op::Update));
     }
 
     #[test]
@@ -1084,10 +1216,10 @@ mod tests {
             "allow",
             json!({"predicate":"employs","direction":"outgoing"}),
         );
-        assert!(p.can_relation_dir("employs", Op::Read, Some(true)));
-        assert!(!p.can_relation_dir("employs", Op::Read, Some(false)));
+        assert!(p.can_relation_dir("employs", &[], Op::Read, Some(true)));
+        assert!(!p.can_relation_dir("employs", &[], Op::Read, Some(false)));
         // Direction-agnostic check does not see direction-scoped allows.
-        assert!(!p.can_relation("employs", Op::Read));
+        assert!(!p.can_relation("employs", &[], Op::Read));
 
         // Incoming-scoped deny blocks incoming even when a 'both' allow exists.
         rule(
@@ -1096,16 +1228,16 @@ mod tests {
             "allow",
             json!({"predicate":"owns"}),
         );
-        assert!(p.can_relation_dir("owns", Op::Read, Some(true)));
-        assert!(p.can_relation_dir("owns", Op::Read, Some(false)));
+        assert!(p.can_relation_dir("owns", &[], Op::Read, Some(true)));
+        assert!(p.can_relation_dir("owns", &[], Op::Read, Some(false)));
         rule(
             &mut p,
             "data.relation.read",
             "deny",
             json!({"predicate":"owns","direction":"incoming"}),
         );
-        assert!(p.can_relation_dir("owns", Op::Read, Some(true)));
-        assert!(!p.can_relation_dir("owns", Op::Read, Some(false)));
+        assert!(p.can_relation_dir("owns", &[], Op::Read, Some(true)));
+        assert!(!p.can_relation_dir("owns", &[], Op::Read, Some(false)));
     }
 
     #[test]
@@ -1114,8 +1246,8 @@ mod tests {
         let mut p = DataPerm::default();
         rule(&mut p, "data.type.read", "deny", json!({"type":"*"}));
         rule(&mut p, "data.type.read", "allow", json!({"type":"person"}));
-        assert!(!p.can_type(&["person"], Op::Read));
-        assert!(!p.can_type(&["other"], Op::Read));
+        assert!(!p.can_type(&["person"], &[], Op::Read));
+        assert!(!p.can_type(&["other"], &[], Op::Read));
         // Reads are off, writes still follow their own rules.
         rule(
             &mut p,
@@ -1123,7 +1255,7 @@ mod tests {
             "allow",
             json!({"type":"person"}),
         );
-        assert!(p.can_type(&["person"], Op::Update));
+        assert!(p.can_type(&["person"], &[], Op::Update));
     }
 
     #[test]
@@ -1137,12 +1269,12 @@ mod tests {
             "allow",
             json!({"type":"person","field":"inn"}),
         );
-        assert!(!p.can_field(&["person"], "inn", Op::Update));
+        assert!(!p.can_field(&["person"], &[], "inn", Op::Update));
         // wildcard type deny also blocks fields on any type.
         let mut p = DataPerm::default();
         rule(&mut p, "data.type.update", "deny", json!({"type":"*"}));
         rule(&mut p, "data.*", "allow", json!({}));
-        assert!(!p.can_field(&["person"], "inn", Op::Update));
+        assert!(!p.can_field(&["person"], &[], "inn", Op::Update));
     }
 
     #[test]
@@ -1161,8 +1293,8 @@ mod tests {
             "deny",
             json!({"type":"*","field":"salary"}),
         );
-        assert!(!p.can_field(&["person"], "salary", Op::Read));
-        assert!(p.can_field(&["person"], "name", Op::Read));
+        assert!(!p.can_field(&["person"], &[], "salary", Op::Read));
+        assert!(p.can_field(&["person"], &[], "name", Op::Read));
     }
 
     #[test]
@@ -1187,11 +1319,122 @@ mod tests {
         let mut f1 = serde_json::Map::new();
         f1.insert("inn".into(), json!("7707083893"));
         let mut f2 = f1.clone();
-        p.mask_fields(&["person"], &mut f1);
-        p.mask_fields(&["person"], &mut f2);
+        p.mask_fields(&["person"], &[], &mut f1);
+        p.mask_fields(&["person"], &[], &mut f2);
         let t1 = f1.get("inn").unwrap().as_str().unwrap().to_string();
         assert!(t1.starts_with("tok_"));
         assert_eq!(t1, f2.get("inn").unwrap().as_str().unwrap());
         assert_ne!(t1, "7707083893");
+    }
+
+    #[test]
+    fn catalog_gate_default_deny() {
+        // docs/28 §4: no catalog rule and no wildcard — the catalog is
+        // invisible, and a bare type rule does not open it.
+        let mut p = DataPerm::default();
+        assert!(!p.can_catalog(&["wh"], Op::Read));
+        rule(
+            &mut p,
+            "data.type.read",
+            "allow",
+            json!({"type": "wh_product"}),
+        );
+        assert!(!p.can_catalog(&["wh"], Op::Read));
+    }
+
+    #[test]
+    fn catalog_alias_and_public_id_both_match() {
+        let mut p = DataPerm::default();
+        rule(
+            &mut p,
+            "data.catalog.read",
+            "allow",
+            json!({"catalog": "wh"}),
+        );
+        assert!(p.can_catalog(&["wh"], Op::Read));
+        assert!(p.can_catalog(&["uuid-wh", "wh"], Op::Read));
+        assert!(!p.can_catalog(&["hr"], Op::Read));
+        assert!(!p.can_catalog(&["wh"], Op::Update));
+    }
+
+    #[test]
+    fn catalog_deny_overrides_wildcard_data_allow() {
+        let mut p = DataPerm::default();
+        rule(&mut p, "data.*", "allow", json!({}));
+        assert!(p.can_catalog(&["hr"], Op::Read));
+        rule(
+            &mut p,
+            "data.catalog.read",
+            "deny",
+            json!({"catalog": "hr"}),
+        );
+        assert!(!p.can_catalog(&["hr"], Op::Read));
+        // The deny is scoped — `data.*` still covers other catalogs.
+        assert!(p.can_catalog(&["wh"], Op::Read));
+    }
+
+    #[test]
+    fn catalog_scoped_type_rules_stay_in_their_catalog() {
+        let mut p = DataPerm::default();
+        rule(
+            &mut p,
+            "data.catalog.read",
+            "allow",
+            json!({"catalog": "*"}),
+        );
+        rule(
+            &mut p,
+            "data.type.read",
+            "allow",
+            json!({"catalog": "hr", "type": "person"}),
+        );
+        // `person` is readable inside HR only — the same alias in another
+        // catalog has its own rules.
+        assert!(p.can_type(&["person"], &["hr"], Op::Read));
+        assert!(!p.can_type(&["person"], &["wh"], Op::Read));
+        // A catalog-scoped deny must not leak into other catalogs either.
+        rule(
+            &mut p,
+            "data.type.read",
+            "deny",
+            json!({"catalog": "wh", "type": "person"}),
+        );
+        assert!(p.can_type(&["person"], &["hr"], Op::Read));
+    }
+
+    #[test]
+    fn catalog_scoped_field_and_relation_rules() {
+        let mut p = DataPerm::default();
+        rule(&mut p, "data.type.read", "allow", json!({"type": "*"}));
+        rule(
+            &mut p,
+            "data.field.read",
+            "allow",
+            json!({"catalog": "hr", "type": "person", "field": "salary"}),
+        );
+        assert!(p.can_field(&["person"], &["hr"], "salary", Op::Read));
+        assert!(!p.can_field(&["person"], &["wh"], "salary", Op::Read));
+        rule(
+            &mut p,
+            "data.relation.read",
+            "allow",
+            json!({"catalog": "hr", "predicate": "works_for"}),
+        );
+        assert!(p.can_relation("works_for", &["hr"], Op::Read));
+        assert!(!p.can_relation("works_for", &["wh"], Op::Read));
+    }
+
+    #[test]
+    fn wildcard_catalog_selector_covers_every_catalog() {
+        let mut p = DataPerm::default();
+        rule(
+            &mut p,
+            "data.catalog.read",
+            "allow",
+            json!({"catalog": "*"}),
+        );
+        assert!(p.can_catalog(&["hr"], Op::Read));
+        assert!(p.can_catalog(&["wh", "uuid-wh"], Op::Read));
+        assert!(!p.can_catalog(&["hr"], Op::Delete));
     }
 }

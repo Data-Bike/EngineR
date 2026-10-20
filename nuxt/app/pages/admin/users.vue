@@ -350,7 +350,7 @@ async function load() {
   }
 }
 
-function fmtDate(v?: string) {
+function fmtDate(v?: string | null) {
   return v ? new Date(v).toLocaleString() : '—';
 }
 

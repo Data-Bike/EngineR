@@ -1,4 +1,4 @@
-import { schemaEn } from '../schema';
+import { catalogEn, schemaEn } from '../schema';
 
 export default {
   "app":   {
@@ -329,6 +329,7 @@ export default {
     },
   },
   "schema": schemaEn,
+  "catalog": catalogEn,
   "common":   {
     "save": 'Save',
     "cancel": 'Cancel',
@@ -789,6 +790,8 @@ export default {
     "default_managers_desc": 'Creating requests and viewing objects',
     group_class: 'Group class',
     class_capability: 'System',
+    tab_data: 'Data access',
+    tab_system: 'System access',
     inherits: 'Inherits',
     parent_role: 'Parent role',
     parent_role_hint: 'Inherits all parent permissions; can add or override',
@@ -797,6 +800,7 @@ export default {
     res_relation: 'Relation type',
     res_relation_instance: 'Specific relation',
     res_url: 'URL',
+    res_url_placeholder: '/admin or /api/v1/...',
     res_capability: 'System capability',
     act_all: 'All actions',
     effect_allow: 'Allow',

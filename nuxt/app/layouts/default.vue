@@ -13,6 +13,7 @@
 
       <!-- Main content area -->
       <main id="main-content" class="flex-1 min-w-0 overflow-auto focus:outline-none" tabindex="-1">
+        <AppBreadcrumbs />
         <NuxtPage />
       </main>
     </div>

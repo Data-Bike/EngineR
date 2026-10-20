@@ -14,3 +14,4 @@ export { AuditEndpoints } from './AuditEndpoints.js';
 export { UserEndpoints } from './UserEndpoints.js';
 export type { UserListParams, UserInputBody } from './UserEndpoints.js';
 export { DumpEndpoints, type DumpInfo, type DumpFileInfo } from './DumpEndpoints.js';
+export { CatalogEndpoints } from './CatalogEndpoints.js';

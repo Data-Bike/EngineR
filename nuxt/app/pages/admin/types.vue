@@ -148,6 +148,7 @@ definePageMeta({
 const { t } = useI18n();
 const toast = useToast();
 const api = useApi();
+const { catalogParams, selected: selectedCatalog } = useCatalog();
 
 interface TypeField {
   alias: string;
@@ -218,7 +219,7 @@ const previewAliases = computed(() =>
 async function fetchTypes() {
   loading.value = true;
   try {
-    const res = await api.schemas.listTypes();
+    const res = await api.schemas.listTypes(catalogParams());
 
     // Map basic type info — API returns `id` not `type_id`
     const baseTypes = (res.data ?? []).map((t: any) => ({
@@ -235,7 +236,7 @@ async function fetchTypes() {
     // Load fields for each type via view API (in parallel)
     const enriched = await Promise.all(baseTypes.map(async (tp) => {
       try {
-        const vres = await api.schemas.getTypeView(tp.type_id, 'form');
+        const vres = await api.schemas.getTypeView(tp.type_id, 'form', catalogParams());
         const data = vres.data as { sections?: Array<{ fields?: Array<any> }> } | undefined;
         const fields: TypeField[] = [];
         if (data?.sections) {
@@ -396,4 +397,6 @@ async function deleteType(type: SchemaType) {
 }
 
 onMounted(fetchTypes);
+// Header catalog switch re-scopes the type list.
+watch(selectedCatalog, fetchTypes);
 </script>

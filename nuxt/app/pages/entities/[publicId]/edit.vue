@@ -46,6 +46,9 @@ definePageMeta({ middleware: ['auth', capability('entity.edit')] });
 const { t } = useI18n();
 const route = useRoute();
 const api = useApi();
+// Entity-scoped calls resolve the entity by id — the catalog selector is a
+// listing filter, not a security scope. Schema lookups use the entity's own
+// catalog so an alias shared between catalogs resolves to the right type.
 const toast = useToast();
 
 const publicId = computed(() => route.params.publicId as string);
@@ -56,19 +59,17 @@ const submitting = ref(false);
 const error = ref<string | null>(null);
 const validationErrors = ref<Record<string, FieldValidationError>>({});
 
-function statementValue(value: unknown) {
-  if (typeof value === 'boolean') return { kind: 'boolean' as const, value };
-  if (typeof value === 'number') return { kind: 'integer' as const, value: String(value) };
-  return { kind: 'text' as const, value: String(value ?? '') };
-}
-
 async function load() {
   loading.value = true;
   error.value = null;
   try {
     const entityResponse = await api.entities.get(publicId.value);
     entity.value = entityResponse.data;
-    const viewResponse = await api.schemas.getTypeView(entityResponse.data.type_id, 'form');
+    const viewResponse = await api.schemas.getTypeView(
+      entityResponse.data.type_id,
+      'form',
+      entityResponse.data.catalog ? { catalog: entityResponse.data.catalog } : undefined,
+    );
     view.value = viewResponse.data as ViewDefinition;
   } catch (cause: unknown) {
     error.value = cause instanceof Error ? cause.message : t('entity.error');
@@ -84,9 +85,12 @@ async function save(submission: FormSubmission) {
   try {
     const response = await api.entities.update(publicId.value, {
       revision: entity.value.revision,
+      // Send the raw form value: the server coerces it by the declared
+      // field kind (coerce_field_input) — wrapping everything in text would
+      // silently store dates/money/geo as text scalars.
       fields: submission.fields.map((field) => ({
         predicate_id: field.predicate_id,
-        value: statementValue(field.value),
+        value: field.value ?? '',
       })),
     });
     entity.value = response.data;

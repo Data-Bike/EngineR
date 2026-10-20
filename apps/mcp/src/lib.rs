@@ -240,19 +240,13 @@ pub fn prepare_call(api_base: &str, tool: &ToolDef, args: &Value) -> Result<Prep
     }
     // `entities.update` takes a statement array on the wire; accept the
     // friendlier `{fields: {alias: value}}` object and translate it the same
-    // way `pg_create_entity` normalises its `fields` map.
+    // way `pg_create_entity` normalises its `fields` map. Kindless values are
+    // shipped bare — the API coerces them by the declared field kind.
     if tool.name == "entities.update" {
         if let Some(Value::Object(map)) = body.get("fields").cloned() {
             let arr: Vec<Value> = map
                 .into_iter()
-                .map(|(k, v)| {
-                    let val = if v.is_object() {
-                        v
-                    } else {
-                        serde_json::json!({"kind": "text", "value": v})
-                    };
-                    serde_json::json!({"predicate_id": k, "value": val})
-                })
+                .map(|(k, v)| serde_json::json!({"predicate_id": k, "value": v}))
                 .collect();
             body.insert("fields".to_string(), Value::Array(arr));
         }
@@ -372,7 +366,10 @@ pub async fn handle_rpc(state: &McpState, token: &str, ctx: &Value, msg: &Value)
                 .unwrap_or_default();
             if let Some(cap) = tool.capability {
                 let ok = caps.iter().any(|c| c == cap)
-                    || (cap.starts_with("user.") && caps.iter().any(|c| c == "users.manage"));
+                    || (cap.starts_with("user.") && caps.iter().any(|c| c == "users.manage"))
+                    // `security.manage` umbrellas catalog administration —
+                    // same umbrella the API's capability map applies.
+                    || (cap == "catalog.manage" && caps.iter().any(|c| c == "security.manage"));
                 if !ok {
                     return if is_notification {
                         None

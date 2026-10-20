@@ -355,19 +355,117 @@ async fn schema_tx<'e>(
 async fn load_records(
     tx: &mut Transaction<'_, Postgres>,
     tenant: uuid::Uuid,
+    catalog: Option<i64>,
 ) -> Result<Vec<SchemaRevisionRecord>, DbError> {
-    let rows: Vec<(serde_json::Value,)> =
-        sqlx::query_as("SELECT content FROM meta.schema_revision WHERE tenant_id=$1")
-            .bind(tenant)
-            .fetch_all(&mut **tx)
-            .await
-            .map_err(|e| DbError::Other {
-                message: e.to_string(),
-            })?;
+    let rows: Vec<(serde_json::Value,)> = sqlx::query_as(
+        "SELECT content FROM meta.schema_revision
+         WHERE tenant_id=$1 AND ($2::bigint IS NULL OR catalog_id=$2)",
+    )
+    .bind(tenant)
+    .bind(catalog)
+    .fetch_all(&mut **tx)
+    .await
+    .map_err(|e| DbError::Other {
+        message: e.to_string(),
+    })?;
     Ok(rows
         .into_iter()
         .filter_map(|(content,)| serde_json::from_value::<SchemaRevisionRecord>(content).ok())
         .collect())
+}
+
+/// Internal catalog id of a schema revision row.
+async fn revision_catalog(
+    tx: &mut Transaction<'_, Postgres>,
+    tenant: uuid::Uuid,
+    revision_id: i64,
+) -> Result<Option<i64>, DbError> {
+    let row: Option<(i64,)> = sqlx::query_as(
+        "SELECT catalog_id FROM meta.schema_revision WHERE tenant_id=$1 AND revision_id=$2",
+    )
+    .bind(tenant)
+    .bind(revision_id)
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(|e| DbError::Other {
+        message: e.to_string(),
+    })?;
+    Ok(row.map(|r| r.0))
+}
+
+/// Catalog gate for schema routes (docs/28 §4): the caller must hold the
+/// catalog grant for `op` on the catalog that owns the record. `None`
+/// (pre-catalog rows / system records) passes.
+async fn require_catalog_access(
+    tx: &mut Transaction<'_, Postgres>,
+    ctx: &crate::authn::AuthContext,
+    catalog_id: Option<i64>,
+    op: crate::dataperm::Op,
+) -> Result<(), DbError> {
+    let Some(cid) = catalog_id else {
+        return Ok(());
+    };
+    let row: Option<(uuid::Uuid, String)> = sqlx::query_as(
+        "SELECT public_id, alias FROM core.catalog WHERE tenant_id=$1 AND catalog_id=$2",
+    )
+    .bind(ctx.tenant_id)
+    .bind(cid)
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(|e| DbError::Other {
+        message: e.to_string(),
+    })?;
+    let Some((pid, alias)) = row else {
+        return Ok(());
+    };
+    let perm = crate::dataperm::DataPerm::load(tx, ctx.tenant_id, ctx.principal_id).await?;
+    if !perm.can_catalog(&[&pid.to_string(), &alias], op) {
+        return Err(sf_err(
+            Status::Forbidden,
+            "forbidden",
+            "Нет доступа к каталогу",
+        ));
+    }
+    Ok(())
+}
+
+/// Dataperm keys `[public_id, alias]` for a catalog id (empty when the
+/// catalog row is gone — callers then get deny-by-default).
+async fn catalog_key_list(
+    tx: &mut Transaction<'_, Postgres>,
+    tenant: uuid::Uuid,
+    catalog_id: i64,
+) -> Result<Vec<String>, DbError> {
+    let row: Option<(uuid::Uuid, String)> = sqlx::query_as(
+        "SELECT public_id, alias FROM core.catalog WHERE tenant_id=$1 AND catalog_id=$2",
+    )
+    .bind(tenant)
+    .bind(catalog_id)
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(|e| DbError::Other {
+        message: e.to_string(),
+    })?;
+    Ok(row.map(|(p, a)| vec![p.to_string(), a]).unwrap_or_default())
+}
+
+/// Resolve `?catalog=` for schema routes; absent → `general` (the default
+/// backfill catalog), unknown → 422.
+async fn schema_catalog(
+    tx: &mut Transaction<'_, Postgres>,
+    ctx: &crate::authn::AuthContext,
+    param: Option<&str>,
+) -> Result<crate::entity_pg::CatalogRef, DbError> {
+    let reference = param.filter(|p| !p.trim().is_empty()).unwrap_or("general");
+    crate::entity_pg::resolve_catalog(tx, ctx.tenant_id, reference.trim())
+        .await
+        .map_err(|_| {
+            sf_err(
+                Status::UnprocessableEntity,
+                "catalog.unknown",
+                "Каталог не найден",
+            )
+        })
 }
 
 fn is_draft(record: &SchemaRevisionRecord) -> bool {
@@ -390,6 +488,7 @@ fn db_state(record: &SchemaRevisionRecord) -> &'static str {
 async fn save_record(
     tx: &mut Transaction<'_, Postgres>,
     tenant: uuid::Uuid,
+    catalog_id: i64,
     actor: uuid::Uuid,
     record: &SchemaRevisionRecord,
 ) -> Result<(), DbError> {
@@ -397,9 +496,25 @@ async fn save_record(
         .revision_id
         .parse()
         .map_err(|_| sf(500, "internal_error", "bad revision id"))?;
-    let content = serde_json::to_value(record).map_err(|e| DbError::Other {
+    let mut content = serde_json::to_value(record).map_err(|e| DbError::Other {
         message: e.to_string(),
     })?;
+    // The catalog alias rides inside content so consumers can render it
+    // without a join; the authoritative ownership stays in the column.
+    let catalog_row: Option<(String,)> =
+        sqlx::query_as("SELECT alias FROM core.catalog WHERE tenant_id=$1 AND catalog_id=$2")
+            .bind(tenant)
+            .bind(catalog_id)
+            .fetch_optional(&mut **tx)
+            .await
+            .map_err(|e| DbError::Other {
+                message: e.to_string(),
+            })?;
+    if let Some((alias,)) = catalog_row {
+        if let Some(o) = content.as_object_mut() {
+            o.insert("catalog".to_string(), Value::String(alias));
+        }
+    }
     let published_at = record
         .published_at
         .as_deref()
@@ -419,8 +534,8 @@ async fn save_record(
     let changed = sqlx::query(
         "INSERT INTO meta.schema_revision
          (tenant_id, revision_id, state, parent_revision_id, semantic_version, content,
-          created_by, published_by, published_at, retired_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
+          created_by, published_by, published_at, retired_at, catalog_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
          ON CONFLICT (tenant_id, revision_id) DO UPDATE
          SET state=EXCLUDED.state, parent_revision_id=EXCLUDED.parent_revision_id,
              semantic_version=EXCLUDED.semantic_version, content=EXCLUDED.content,
@@ -439,6 +554,7 @@ async fn save_record(
     .bind(actor)
     .bind(published_at.map(|t| t.with_timezone(&chrono::Utc)))
     .bind(retired_at.map(|t| t.with_timezone(&chrono::Utc)))
+    .bind(catalog_id)
     .execute(&mut **tx)
     .await
     .map_err(|e| DbError::Other {
@@ -473,9 +589,12 @@ async fn delete_record(
 
 /// When a revision is published, mirror its type/predicate definitions into
 /// the registry tables so the entity layer resolves aliases immediately.
+/// Aliases are per-catalog (docs/28 §3): the same name in another catalog
+/// keeps its own stable id.
 async fn apply_definitions(
     tx: &mut Transaction<'_, Postgres>,
     tenant: uuid::Uuid,
+    catalog_id: i64,
     revision_id: i64,
     record: &SchemaRevisionRecord,
 ) -> Result<(), DbError> {
@@ -498,13 +617,16 @@ async fn apply_definitions(
             "system" => 4,
             _ => 0,
         };
-        // Keep the stable uuid across publishes: reuse if the alias exists.
+        // Keep the stable uuid across publishes: reuse if the alias exists
+        // *inside this catalog* — an identical alias in another catalog is
+        // a different type with its own type_id.
         let existing: Option<(uuid::Uuid,)> = sqlx::query_as(
             "SELECT type_id FROM meta.type_definition
-             WHERE tenant_id=$1 AND stable_alias=$2",
+             WHERE tenant_id=$1 AND stable_alias=$2 AND catalog_id=$3",
         )
         .bind(tenant)
         .bind(&alias)
+        .bind(catalog_id)
         .fetch_optional(&mut **tx)
         .await
         .map_err(db)?;
@@ -514,10 +636,20 @@ async fn apply_definitions(
             .and_then(|s| s.parse::<uuid::Uuid>().ok())
             .or(existing.map(|e| e.0))
             .unwrap_or_else(uuid::Uuid::now_v7);
+        // A type returning after removal un-retires its registry row.
+        sqlx::query(
+            "UPDATE meta.type_definition SET retired_revision=NULL
+             WHERE tenant_id=$1 AND type_id=$2",
+        )
+        .bind(tenant)
+        .bind(type_uuid)
+        .execute(&mut **tx)
+        .await
+        .map_err(db)?;
         sqlx::query(
             "INSERT INTO meta.type_definition
-             (tenant_id, type_id, stable_alias, entity_class, created_revision)
-             VALUES ($1,$2,$3,$4,$5)
+             (tenant_id, type_id, stable_alias, entity_class, created_revision, catalog_id)
+             VALUES ($1,$2,$3,$4,$5,$6)
              ON CONFLICT (tenant_id, type_id) DO NOTHING",
         )
         .bind(tenant)
@@ -525,6 +657,7 @@ async fn apply_definitions(
         .bind(&alias)
         .bind(class_i)
         .bind(revision_id)
+        .bind(catalog_id)
         .execute(&mut **tx)
         .await
         .map_err(db)?;
@@ -555,10 +688,11 @@ async fn apply_definitions(
         }
         let existing: Option<(uuid::Uuid,)> = sqlx::query_as(
             "SELECT predicate_id FROM meta.predicate_definition
-             WHERE tenant_id=$1 AND stable_alias=$2",
+             WHERE tenant_id=$1 AND stable_alias=$2 AND catalog_id=$3",
         )
         .bind(tenant)
         .bind(&alias)
+        .bind(catalog_id)
         .fetch_optional(&mut **tx)
         .await
         .map_err(db)?;
@@ -569,9 +703,18 @@ async fn apply_definitions(
             .or(existing.map(|e| e.0))
             .unwrap_or_else(uuid::Uuid::now_v7);
         sqlx::query(
+            "UPDATE meta.predicate_definition SET retired_revision=NULL
+             WHERE tenant_id=$1 AND predicate_id=$2",
+        )
+        .bind(tenant)
+        .bind(pred_uuid)
+        .execute(&mut **tx)
+        .await
+        .map_err(db)?;
+        sqlx::query(
             "INSERT INTO meta.predicate_definition
-             (tenant_id, predicate_id, stable_alias, is_edge, scalar_kind, confidentiality, created_revision)
-             VALUES ($1,$2,$3,$4,$5,$6,$7)
+             (tenant_id, predicate_id, stable_alias, is_edge, scalar_kind, confidentiality, created_revision, catalog_id)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
              ON CONFLICT (tenant_id, predicate_id) DO NOTHING",
         )
         .bind(tenant)
@@ -586,6 +729,7 @@ async fn apply_definitions(
                 .unwrap_or("internal"),
         )
         .bind(revision_id)
+        .bind(catalog_id)
         .execute(&mut **tx)
         .await
         .map_err(db)?;
@@ -609,6 +753,46 @@ async fn apply_definitions(
             .map_err(db)?;
         }
     }
+    // Publish-diff retirement: definitions this catalog owns that are
+    // absent from the new revision are marked retired — dropping a type
+    // or predicate from the schema actually removes it from resolution
+    // (docs/28 §3: namespaces are catalog-local). Entities of a retired
+    // type remain readable (read paths join by type_id, not alias).
+    let taliases: Vec<String> = record
+        .types
+        .iter()
+        .filter_map(|t| alias_of(t).map(str::to_string))
+        .collect();
+    sqlx::query(
+        "UPDATE meta.type_definition SET retired_revision=$3
+         WHERE tenant_id=$1 AND catalog_id=$2 AND retired_revision IS NULL
+           AND NOT (stable_alias = ANY($4))",
+    )
+    .bind(tenant)
+    .bind(catalog_id)
+    .bind(revision_id)
+    .bind(&taliases)
+    .execute(&mut **tx)
+    .await
+    .map_err(db)?;
+    let paliases: Vec<String> = record
+        .predicates
+        .iter()
+        .filter_map(|p| alias_of(p).map(str::to_string))
+        .collect();
+    sqlx::query(
+        "UPDATE meta.predicate_definition SET retired_revision=$3
+         WHERE tenant_id=$1 AND catalog_id=$2 AND retired_revision IS NULL
+           AND NOT (stable_alias = ANY($4))",
+    )
+    .bind(tenant)
+    .bind(catalog_id)
+    .bind(revision_id)
+    .bind(&paliases)
+    .execute(&mut **tx)
+    .await
+    .map_err(db)?;
+
     // Derive identity policies from `identity`/`participates_in_identity`
     // field flags. Without this a published custom type declares identity
     // fields but dedup/identity_mode silently never applies — previously
@@ -620,10 +804,11 @@ async fn apply_definitions(
         }
         let type_row: Option<(uuid::Uuid,)> = sqlx::query_as(
             "SELECT type_id FROM meta.type_definition
-             WHERE tenant_id=$1 AND stable_alias=$2",
+             WHERE tenant_id=$1 AND stable_alias=$2 AND catalog_id=$3",
         )
         .bind(tenant)
         .bind(&talias)
+        .bind(catalog_id)
         .fetch_optional(&mut **tx)
         .await
         .map_err(db)?;
@@ -658,12 +843,19 @@ async fn apply_definitions(
             let pred_uuid: uuid::Uuid = match key.parse::<uuid::Uuid>() {
                 Ok(u) => u,
                 Err(_) => {
+                    // Same catalog-first fallback as entity writes: the
+                    // catalog's own predicate wins, shared predicates
+                    // resolve tenant-wide deterministically (docs/28 §5).
                     let row: Option<(uuid::Uuid,)> = sqlx::query_as(
                         "SELECT predicate_id FROM meta.predicate_definition
-                         WHERE tenant_id=$1 AND stable_alias=$2",
+                         WHERE tenant_id=$1 AND stable_alias=$2
+                         ORDER BY (catalog_id = $3) DESC,
+                                  catalog_id, predicate_id
+                         LIMIT 1",
                     )
                     .bind(tenant)
                     .bind(key)
+                    .bind(catalog_id)
                     .fetch_optional(&mut **tx)
                     .await
                     .map_err(db)?;
@@ -855,6 +1047,64 @@ fn validate_record(record: &SchemaRevisionRecord) -> ValidationReport {
         }
     }
 
+    // Field kinds declared on types must be known (docs/03 §7, docs/16 §6).
+    for (t_index, type_def) in record.types.iter().enumerate() {
+        let Some(fields) = type_def
+            .get("fields")
+            .or_else(|| type_def.get("predicates"))
+            .and_then(Value::as_array)
+        else {
+            continue;
+        };
+        for (f_index, field) in fields.iter().enumerate() {
+            let path = format!("types[{t_index}].fields[{f_index}].kind");
+            let Some(kind) = field
+                .get("kind")
+                .or_else(|| field.get("scalar_kind"))
+                .and_then(Value::as_str)
+            else {
+                continue;
+            };
+            if !crate::field_kinds::KNOWN_FIELD_KINDS.contains(&kind) {
+                findings.push(ValidationFinding {
+                    severity: "error".to_string(),
+                    code: "field.kind.unknown".to_string(),
+                    message: format!("Неизвестный вид поля `{kind}`"),
+                    path: Some(path),
+                });
+                continue;
+            }
+            if matches!(kind, "enum" | "dictionary")
+                && field
+                    .get("values")
+                    .or_else(|| field.get("options"))
+                    .and_then(Value::as_array)
+                    .map_or(true, |vs| vs.is_empty())
+            {
+                findings.push(ValidationFinding {
+                    severity: "warning".to_string(),
+                    code: "field.values.recommended".to_string(),
+                    message: "Для enum/dictionary рекомендуется список `values`".to_string(),
+                    path: Some(path.clone()),
+                });
+            }
+            if kind == "entity_reference"
+                && field
+                    .get("target_type_id")
+                    .or_else(|| field.get("range"))
+                    .and_then(Value::as_str)
+                    .is_none()
+            {
+                findings.push(ValidationFinding {
+                    severity: "warning".to_string(),
+                    code: "field.target_type.recommended".to_string(),
+                    message: "Для entity_reference рекомендуется `target_type_id`".to_string(),
+                    path: Some(path),
+                });
+            }
+        }
+    }
+
     if record.types.is_empty() {
         findings.push(ValidationFinding {
             severity: "warning".to_string(),
@@ -1024,21 +1274,64 @@ fn content_hash(record: &SchemaRevisionRecord) -> String {
     hex::encode(hasher.finalize())
 }
 
-#[get("/schemas/drafts")]
+#[get("/schemas/drafts?<catalog>")]
 pub async fn list_drafts(
     cap: CapabilityGuard,
     state: &State<AppState>,
+    catalog: Option<String>,
 ) -> Result<Json<ApiEnvelope<Value>>, ApiFailure> {
     let exec = pg(state)?;
     let ctx = cap.ctx.clone();
     let v = exec
         .run(Deadline::in_secs(10), move |pool| async move {
             let mut tx = schema_tx(&pool, &ctx).await?;
-            let mut drafts: Vec<SchemaRevisionRecord> = load_records(&mut tx, ctx.tenant_id)
-                .await?
-                .into_iter()
-                .filter(is_draft)
-                .collect();
+            let cat =
+                crate::entity_pg::optional_catalog(&mut tx, ctx.tenant_id, catalog.as_deref())
+                    .await
+                    .map_err(|_| {
+                        sf_err(
+                            Status::UnprocessableEntity,
+                            "catalog.unknown",
+                            "Каталог не найден",
+                        )
+                    })?;
+            if let Some(c) = &cat {
+                require_catalog_access(
+                    &mut tx,
+                    &ctx,
+                    Some(c.catalog_id),
+                    crate::dataperm::Op::Read,
+                )
+                .await?;
+            }
+            // Drafts of catalogs the principal cannot read are hidden —
+            // the catalog gate applies per record, not only to `?catalog`.
+            let perm =
+                crate::dataperm::DataPerm::load(&mut tx, ctx.tenant_id, ctx.principal_id).await?;
+            let rows: Vec<(i64, serde_json::Value)> = sqlx::query_as(
+                "SELECT catalog_id, content FROM meta.schema_revision
+                 WHERE tenant_id=$1 AND ($2::bigint IS NULL OR catalog_id=$2)",
+            )
+            .bind(ctx.tenant_id)
+            .bind(cat.map(|c| c.catalog_id))
+            .fetch_all(&mut *tx)
+            .await
+            .map_err(|e| DbError::Other {
+                message: e.to_string(),
+            })?;
+            let mut drafts: Vec<SchemaRevisionRecord> = Vec::new();
+            for (cid, content) in rows {
+                let ckeys = catalog_key_list(&mut tx, ctx.tenant_id, cid).await?;
+                let ckey_refs: Vec<&str> = ckeys.iter().map(String::as_str).collect();
+                if !perm.can_catalog(&ckey_refs, crate::dataperm::Op::Read) {
+                    continue;
+                }
+                if let Ok(record) = serde_json::from_value::<SchemaRevisionRecord>(content) {
+                    if is_draft(&record) {
+                        drafts.push(record);
+                    }
+                }
+            }
             drafts.sort_by(|a, b| b.updated_at.cmp(&a.updated_at));
             Ok(serde_json::to_value(drafts).unwrap_or(Value::Null))
         })
@@ -1053,10 +1346,26 @@ async fn find_record(
     id: &str,
     drafts_only: bool,
 ) -> Result<Option<SchemaRevisionRecord>, DbError> {
-    Ok(load_records(tx, tenant)
+    Ok(load_records(tx, tenant, None)
         .await?
         .into_iter()
         .find(|r| r.revision_id == id && (!drafts_only || is_draft(r))))
+}
+
+/// Catalog gate for a record addressed by revision id: 403 when the
+/// principal lacks the catalog grant for `op`.
+async fn gate_record_catalog(
+    tx: &mut Transaction<'_, Postgres>,
+    ctx: &crate::authn::AuthContext,
+    revision_id: &str,
+    op: crate::dataperm::Op,
+) -> Result<i64, DbError> {
+    let rid: i64 = revision_id
+        .parse()
+        .map_err(|_| sf(500, "internal_error", "bad revision id"))?;
+    let cid = revision_catalog(tx, ctx.tenant_id, rid).await?;
+    require_catalog_access(tx, ctx, cid, op).await?;
+    Ok(cid.unwrap_or(0))
 }
 
 #[get("/schemas/drafts/<id>")]
@@ -1074,6 +1383,7 @@ pub async fn get_draft(
             let record = find_record(&mut tx, ctx.tenant_id, &id, true)
                 .await?
                 .ok_or_else(|| sf_err(Status::NotFound, "not_found", "Черновик схемы не найден"))?;
+            gate_record_catalog(&mut tx, &ctx, &id, crate::dataperm::Op::Read).await?;
             Ok(json!({"etag": record.etag, "data": serde_json::to_value(&record).unwrap()}))
         })
         .await
@@ -1084,10 +1394,13 @@ pub async fn get_draft(
     ))
 }
 
-#[post("/schemas/drafts", data = "<body>")]
+/// `POST /schemas/drafts` — `?catalog=` picks which catalog's schema stream
+/// to draft against (default `general`, docs/28 §6).
+#[post("/schemas/drafts?<catalog>", data = "<body>")]
 pub async fn create_draft(
     cap: CapabilityGuard,
     state: &State<AppState>,
+    catalog: Option<String>,
     body: Json<CreateDraftBody>,
 ) -> Result<Etagged<Value>, ApiFailure> {
     let exec = pg(state)?;
@@ -1108,7 +1421,25 @@ pub async fn create_draft(
                 .map_err(|e| DbError::Other {
                     message: e.to_string(),
                 })?;
-            let all = load_records(&mut tx, ctx.tenant_id).await?;
+            // Every catalog owns an independent draft→publish stream —
+            // drafts are created inside the resolved catalog only. A
+            // retired catalog takes no new schema work.
+            let cat = schema_catalog(&mut tx, &ctx, catalog.as_deref()).await?;
+            if cat.status != "active" {
+                return Err(sf_err(
+                    Status::Conflict,
+                    "catalog.retired",
+                    "Каталог погашен — изменение схемы недоступно",
+                ));
+            }
+            require_catalog_access(
+                &mut tx,
+                &ctx,
+                Some(cat.catalog_id),
+                crate::dataperm::Op::Update,
+            )
+            .await?;
+            let all = load_records(&mut tx, ctx.tenant_id, Some(cat.catalog_id)).await?;
             let revisions: Vec<&SchemaRevisionRecord> =
                 all.iter().filter(|r| !is_draft(r)).collect();
             let base = match body.base_revision.as_deref() {
@@ -1147,12 +1478,62 @@ pub async fn create_draft(
             let semantic_version = body
                 .semantic_version
                 .unwrap_or_else(|| next_semantic_version(latest_version));
-            let next_id = all
-                .iter()
-                .filter_map(|r| r.revision_id.parse::<i64>().ok())
-                .max()
-                .unwrap_or(0)
-                + 1;
+            // revision_id stays unique tenant-wide (PK tenant+revision_id)
+            // even though each catalog has its own revision stream.
+            let (next_id,): (i64,) = sqlx::query_as(
+                "SELECT COALESCE(MAX(revision_id),0)+1 FROM meta.schema_revision
+                 WHERE tenant_id=$1",
+            )
+            .bind(ctx.tenant_id)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(|e| DbError::Other {
+                message: e.to_string(),
+            })?;
+            // Inheritance is namespace-local: a base revision authored
+            // before catalogs may list definitions that now live in other
+            // catalogs' registries. Drafts in this catalog keep only the
+            // entries this catalog owns (or that no registry claims), so
+            // publishing cannot clone `person`/`name` into a second
+            // namespace (docs/28 §3).
+            let (owned_types, owned_preds, owned_groups) = if base.is_some() {
+                let trows: Vec<(String, Option<i64>)> = sqlx::query_as(
+                    "SELECT stable_alias, catalog_id FROM meta.type_definition WHERE tenant_id=$1",
+                )
+                .bind(ctx.tenant_id)
+                .fetch_all(&mut *tx)
+                .await
+                .map_err(|e| DbError::Other {
+                    message: e.to_string(),
+                })?;
+                let prows: Vec<(String, Option<i64>)> = sqlx::query_as(
+                    "SELECT stable_alias, catalog_id FROM meta.predicate_definition WHERE tenant_id=$1",
+                )
+                .bind(ctx.tenant_id)
+                .fetch_all(&mut *tx)
+                .await
+                .map_err(|e| DbError::Other {
+                    message: e.to_string(),
+                })?;
+                let keep = |rows: &[(String, Option<i64>)], v: &Value| -> bool {
+                    let alias = alias_of(v).unwrap_or_default();
+                    if alias.is_empty() {
+                        return true;
+                    }
+                    match rows.iter().find(|(a, _)| a == alias) {
+                        Some((_, cid)) => *cid == Some(cat.catalog_id),
+                        None => true,
+                    }
+                };
+                let b = base.as_ref().unwrap();
+                (
+                    b.types.iter().filter(|v| keep(&trows, v)).cloned().collect::<Vec<_>>(),
+                    b.predicates.iter().filter(|v| keep(&prows, v)).cloned().collect::<Vec<_>>(),
+                    b.relation_groups.iter().filter(|v| keep(&prows, v)).cloned().collect::<Vec<_>>(),
+                )
+            } else {
+                (Vec::new(), Vec::new(), Vec::new())
+            };
             let now = chrono::Utc::now().to_rfc3339();
             let mut record = SchemaRevisionRecord {
                 revision_id: next_id.to_string(),
@@ -1163,15 +1544,9 @@ pub async fn create_draft(
                 parent_revision_id: base.as_ref().map(|r| r.revision_id.clone()),
                 version: 1,
                 etag: String::new(),
-                types: base.as_ref().map(|r| r.types.clone()).unwrap_or_default(),
-                predicates: base
-                    .as_ref()
-                    .map(|r| r.predicates.clone())
-                    .unwrap_or_default(),
-                relation_groups: base
-                    .as_ref()
-                    .map(|r| r.relation_groups.clone())
-                    .unwrap_or_default(),
+                types: owned_types,
+                predicates: owned_preds,
+                relation_groups: owned_groups,
                 changes: Vec::new(),
                 type_count: 0,
                 predicate_count: 0,
@@ -1186,7 +1561,8 @@ pub async fn create_draft(
                 retire_reason: None,
             };
             record.refresh_derived();
-            save_record(&mut tx, ctx.tenant_id, ctx.principal_id, &record).await?;
+            save_record(&mut tx, ctx.tenant_id, cat.catalog_id, ctx.principal_id, &record)
+                .await?;
             tx.commit().await.map_err(|e| DbError::Other {
                 message: e.to_string(),
             })?;
@@ -1219,6 +1595,8 @@ pub async fn update_draft(
             let mut record = find_record(&mut tx, ctx.tenant_id, &id, true)
                 .await?
                 .ok_or_else(|| sf_err(Status::NotFound, "not_found", "Черновик схемы не найден"))?;
+            let cat_id =
+                gate_record_catalog(&mut tx, &ctx, &id, crate::dataperm::Op::Update).await?;
             require_if_match_pg(&record, &if_match_s)?;
             if !matches!(
                 record.status.as_str(),
@@ -1249,7 +1627,7 @@ pub async fn update_draft(
             record.validation = None;
             record.impact = None;
             record.touch();
-            save_record(&mut tx, ctx.tenant_id, ctx.principal_id, &record).await?;
+            save_record(&mut tx, ctx.tenant_id, cat_id, ctx.principal_id, &record).await?;
             tx.commit().await.map_err(|e| DbError::Other {
                 message: e.to_string(),
             })?;
@@ -1280,6 +1658,7 @@ pub async fn delete_draft(
         let record = find_record(&mut tx, ctx.tenant_id, &id2, true)
             .await?
             .ok_or_else(|| sf_err(Status::NotFound, "not_found", "Черновик схемы не найден"))?;
+        gate_record_catalog(&mut tx, &ctx, &id2, crate::dataperm::Op::Update).await?;
         require_if_match_pg(&record, &if_match_s)?;
         let rid: i64 = id2
             .parse()
@@ -1313,6 +1692,8 @@ pub async fn validate_draft(
             let mut record = find_record(&mut tx, ctx.tenant_id, &id, true)
                 .await?
                 .ok_or_else(|| sf_err(Status::NotFound, "not_found", "Черновик схемы не найден"))?;
+            let cat_id =
+                gate_record_catalog(&mut tx, &ctx, &id, crate::dataperm::Op::Update).await?;
             if record.status != "draft" {
                 return Err(sf_err(
                     Status::UnprocessableEntity,
@@ -1325,7 +1706,7 @@ pub async fn validate_draft(
             record.validation = Some(report.clone());
             record.impact = None;
             record.touch();
-            save_record(&mut tx, ctx.tenant_id, ctx.principal_id, &record).await?;
+            save_record(&mut tx, ctx.tenant_id, cat_id, ctx.principal_id, &record).await?;
             tx.commit().await.map_err(|e| DbError::Other {
                 message: e.to_string(),
             })?;
@@ -1351,7 +1732,9 @@ pub async fn impact_draft(
     let v = exec
         .run(Deadline::in_secs(15), move |pool| async move {
             let mut tx = schema_tx(&pool, &ctx).await?;
-            let all = load_records(&mut tx, ctx.tenant_id).await?;
+            let cat_id =
+                gate_record_catalog(&mut tx, &ctx, &id, crate::dataperm::Op::Update).await?;
+            let all = load_records(&mut tx, ctx.tenant_id, Some(cat_id)).await?;
             let idx = all
                 .iter()
                 .position(|r| r.revision_id == id && is_draft(r))
@@ -1376,7 +1759,7 @@ pub async fn impact_draft(
             record.status = "impact_ready".to_string();
             record.impact = Some(report.clone());
             record.touch();
-            save_record(&mut tx, ctx.tenant_id, ctx.principal_id, &record).await?;
+            save_record(&mut tx, ctx.tenant_id, cat_id, ctx.principal_id, &record).await?;
             tx.commit().await.map_err(|e| DbError::Other {
                 message: e.to_string(),
             })?;
@@ -1417,7 +1800,12 @@ pub async fn publish_draft(
                 .map_err(|e| DbError::Other {
                     message: e.to_string(),
                 })?;
-            let mut all = load_records(&mut tx, ctx.tenant_id).await?;
+            // Publish is catalog-scoped: it retires only the published
+            // revision of the same catalog and mirrors definitions into
+            // that catalog's namespace (docs/28 §3).
+            let cat_id =
+                gate_record_catalog(&mut tx, &ctx, &id, crate::dataperm::Op::Update).await?;
+            let mut all = load_records(&mut tx, ctx.tenant_id, Some(cat_id)).await?;
             let idx = all
                 .iter()
                 .position(|r| r.revision_id == id && is_draft(r))
@@ -1465,7 +1853,7 @@ pub async fn publish_draft(
                 rev.retired_at = Some(retired_at.clone());
                 rev.retire_reason = Some("Superseded by a newer revision".to_string());
                 rev.touch();
-                save_record(&mut tx, ctx.tenant_id, ctx.principal_id, rev).await?;
+                save_record(&mut tx, ctx.tenant_id, cat_id, ctx.principal_id, rev).await?;
             }
             let mut record = all[idx].clone();
             record.status = "published".to_string();
@@ -1474,8 +1862,8 @@ pub async fn publish_draft(
             record.content_hash = Some(content_hash(&record));
             record.touch();
             let rid: i64 = record.revision_id.parse().unwrap_or(0);
-            apply_definitions(&mut tx, ctx.tenant_id, rid, &record).await?;
-            save_record(&mut tx, ctx.tenant_id, ctx.principal_id, &record).await?;
+            apply_definitions(&mut tx, ctx.tenant_id, cat_id, rid, &record).await?;
+            save_record(&mut tx, ctx.tenant_id, cat_id, ctx.principal_id, &record).await?;
             tx.commit().await.map_err(|e| DbError::Other {
                 message: e.to_string(),
             })?;
@@ -1489,21 +1877,63 @@ pub async fn publish_draft(
     ))
 }
 
-#[get("/schemas/published")]
+#[get("/schemas/published?<catalog>")]
 pub async fn list_revisions(
     cap: CapabilityGuard,
     state: &State<AppState>,
+    catalog: Option<String>,
 ) -> Result<Json<ApiEnvelope<Value>>, ApiFailure> {
     let exec = pg(state)?;
     let ctx = cap.ctx.clone();
     let v = exec
         .run(Deadline::in_secs(10), move |pool| async move {
             let mut tx = schema_tx(&pool, &ctx).await?;
-            let mut revisions: Vec<SchemaRevisionRecord> = load_records(&mut tx, ctx.tenant_id)
-                .await?
-                .into_iter()
-                .filter(|r| !is_draft(r))
-                .collect();
+            let cat =
+                crate::entity_pg::optional_catalog(&mut tx, ctx.tenant_id, catalog.as_deref())
+                    .await
+                    .map_err(|_| {
+                        sf_err(
+                            Status::UnprocessableEntity,
+                            "catalog.unknown",
+                            "Каталог не найден",
+                        )
+                    })?;
+            if let Some(c) = &cat {
+                require_catalog_access(
+                    &mut tx,
+                    &ctx,
+                    Some(c.catalog_id),
+                    crate::dataperm::Op::Read,
+                )
+                .await?;
+            }
+            // Per-record catalog gate — same rule as list_drafts.
+            let perm =
+                crate::dataperm::DataPerm::load(&mut tx, ctx.tenant_id, ctx.principal_id).await?;
+            let rows: Vec<(i64, serde_json::Value)> = sqlx::query_as(
+                "SELECT catalog_id, content FROM meta.schema_revision
+                 WHERE tenant_id=$1 AND ($2::bigint IS NULL OR catalog_id=$2)",
+            )
+            .bind(ctx.tenant_id)
+            .bind(cat.map(|c| c.catalog_id))
+            .fetch_all(&mut *tx)
+            .await
+            .map_err(|e| DbError::Other {
+                message: e.to_string(),
+            })?;
+            let mut revisions: Vec<SchemaRevisionRecord> = Vec::new();
+            for (cid, content) in rows {
+                let ckeys = catalog_key_list(&mut tx, ctx.tenant_id, cid).await?;
+                let ckey_refs: Vec<&str> = ckeys.iter().map(String::as_str).collect();
+                if !perm.can_catalog(&ckey_refs, crate::dataperm::Op::Read) {
+                    continue;
+                }
+                if let Ok(record) = serde_json::from_value::<SchemaRevisionRecord>(content) {
+                    if !is_draft(&record) {
+                        revisions.push(record);
+                    }
+                }
+            }
             revisions.sort_by_key(|r| {
                 std::cmp::Reverse(r.revision_id.parse::<u64>().unwrap_or_default())
             });
@@ -1529,6 +1959,7 @@ pub async fn get_revision(
             let record = find_record(&mut tx, ctx.tenant_id, &id, false)
                 .await?
                 .ok_or_else(|| sf_err(Status::NotFound, "not_found", "Ревизия схемы не найдена"))?;
+            gate_record_catalog(&mut tx, &ctx, &id, crate::dataperm::Op::Read).await?;
             Ok(json!({"etag": record.etag, "data": serde_json::to_value(&record).unwrap()}))
         })
         .await
@@ -1559,6 +1990,8 @@ pub async fn retire_revision(
             let mut record = find_record(&mut tx, ctx.tenant_id, &id, false)
                 .await?
                 .ok_or_else(|| sf_err(Status::NotFound, "not_found", "Ревизия схемы не найдена"))?;
+            let cat_id =
+                gate_record_catalog(&mut tx, &ctx, &id, crate::dataperm::Op::Update).await?;
             require_if_match_pg(&record, &if_match_s)?;
             if record.status != "published" {
                 return Err(sf_err(
@@ -1571,7 +2004,43 @@ pub async fn retire_revision(
             record.retired_at = Some(chrono::Utc::now().to_rfc3339());
             record.retire_reason = Some(reason);
             record.touch();
-            save_record(&mut tx, ctx.tenant_id, ctx.principal_id, &record).await?;
+            save_record(&mut tx, ctx.tenant_id, cat_id, ctx.principal_id, &record).await?;
+            // Retiring the published revision withdraws its registry
+            // definitions — resolve_type/resolve_predicates only honour
+            // rows with retired_revision IS NULL, so without this the
+            // catalog's types would remain creatable with no published
+            // schema behind them.
+            let rev_num: i64 = record.revision_id.parse().map_err(|_| {
+                sf_err(
+                    Status::InternalServerError,
+                    "internal_error",
+                    "bad revision id",
+                )
+            })?;
+            sqlx::query(
+                "UPDATE meta.type_definition SET retired_revision=$3
+                 WHERE tenant_id=$1 AND catalog_id=$2 AND retired_revision IS NULL",
+            )
+            .bind(ctx.tenant_id)
+            .bind(cat_id)
+            .bind(rev_num)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| DbError::Other {
+                message: e.to_string(),
+            })?;
+            sqlx::query(
+                "UPDATE meta.predicate_definition SET retired_revision=$3
+                 WHERE tenant_id=$1 AND catalog_id=$2 AND retired_revision IS NULL",
+            )
+            .bind(ctx.tenant_id)
+            .bind(cat_id)
+            .bind(rev_num)
+            .execute(&mut *tx)
+            .await
+            .map_err(|e| DbError::Other {
+                message: e.to_string(),
+            })?;
             tx.commit().await.map_err(|e| DbError::Other {
                 message: e.to_string(),
             })?;
@@ -1600,6 +2069,7 @@ pub async fn migration_status(
             let record = find_record(&mut tx, ctx.tenant_id, &id, false)
                 .await?
                 .ok_or_else(|| sf_err(Status::NotFound, "not_found", "Ревизия схемы не найдена"))?;
+            gate_record_catalog(&mut tx, &ctx, &id, crate::dataperm::Op::Read).await?;
             let required = record
                 .impact
                 .as_ref()
@@ -1645,15 +2115,34 @@ fn require_if_match_pg(
 
 // --- Schema catalog (published revision content) ---
 
-/// Load the currently published revision record.
-async fn published_record(
+/// Load `(catalog_id, record)` pairs of published revisions — one per
+/// catalog stream, or of a single catalog when `catalog` is set
+/// (docs/28 §3).
+async fn published_records(
     tx: &mut Transaction<'_, Postgres>,
     tenant: uuid::Uuid,
-) -> Result<Option<SchemaRevisionRecord>, DbError> {
-    Ok(load_records(tx, tenant)
-        .await?
+    catalog: Option<i64>,
+) -> Result<Vec<(i64, SchemaRevisionRecord)>, DbError> {
+    let rows: Vec<(i64, serde_json::Value)> = sqlx::query_as(
+        "SELECT catalog_id, content FROM meta.schema_revision
+         WHERE tenant_id=$1 AND ($2::bigint IS NULL OR catalog_id=$2)",
+    )
+    .bind(tenant)
+    .bind(catalog)
+    .fetch_all(&mut **tx)
+    .await
+    .map_err(|e| DbError::Other {
+        message: e.to_string(),
+    })?;
+    Ok(rows
         .into_iter()
-        .find(|r| r.status == "published"))
+        .filter_map(|(cid, content)| {
+            serde_json::from_value::<SchemaRevisionRecord>(content)
+                .ok()
+                .map(|r| (cid, r))
+        })
+        .filter(|(_, r)| r.status == "published")
+        .collect())
 }
 
 fn type_entry_to_record(
@@ -1690,6 +2179,24 @@ fn type_entry_to_record(
                     target_type_id: f
                         .get("target_type_id")
                         .or_else(|| f.get("range"))
+                        .and_then(Value::as_str)
+                        .map(str::to_string),
+                    values: f
+                        .get("values")
+                        .or_else(|| f.get("options"))
+                        .and_then(Value::as_array)
+                        .map(|vs| {
+                            vs.iter()
+                                .filter_map(|v| {
+                                    v.as_str().map(str::to_string).or_else(|| {
+                                        v.get("value").and_then(Value::as_str).map(str::to_string)
+                                    })
+                                })
+                                .collect()
+                        }),
+                    unit: f.get("unit").and_then(Value::as_str).map(str::to_string),
+                    currency: f
+                        .get("currency")
                         .and_then(Value::as_str)
                         .map(str::to_string),
                 })
@@ -1736,7 +2243,12 @@ fn type_entry_to_record(
 /// Apply field-level data permissions to a built view descriptor (1.2):
 /// unreadable fields are removed entirely; non-updatable ones render
 /// `read_only`. Edge fields are additionally gated by relation-type read (1.4).
-fn filter_view_fields(view: &mut Value, perm: &crate::dataperm::DataPerm, tkeys: &[&str]) {
+fn filter_view_fields(
+    view: &mut Value,
+    perm: &crate::dataperm::DataPerm,
+    tkeys: &[&str],
+    ckeys: &[&str],
+) {
     let apply = |arr: &mut Vec<Value>| {
         arr.retain_mut(|f| {
             let alias = f
@@ -1751,20 +2263,20 @@ fn filter_view_fields(view: &mut Value, perm: &crate::dataperm::DataPerm, tkeys:
             // scalar fields by field access (1.2 vs 1.4).
             let is_edge = f.get("target_type_id").is_some_and(|v| !v.is_null());
             if is_edge {
-                if !perm.can_relation_dir(alias, crate::dataperm::Op::Read, Some(true)) {
+                if !perm.can_relation_dir(alias, ckeys, crate::dataperm::Op::Read, Some(true)) {
                     return false;
                 }
-                if !perm.can_relation_dir(alias, crate::dataperm::Op::Update, Some(true)) {
+                if !perm.can_relation_dir(alias, ckeys, crate::dataperm::Op::Update, Some(true)) {
                     if let Some(o) = f.as_object_mut() {
                         o.insert("read_only".to_string(), Value::Bool(true));
                     }
                 }
                 return true;
             }
-            if !perm.can_field(tkeys, alias, crate::dataperm::Op::Read) {
+            if !perm.can_field(tkeys, ckeys, alias, crate::dataperm::Op::Read) {
                 return false;
             }
-            if !perm.can_field(tkeys, alias, crate::dataperm::Op::Update) {
+            if !perm.can_field(tkeys, ckeys, alias, crate::dataperm::Op::Update) {
                 if let Some(o) = f.as_object_mut() {
                     o.insert("read_only".to_string(), Value::Bool(true));
                 }
@@ -1786,10 +2298,27 @@ fn filter_view_fields(view: &mut Value, perm: &crate::dataperm::DataPerm, tkeys:
     }
 }
 
-#[get("/schemas/types")]
+/// Type alias/type_id lookup entry shared by the catalog readers: an
+/// emitted type carries its catalog alias so the UI can disambiguate the
+/// same stable_alias published in different catalogs (docs/28 §3).
+fn type_record_value(
+    entry: &Value,
+    revision: i64,
+    entity_count: usize,
+    catalog_alias: Option<&str>,
+) -> Value {
+    let mut v = serde_json::to_value(type_entry_to_record(entry, revision, entity_count)).unwrap();
+    if let Some(a) = catalog_alias {
+        v["catalog"] = Value::String(a.to_string());
+    }
+    v
+}
+
+#[get("/schemas/types?<catalog>")]
 pub async fn list_schema_types(
     cap: CapabilityGuard,
     state: &State<AppState>,
+    catalog: Option<String>,
 ) -> Result<Json<ApiEnvelope<Value>>, ApiFailure> {
     let exec = pg(state)?;
     let ctx = cap.ctx.clone();
@@ -1797,11 +2326,32 @@ pub async fn list_schema_types(
         .run(Deadline::in_secs(10), move |pool| async move {
             let mut tx = schema_tx(&pool, &ctx).await?;
             let perm =
-                crate::dataperm::DataPerm::load(&mut tx, ctx.tenant_id, ctx.principal_id)
-                    .await?;
-            let Some(record) = published_record(&mut tx, ctx.tenant_id).await? else {
-                return Ok(Value::Array(vec![]));
-            };
+                crate::dataperm::DataPerm::load(&mut tx, ctx.tenant_id, ctx.principal_id).await?;
+            let cat =
+                crate::entity_pg::optional_catalog(&mut tx, ctx.tenant_id, catalog.as_deref())
+                    .await
+                    .map_err(|_| {
+                        sf_err(
+                            Status::UnprocessableEntity,
+                            "catalog.unknown",
+                            "Каталог не найден",
+                        )
+                    })?;
+            // An explicit catalog the principal cannot read is a loud
+            // denial — same rule as the entity list (docs/28 §4).
+            if let Some(c) = &cat {
+                let ckeys = [c.public_id.to_string(), c.alias.clone()];
+                let ckey_refs: Vec<&str> = ckeys.iter().map(String::as_str).collect();
+                if !perm.can_catalog(&ckey_refs, crate::dataperm::Op::Read) {
+                    return Err(sf_err(
+                        Status::Forbidden,
+                        "catalog.denied",
+                        "Нет доступа к каталогу",
+                    ));
+                }
+            }
+            let records =
+                published_records(&mut tx, ctx.tenant_id, cat.map(|c| c.catalog_id)).await?;
             let counts: Vec<(uuid::Uuid, i64)> = sqlx::query_as(
                 "SELECT type_id, count(*) FROM core.entity
                  WHERE tenant_id=$1 AND retired_at IS NULL GROUP BY type_id",
@@ -1809,31 +2359,50 @@ pub async fn list_schema_types(
             .bind(ctx.tenant_id)
             .fetch_all(&mut *tx)
             .await
-            .map_err(|e| DbError::Other{message:e.to_string()})?;
-            let rev = record.revision_id.parse().unwrap_or(0);
+            .map_err(|e| DbError::Other {
+                message: e.to_string(),
+            })?;
             let mut out = Vec::new();
-            for t in &record.types {
-                let alias = alias_of(t).unwrap_or_default();
-                let tid: Option<(uuid::Uuid,)> = sqlx::query_as(
-                    "SELECT type_id FROM meta.type_definition WHERE tenant_id=$1 AND stable_alias=$2",
-                )
-                .bind(ctx.tenant_id)
-                .bind(alias)
-                .fetch_optional(&mut *tx)
-                .await
-                .map_err(|e| DbError::Other{message:e.to_string()})?;
-                let count = tid
-                    .and_then(|(u,)| counts.iter().find(|(c, _)| c == &u).map(|(_, n)| *n))
-                    .unwrap_or(0) as usize;
-                // Data read access on the object type gates its visibility (1.1).
-                let tkeys = [
-                    t.get("type_id").and_then(Value::as_str).unwrap_or_default(),
-                    alias,
-                ];
-                if !perm.can_type(&tkeys, crate::dataperm::Op::Read) {
+            for (cid, record) in &records {
+                let ckeys = catalog_key_list(&mut tx, ctx.tenant_id, *cid).await?;
+                let ckey_refs: Vec<&str> = ckeys.iter().map(String::as_str).collect();
+                // The catalog gate runs before any type check (docs/28 §4).
+                if !perm.can_catalog(&ckey_refs, crate::dataperm::Op::Read) {
                     continue;
                 }
-                out.push(serde_json::to_value(type_entry_to_record(t, rev, count)).unwrap());
+                let rev = record.revision_id.parse().unwrap_or(0);
+                for t in &record.types {
+                    let alias = alias_of(t).unwrap_or_default();
+                    let tid: Option<(uuid::Uuid,)> = sqlx::query_as(
+                        "SELECT type_id FROM meta.type_definition
+                         WHERE tenant_id=$1 AND stable_alias=$2 AND catalog_id=$3",
+                    )
+                    .bind(ctx.tenant_id)
+                    .bind(alias)
+                    .bind(cid)
+                    .fetch_optional(&mut *tx)
+                    .await
+                    .map_err(|e| DbError::Other {
+                        message: e.to_string(),
+                    })?;
+                    let count = tid
+                        .and_then(|(u,)| counts.iter().find(|(c, _)| c == &u).map(|(_, n)| *n))
+                        .unwrap_or(0) as usize;
+                    // Data read access on the object type gates its visibility (1.1).
+                    let tkeys = [
+                        t.get("type_id").and_then(Value::as_str).unwrap_or_default(),
+                        alias,
+                    ];
+                    if !perm.can_type(&tkeys, &ckey_refs, crate::dataperm::Op::Read) {
+                        continue;
+                    }
+                    out.push(type_record_value(
+                        t,
+                        rev,
+                        count,
+                        ckeys.get(1).map(String::as_str),
+                    ));
+                }
             }
             Ok(Value::Array(out))
         })
@@ -1842,11 +2411,12 @@ pub async fn list_schema_types(
     Ok(Json(envelope(v)))
 }
 
-#[get("/schemas/types/<type_id>")]
+#[get("/schemas/types/<type_id>?<catalog>")]
 pub async fn get_schema_type(
     cap: CapabilityGuard,
     state: &State<AppState>,
     type_id: &str,
+    catalog: Option<String>,
 ) -> Result<Json<ApiEnvelope<Value>>, ApiFailure> {
     let exec = pg(state)?;
     let ctx = cap.ctx.clone();
@@ -1856,43 +2426,66 @@ pub async fn get_schema_type(
             let mut tx = schema_tx(&pool, &ctx).await?;
             let perm =
                 crate::dataperm::DataPerm::load(&mut tx, ctx.tenant_id, ctx.principal_id).await?;
-            let Some(record) = published_record(&mut tx, ctx.tenant_id).await? else {
-                return Err(sf_err(Status::NotFound, "not_found", "Тип не найден"));
-            };
-            let entry = record
-                .types
-                .iter()
-                .find(|t| {
+            let cat =
+                crate::entity_pg::optional_catalog(&mut tx, ctx.tenant_id, catalog.as_deref())
+                    .await
+                    .map_err(|_| {
+                        sf_err(
+                            Status::UnprocessableEntity,
+                            "catalog.unknown",
+                            "Каталог не найден",
+                        )
+                    })?;
+            // The same alias may exist in several catalogs; without
+            // `?catalog` the first accessible catalog containing it wins.
+            let records =
+                published_records(&mut tx, ctx.tenant_id, cat.map(|c| c.catalog_id)).await?;
+            for (cid, record) in &records {
+                let Some(entry) = record.types.iter().find(|t| {
                     alias_of(t) == Some(type_id.as_str())
                         || t.get("type_id").and_then(Value::as_str) == Some(type_id.as_str())
-                })
-                .ok_or_else(|| sf_err(Status::NotFound, "not_found", "Тип не найден"))?;
-            // An unreadable type behaves as absent for non-admin data access.
-            let alias = alias_of(entry).unwrap_or_default();
-            let tkeys = [
-                entry
-                    .get("type_id")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default(),
-                alias,
-            ];
-            if !perm.can_type(&tkeys, crate::dataperm::Op::Read) {
-                return Err(sf_err(Status::NotFound, "not_found", "Тип не найден"));
+                }) else {
+                    continue;
+                };
+                let ckeys = catalog_key_list(&mut tx, ctx.tenant_id, *cid).await?;
+                let ckey_refs: Vec<&str> = ckeys.iter().map(String::as_str).collect();
+                // An unreadable catalog/type behaves as absent (no leak).
+                if !perm.can_catalog(&ckey_refs, crate::dataperm::Op::Read) {
+                    return Err(sf_err(Status::NotFound, "not_found", "Тип не найден"));
+                }
+                let alias = alias_of(entry).unwrap_or_default();
+                let tkeys = [
+                    entry
+                        .get("type_id")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default(),
+                    alias,
+                ];
+                if !perm.can_type(&tkeys, &ckey_refs, crate::dataperm::Op::Read) {
+                    return Err(sf_err(Status::NotFound, "not_found", "Тип не найден"));
+                }
+                let rev = record.revision_id.parse().unwrap_or(0);
+                return Ok(type_record_value(
+                    entry,
+                    rev,
+                    0,
+                    ckeys.get(1).map(String::as_str),
+                ));
             }
-            let rev = record.revision_id.parse().unwrap_or(0);
-            Ok(serde_json::to_value(type_entry_to_record(entry, rev, 0)).unwrap())
+            Err(sf_err(Status::NotFound, "not_found", "Тип не найден"))
         })
         .await
         .map_err(|e| failure(&e))?;
     Ok(Json(envelope(v)))
 }
 
-#[get("/schemas/types/<type_id>/view?<view_type>")]
+#[get("/schemas/types/<type_id>/view?<view_type>&<catalog>")]
 pub async fn get_type_view(
     cap: CapabilityGuard,
     state: &State<AppState>,
     type_id: &str,
     view_type: Option<String>,
+    catalog: Option<String>,
 ) -> Result<Json<ApiEnvelope<Value>>, ApiFailure> {
     let exec = pg(state)?;
     let ctx = cap.ctx.clone();
@@ -1903,45 +2496,61 @@ pub async fn get_type_view(
             let mut tx = schema_tx(&pool, &ctx).await?;
             let perm =
                 crate::dataperm::DataPerm::load(&mut tx, ctx.tenant_id, ctx.principal_id).await?;
-            let Some(record) = published_record(&mut tx, ctx.tenant_id).await? else {
-                return Err(sf_err(Status::NotFound, "not_found", "Тип не найден"));
-            };
-            let entry = record
-                .types
-                .iter()
-                .find(|t| {
+            let cat =
+                crate::entity_pg::optional_catalog(&mut tx, ctx.tenant_id, catalog.as_deref())
+                    .await
+                    .map_err(|_| {
+                        sf_err(
+                            Status::UnprocessableEntity,
+                            "catalog.unknown",
+                            "Каталог не найден",
+                        )
+                    })?;
+            let records =
+                published_records(&mut tx, ctx.tenant_id, cat.map(|c| c.catalog_id)).await?;
+            for (cid, record) in &records {
+                let Some(entry) = record.types.iter().find(|t| {
                     alias_of(t) == Some(type_id.as_str())
                         || t.get("type_id").and_then(Value::as_str) == Some(type_id.as_str())
-                })
-                .ok_or_else(|| sf_err(Status::NotFound, "not_found", "Тип не найден"))?;
-            let alias = alias_of(entry).unwrap_or_default();
-            let tkeys = [
-                entry
-                    .get("type_id")
-                    .and_then(Value::as_str)
-                    .unwrap_or_default()
-                    .to_string(),
-                alias.to_string(),
-            ];
-            let tkey_refs: [&str; 2] = [&tkeys[0], &tkeys[1]];
-            if !perm.can_type(&tkey_refs, crate::dataperm::Op::Read) {
-                return Err(sf_err(Status::NotFound, "not_found", "Тип не найден"));
+                }) else {
+                    continue;
+                };
+                let ckeys = catalog_key_list(&mut tx, ctx.tenant_id, *cid).await?;
+                let ckey_refs: Vec<&str> = ckeys.iter().map(String::as_str).collect();
+                if !perm.can_catalog(&ckey_refs, crate::dataperm::Op::Read) {
+                    return Err(sf_err(Status::NotFound, "not_found", "Тип не найден"));
+                }
+                let alias = alias_of(entry).unwrap_or_default();
+                let tkeys = [
+                    entry
+                        .get("type_id")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default()
+                        .to_string(),
+                    alias.to_string(),
+                ];
+                let tkey_refs: [&str; 2] = [&tkeys[0], &tkeys[1]];
+                if !perm.can_type(&tkey_refs, &ckey_refs, crate::dataperm::Op::Read) {
+                    return Err(sf_err(Status::NotFound, "not_found", "Тип не найден"));
+                }
+                let rev = record.revision_id.parse().unwrap_or(0);
+                let schema_type = type_entry_to_record(entry, rev, 0);
+                let mut view = crate::workspace_routes::build_type_view(&schema_type, &vtype);
+                filter_view_fields(&mut view, &perm, &tkey_refs, &ckey_refs);
+                return Ok(view);
             }
-            let rev = record.revision_id.parse().unwrap_or(0);
-            let schema_type = type_entry_to_record(entry, rev, 0);
-            let mut view = crate::workspace_routes::build_type_view(&schema_type, &vtype);
-            filter_view_fields(&mut view, &perm, &tkey_refs);
-            Ok(view)
+            Err(sf_err(Status::NotFound, "not_found", "Тип не найден"))
         })
         .await
         .map_err(|e| failure(&e))?;
     Ok(Json(envelope(v)))
 }
 
-#[get("/schemas/predicates")]
+#[get("/schemas/predicates?<catalog>")]
 pub async fn list_predicates(
     cap: CapabilityGuard,
     state: &State<AppState>,
+    catalog: Option<String>,
 ) -> Result<Json<ApiEnvelope<Value>>, ApiFailure> {
     let exec = pg(state)?;
     let ctx = cap.ctx.clone();
@@ -1951,24 +2560,61 @@ pub async fn list_predicates(
             let perm =
                 crate::dataperm::DataPerm::load(&mut tx, ctx.tenant_id, ctx.principal_id)
                     .await?;
-            let Some(record) = published_record(&mut tx, ctx.tenant_id).await? else {
-                return Ok(Value::Array(vec![]));
-            };
-            let out: Vec<Value> = record
-                .predicates
-                .iter()
-                .filter(|p| {
-                    // 1.4: relation types the principal cannot read are not
-                    // disclosed — they must not appear in the catalog at all.
-                    let edge = p.get("is_edge").and_then(Value::as_bool).unwrap_or(false);
-                    !edge
-                        || perm.can_relation(
-                            alias_of(p).unwrap_or_default(),
-                            crate::dataperm::Op::Read,
-                        )
-                })
-                .map(|p| {
-                    json!({
+            let cat = crate::entity_pg::optional_catalog(
+                &mut tx,
+                ctx.tenant_id,
+                catalog.as_deref(),
+            )
+            .await
+            .map_err(|_| {
+                sf_err(
+                    Status::UnprocessableEntity,
+                    "catalog.unknown",
+                    "Каталог не найден",
+                )
+            })?;
+            // Explicit forbidden catalog — loud denial, same as lists.
+            if let Some(c) = &cat {
+                let ckeys = [c.public_id.to_string(), c.alias.clone()];
+                let ckey_refs: Vec<&str> = ckeys.iter().map(String::as_str).collect();
+                if !perm.can_catalog(&ckey_refs, crate::dataperm::Op::Read) {
+                    return Err(sf_err(
+                        Status::Forbidden,
+                        "catalog.denied",
+                        "Нет доступа к каталогу",
+                    ));
+                }
+            }
+            let records =
+                published_records(&mut tx, ctx.tenant_id, cat.map(|c| c.catalog_id)).await?;
+            let mut out: Vec<Value> = Vec::new();
+            for (cid, record) in &records {
+                let ckeys = catalog_key_list(&mut tx, ctx.tenant_id, *cid).await?;
+                let ckey_refs: Vec<&str> = ckeys.iter().map(String::as_str).collect();
+                if !perm.can_catalog(&ckey_refs, crate::dataperm::Op::Read) {
+                    continue;
+                }
+                let catalog_alias = ckeys.get(1).cloned().unwrap_or_default();
+                out.extend(
+                    record
+                        .predicates
+                        .iter()
+                        .filter(|p| {
+                            // 1.4: relation types the principal cannot read are not
+                            // disclosed — they must not appear in the catalog at all.
+                            let edge =
+                                p.get("is_edge").and_then(Value::as_bool).unwrap_or(false);
+                            !edge
+                                || perm.can_relation(
+                                    alias_of(p).unwrap_or_default(),
+                                    &ckey_refs,
+                                    crate::dataperm::Op::Read,
+                                )
+                        })
+                        .map(|p| {
+                            let catalog_alias = catalog_alias.clone();
+                            json!({
+                                "catalog": catalog_alias,
                         "predicate_id": p.get("predicate_id").and_then(Value::as_str).unwrap_or_default(),
                         "alias": alias_of(p).unwrap_or_default(),
                         "display_name": p.get("label").or_else(||p.get("display_name")).and_then(Value::as_str).unwrap_or_default(),
@@ -1986,9 +2632,10 @@ pub async fn list_predicates(
                         "confidentiality_class": p.get("confidentiality").or_else(||p.get("confidentiality_class")).and_then(Value::as_str).unwrap_or("internal"),
                         "inverse_label": p.get("inverse_label").and_then(Value::as_str).unwrap_or_default(),
                         "group": p.get("group").and_then(Value::as_str).unwrap_or_default(),
-                    })
-                })
-                .collect();
+                            })
+                        }),
+                );
+            }
             Ok(Value::Array(out))
         })
         .await
@@ -2129,5 +2776,57 @@ mod tests {
     fn reason_has_minimum_length() {
         assert!(validate_reason("short").is_err());
         assert!(validate_reason("Approved change request CR-42").is_ok());
+    }
+
+    #[test]
+    fn validation_rejects_unknown_field_kind() {
+        let mut record = seed_revision();
+        record.types[0] = json!({
+            "type_id": "person",
+            "stable_alias": "person",
+            "entity_class": "data",
+            "fields": [
+                { "alias": "full_name", "kind": "text", "required": true },
+                { "alias": "tags", "kind": "tagz" },
+                { "alias": "status", "kind": "enum" },
+                { "alias": "manager", "kind": "entity_reference" }
+            ]
+        });
+        let report = validate_record(&record);
+        assert!(!report.valid);
+        assert!(report
+            .findings
+            .iter()
+            .any(|f| f.code == "field.kind.unknown"
+                && f.severity == "error"
+                && f.path.as_deref() == Some("types[0].fields[1].kind")));
+        assert!(report
+            .findings
+            .iter()
+            .any(|f| f.code == "field.values.recommended" && f.severity == "warning"));
+        assert!(report
+            .findings
+            .iter()
+            .any(|f| f.code == "field.target_type.recommended" && f.severity == "warning"));
+    }
+
+    #[test]
+    fn validation_accepts_all_documented_field_kinds() {
+        let mut record = seed_revision();
+        let fields: Vec<Value> = crate::field_kinds::KNOWN_FIELD_KINDS
+            .iter()
+            .map(|k| json!({ "alias": format!("f_{k}"), "kind": k }))
+            .collect();
+        record.types[0] = json!({
+            "type_id": "person",
+            "stable_alias": "person",
+            "entity_class": "data",
+            "fields": fields
+        });
+        let report = validate_record(&record);
+        assert!(!report
+            .findings
+            .iter()
+            .any(|f| f.code == "field.kind.unknown"));
     }
 }

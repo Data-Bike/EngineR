@@ -23,29 +23,37 @@ import type {
 export class EntityEndpoints {
   constructor(private readonly client: ApiClient) {}
 
-  /** POST /entities — create entity (docs/06 §6). */
-  async create(body: CreateEntityBody, idempotencyKey?: string): Promise<ParsedResponse<CreateEntityResponse>> {
-    return this.client.post<CreateEntityResponse>('/entities', body, { idempotencyKey });
+  /** POST /entities — create entity (docs/06 §6). `catalog` selects the
+   * owning catalog; without it the type's own catalog is used (docs/28). */
+  async create(body: CreateEntityBody, options?: { idempotencyKey?: string; catalog?: string }): Promise<ParsedResponse<CreateEntityResponse>> {
+    return this.client.post<CreateEntityResponse>('/entities', body, {
+      idempotencyKey: options?.idempotencyKey,
+      query: { catalog: options?.catalog },
+    });
   }
 
-  /** GET /entities — list entities (type filter + prefix search). */
+  /** GET /entities — list entities (type filter + prefix search).
+   * `catalog` scopes the listing to one catalog (docs/28 §6). */
   async list(options?: {
     type?: string;
     search?: string;
     limit?: number;
     cursor?: string;
+    catalog?: string;
   }): Promise<ParsedResponse<Entity[]>> {
     return this.client.get<Entity[]>('/entities', { query: options });
   }
 
-  /** GET /entities/{publicId} — get entity. */
-  async get(publicId: string): Promise<ParsedResponse<Entity>> {
-    return this.client.get<Entity>(`/entities/${publicId}`);
+  /** GET /entities/{publicId} — get entity. `catalog` asserts the active
+   * catalog: a foreign-catalog entity reads as 404. */
+  async get(publicId: string, options?: { catalog?: string }): Promise<ParsedResponse<Entity>> {
+    return this.client.get<Entity>(`/entities/${publicId}`, { query: options });
   }
 
-  /** POST /entities/query — query entities (docs/06 §9). */
-  async query(body: QueryBody): Promise<ParsedResponse<QueryResponse>> {
-    return this.client.post<QueryResponse>('/entities/query', body);
+  /** POST /entities/query — query entities (docs/06 §9). `catalog` scopes
+   * the query to one catalog. */
+  async query(body: QueryBody, options?: { catalog?: string }): Promise<ParsedResponse<QueryResponse>> {
+    return this.client.post<QueryResponse>('/entities/query', body, { query: options });
   }
 
   /** GET /entities/{publicId}/relations — list entity relations. */
@@ -66,9 +74,10 @@ export class EntityEndpoints {
     return this.client.delete<unknown>(`/entities/${publicId}/relations/${relationId}`);
   }
 
-  /** PUT /entities/{publicId} — update entity statements. */
-  async update(publicId: string, body: UpdateEntityBody): Promise<ParsedResponse<Entity>> {
-    return this.client.put<Entity>(`/entities/${publicId}`, body);
+  /** PUT /entities/{publicId} — update entity statements. `catalog` is a
+   * mismatch check: entities never change catalogs (409 catalog.mismatch). */
+  async update(publicId: string, body: UpdateEntityBody, options?: { catalog?: string }): Promise<ParsedResponse<Entity>> {
+    return this.client.put<Entity>(`/entities/${publicId}`, body, { query: options });
   }
 
   /** GET /entities/{publicId}/history — get entity history. */

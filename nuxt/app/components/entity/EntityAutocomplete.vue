@@ -1,8 +1,8 @@
 <template>
   <UInputMenu
-    :model-value="selectedItem"
+    :model-value="modelValue || undefined"
     v-model:search-term="searchTerm"
-    :items="results"
+    :items="menuItems"
     :loading="loading"
     :placeholder="placeholder ?? t('entity.search_placeholder')"
     :disabled="disabled"
@@ -33,6 +33,15 @@ const emit = defineEmits<{
 
 const { t } = useI18n();
 const api = useApi();
+const route = useRoute();
+const { catalogParams } = useCatalog();
+// Relation fields search within the page's catalog scope — the route query
+// may pin a specific catalog (type card on /objects), otherwise the header
+// selection applies.
+const scopedCatalog = () => {
+  const q = route.query.catalog;
+  return typeof q === 'string' && q ? q : catalogParams().catalog;
+};
 
 interface Option {
   label: string;
@@ -55,6 +64,16 @@ const selectedItem = computed<Option | undefined>(() => {
   return { label, value: props.modelValue };
 });
 
+/** Search results plus the current selection, so UInputMenu can always
+ * resolve the label even when the value is not among fetched options. */
+const menuItems = computed<Option[]>(() => {
+  const sel = selectedItem.value;
+  if (sel && !results.value.some((item) => item.value === sel.value)) {
+    return [sel, ...results.value];
+  }
+  return results.value;
+});
+
 async function fetchOptions(query: string): Promise<void> {
   const seq = ++requestSeq;
   loading.value = true;
@@ -63,6 +82,7 @@ async function fetchOptions(query: string): Promise<void> {
       type: props.targetTypeId || undefined,
       search: query.trim() || undefined,
       limit: 20,
+      catalog: scopedCatalog() || undefined,
     });
     if (seq !== requestSeq) return;
     results.value = res.data.map((r) => ({

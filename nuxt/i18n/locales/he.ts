@@ -1,4 +1,4 @@
-import { schemaEn } from '../schema';
+import { catalogEn, schemaEn } from '../schema';
 
 export default {
   "app":   {
@@ -328,6 +328,7 @@ export default {
       },
     },
   },
+  "catalog": catalogEn,
   "schema":   {
     ...schemaEn,
     "title": 'ניהול סכמה',
@@ -801,6 +802,8 @@ export default {
     "default_managers_desc": 'יצירת בקשות וצפייה באובייקטים',
     group_class: 'סוג הקבוצה',
     class_capability: 'מערכת',
+    tab_data: 'גישה לנתונים',
+    tab_system: 'גישה למערכת',
     inherits: 'יורש',
     parent_role: 'תפקיד אב',
     parent_role_hint: 'יורש את כל הרשאות האב, ניתן להוסיף ולדרוס',
@@ -809,6 +812,7 @@ export default {
     res_relation: 'סוג קשר',
     res_relation_instance: 'קשר מסוים',
     res_url: 'URL',
+    res_url_placeholder: '/admin או /api/v1/...',
     res_capability: 'יכולת מערכת',
     act_all: 'כל הפעולות',
     effect_allow: 'התרה',

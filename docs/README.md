@@ -48,6 +48,7 @@
 | [25-delivery-plan-and-acceptance.md](./25-delivery-plan-and-acceptance.md) | Этапы и приёмочные сценарии |
 | [26-decisions-and-tradeoffs.md](./26-decisions-and-tradeoffs.md) | Архитектурные решения |
 | [27-glossary.md](./27-glossary.md) | Словарь терминов |
+| [28-catalogs.md](./28-catalogs.md) | Каталоги: второй уровень изоляции данных |
 | [99-references.md](./99-references.md) | Нормативные внешние ссылки |
 
 ## Нормативность

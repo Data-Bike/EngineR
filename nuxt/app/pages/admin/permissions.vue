@@ -15,12 +15,17 @@
       <p class="text-[var(--ui-text-muted)]">{{ t('admin.permissions_info_text') }}</p>
     </div>
 
-    <!-- Role tree -->
+    <!-- Role tree, split by access class: data access vs system access -->
     <div v-if="loading" class="text-center py-8 text-[var(--ui-text-muted)]">
       {{ t('common.loading') }}
     </div>
-    <div v-else class="space-y-2">
-      <UCard v-for="node in roleTree" :key="node.id" :style="{ marginInlineStart: `${node.depth * 1.5}rem` }">
+    <template v-else>
+      <UTabs v-model="activeTab" :items="classTabs" class="w-full sm:w-auto" data-testid="class-tabs" />
+      <div v-if="visibleTree.length === 0" class="text-center py-8 text-[var(--ui-text-muted)] mt-4">
+        {{ t('entity.empty') }}
+      </div>
+      <div v-else class="space-y-2 mt-4">
+        <UCard v-for="node in visibleTree" :key="node.id" :style="{ marginInlineStart: `${node.depth * 1.5}rem` }">
         <div class="flex items-start justify-between">
           <div class="flex-1">
             <div class="flex items-center gap-2 flex-wrap">
@@ -64,8 +69,9 @@
             <UButton size="sm" variant="ghost" color="error" icon="i-lucide-trash" data-testid="delete-role" @click="deleteGroup(node)" />
           </div>
         </div>
-      </UCard>
-    </div>
+        </UCard>
+      </div>
+    </template>
 
     <!-- Create/Edit Dialog -->
     <UModal v-model:open="showDialog">
@@ -143,7 +149,8 @@
                 <UInput v-model="rule.relation" class="w-full" placeholder="statement_id" />
               </UFormField>
               <UFormField v-if="rule.resource_type === 'url'" :label="t('admin.res_url')">
-                <UInput v-model="rule.path" class="w-full" placeholder="/admin или /api/v1/..." />
+                <UInputMenu v-model="rule.path" :items="menuPathOptions" value-key="value" create-item
+                            class="w-full" :placeholder="t('admin.res_url_placeholder')" data-testid="rule-path" />
               </UFormField>
               <UFormField v-if="rule.resource_type === 'capability'" :label="t('admin.capability')">
                 <UInput v-model="rule.action" class="w-full" placeholder="entity.read" />
@@ -174,6 +181,7 @@
 
 <script setup lang="ts">
 import { capability } from '~/middleware/capability';
+import { ADMIN_ITEMS, MENU_ITEMS } from '~/utils/menu';
 
 definePageMeta({
   middleware: ['auth', capability('admin.pages.access')],
@@ -227,6 +235,25 @@ const emptyRule = (): PermissionRule => ({
 const loading = ref(false);
 const permissionGroups = ref<PermissionGroup[]>([]);
 
+// Group classes split the page into tabs: 'data' = data-access roles,
+// 'capability' = system-access roles (ADR-010 — the class decides which
+// rule kinds the role may hold).
+const activeTab = ref<'data' | 'capability'>('data');
+const classTabs = computed(() => {
+  const counts = { data: 0, capability: 0 };
+  for (const g of permissionGroups.value) {
+    if (g.class === 'data') counts.data++;
+    else counts.capability++;
+  }
+  return [
+    { value: 'data', label: `${t('admin.tab_data')} (${counts.data})` },
+    { value: 'capability', label: `${t('admin.tab_system')} (${counts.capability})` },
+  ];
+});
+const visibleTree = computed(() =>
+  roleTree.value.filter((n) => (n.class === 'data' ? 'data' : 'capability') === activeTab.value),
+);
+
 async function fetchPermissionGroups() {
   loading.value = true;
   try {
@@ -279,7 +306,7 @@ const roleTree = computed<TreeNode[]>(() => {
   const visit = (g: PermissionGroup, depth: number, seen: Set<string>) => {
     if (seen.has(g.id)) return;
     seen.add(g.id);
-    out.push({ ...g, depth, parentName: byId.get(g.parent_id)?.name ?? '' });
+    out.push({ ...g, depth, parentName: byId.get(g.parent_id ?? '')?.name ?? '' });
     for (const c of childrenOf.get(g.id) ?? []) visit(c, depth + 1, seen);
   };
   for (const g of roots) visit(g, 0, new Set());
@@ -336,6 +363,16 @@ const actionOptions = computed(() => [
   { label: t('admin.act_all'), value: '*' },
 ]);
 
+// URL-rule suggestions: every menu path (sidebar + admin cards) is a
+// first-class resource — an admin can pick a page to allow/deny instead of
+// typing free-form. Custom paths remain possible via create-item.
+const menuPathOptions = computed(() =>
+  [...MENU_ITEMS, ...ADMIN_ITEMS].map((item) => ({
+    label: `${t(item.label)} — ${item.to}`,
+    value: item.to,
+  })),
+);
+
 const maskOptions = computed(() => [
   { label: t('admin.mask_allow'), value: null },
   { label: t('admin.mask_omit'), value: 'omit' },
@@ -369,8 +406,9 @@ function resourceLabel(rule: PermissionRule): string {
 
 function openCreateDialog() {
   editing.value = false;
+  // New roles inherit the class of the tab they are created from.
   formData.value = {
-    id: '', name: '', description: '', class: 'data', parent_id: null,
+    id: '', name: '', description: '', class: activeTab.value, parent_id: null,
     special: false, principals: [], rules: [emptyRule()],
   };
   showDialog.value = true;

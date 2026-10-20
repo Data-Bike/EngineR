@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { ref } from 'vue';
 import { flushPromises, mount } from '@vue/test-utils';
 import EntityAutocomplete from '../app/components/entity/EntityAutocomplete.vue';
 
@@ -23,12 +24,20 @@ const UInputMenu = {
   `,
 };
 
-function mountAutocomplete(list: ReturnType<typeof vi.fn>, props = {}) {
+function mountAutocomplete(
+  list: ReturnType<typeof vi.fn>,
+  props = {},
+  env: { routeQuery?: Record<string, string>; catalog?: string } = {},
+) {
   (globalThis as any).useApi = () => ({
     entities: {
       list,
       get: vi.fn().mockResolvedValue({ data: { display_name: 'Resolved', public_id: 'x' } }),
     },
+  });
+  (globalThis as any).useRoute = () => ({ query: env.routeQuery ?? {} });
+  (globalThis as any).useCatalog = () => ({
+    catalogParams: () => (env.catalog ? { catalog: env.catalog } : {}),
   });
   return mount(EntityAutocomplete, {
     props: { modelValue: '', ...props },
@@ -85,5 +94,21 @@ describe('EntityAutocomplete', () => {
     await flushPromises();
 
     expect(list).toHaveBeenCalledWith(expect.objectContaining({ type: 'legal_entity' }));
+  });
+
+  it('scopes the search to the catalog pinned in the route query', async () => {
+    const list = vi.fn().mockResolvedValue({ data: [] });
+    mountAutocomplete(list, {}, { routeQuery: { catalog: 'qa_t' }, catalog: 'wh' });
+    await flushPromises();
+
+    expect(list).toHaveBeenCalledWith(expect.objectContaining({ catalog: 'qa_t' }));
+  });
+
+  it('falls back to the header catalog selection without a route query', async () => {
+    const list = vi.fn().mockResolvedValue({ data: [] });
+    mountAutocomplete(list, {}, { catalog: 'wh' });
+    await flushPromises();
+
+    expect(list).toHaveBeenCalledWith(expect.objectContaining({ catalog: 'wh' }));
   });
 });

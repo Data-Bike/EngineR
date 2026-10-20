@@ -63,6 +63,17 @@ fn file_json(r: &PgRow) -> Value {
 // Staged uploads
 // ---------------------------------------------------------------------------
 
+/// Upload sessions are owned: only the uploader may push chunks, complete,
+/// abort, or poll status — a leaked upload_id must not let a stranger
+/// touch it. Pre-migration rows (NULL owner) are unclaimable.
+fn session_owner_check(r: &PgRow, ctx: &AuthContext) -> Result<(), DbError> {
+    let owner: Option<uuid::Uuid> = r.try_get("created_by").ok().flatten();
+    if owner != Some(ctx.principal_id) {
+        return Err(http_err(404, "upload not found"));
+    }
+    Ok(())
+}
+
 fn upload_json(r: &PgRow) -> Value {
     let total: i64 = r.try_get("total_chunks").unwrap_or(0) as i64;
     let received: i64 = r.try_get("received").ok().flatten().unwrap_or(0);
@@ -126,8 +137,9 @@ pub async fn upload_init(
             sqlx::query(
                 "INSERT INTO core.upload_session
                  (upload_id, tenant_id, filename, content_type, expected_size,
-                  expected_hash, hash_algorithm, chunk_size, total_chunks, status)
-                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'initiated')",
+                  expected_hash, hash_algorithm, chunk_size, total_chunks, status,
+                  created_by)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'initiated',$10)",
             )
             .bind(uid)
             .bind(ctx.tenant_id)
@@ -138,6 +150,7 @@ pub async fn upload_init(
             .bind(&hash_algorithm)
             .bind(body.chunk_size as i64)
             .bind(total_chunks)
+            .bind(ctx.principal_id)
             .execute(&mut *t)
             .await
             .map_err(db_err)?;
@@ -190,6 +203,7 @@ pub async fn upload_chunk(
             .await
             .map_err(db_err)?
             .ok_or_else(|| http_err(404, "upload not found"))?;
+            session_owner_check(&session, &ctx)?;
             let status: String = session.try_get("status").unwrap_or_default();
             let total: i32 = session.try_get("total_chunks").unwrap_or_default();
             let chunk_size: i64 = session.try_get("chunk_size").unwrap_or_default();
@@ -304,6 +318,7 @@ pub async fn upload_complete(
             .await
             .map_err(db_err)?
             .ok_or_else(|| http_err(404, "upload not found"))?;
+            session_owner_check(&session, &ctx)?;
             let status: String = session.try_get("status").unwrap_or_default();
             if status == "completed" {
                 return Ok(upload_json(&session));
@@ -415,6 +430,7 @@ pub async fn upload_abort(
                 .await
                 .map_err(db_err)?
                 .ok_or_else(|| http_err(404, "upload not found"))?;
+            session_owner_check(&session, &ctx)?;
             if session.try_get::<String, _>("status").unwrap_or_default() == "completed" {
                 return Err(http_err(409, "upload already completed"));
             }
@@ -466,6 +482,7 @@ pub async fn get_upload_status(
                 .await
                 .map_err(db_err)?
                 .ok_or_else(|| http_err(404, "upload not found"))?;
+            session_owner_check(&r, &ctx)?;
             Ok(upload_json(&r))
         })
         .await
@@ -479,6 +496,80 @@ pub async fn get_upload_status(
 // ---------------------------------------------------------------------------
 // Files
 // ---------------------------------------------------------------------------
+
+/// File blobs carry no catalog column — access is derived from the
+/// referencing rows (docs/28 §8): a file attached to an entity document is
+/// reachable only when that entity passes `checked_entity(op)`. Files
+/// referenced only by `core.report_instance` rely on the route capability;
+/// unattached uploads are limited to their uploader.
+async fn gate_file_access(
+    t: &mut Transaction<'_, Postgres>,
+    ctx: &AuthContext,
+    file_id: uuid::Uuid,
+    op: crate::dataperm::Op,
+) -> Result<bool, DbError> {
+    let pids: Vec<uuid::Uuid> = sqlx::query_scalar(
+        "SELECT e.public_id FROM core.entity_document d
+         JOIN core.entity e ON e.tenant_id=d.tenant_id AND e.entity_id=d.entity_id
+         WHERE d.tenant_id=$1 AND d.file_id=$2",
+    )
+    .bind(ctx.tenant_id)
+    .bind(file_id)
+    .fetch_all(&mut **t)
+    .await
+    .map_err(db_err)?;
+    if !pids.is_empty() {
+        for pid in pids {
+            if checked_entity(t, ctx, pid, op).await.is_ok() {
+                return Ok(true);
+            }
+        }
+        return Ok(false);
+    }
+    // A report file embeds the rendered entity fields — downloading it is
+    // a read on that entity, not just on the report row.
+    let report_entity: Option<String> = sqlx::query_scalar(
+        "SELECT r.params->>'entity_id' FROM core.report_instance r
+         WHERE r.tenant_id=$1 AND r.file_id=$2
+         ORDER BY r.created_at DESC LIMIT 1",
+    )
+    .bind(ctx.tenant_id)
+    .bind(file_id)
+    .fetch_optional(&mut **t)
+    .await
+    .map_err(db_err)?
+    .flatten();
+    if let Some(pid) = report_entity {
+        let pid: uuid::Uuid = match pid.parse() {
+            Ok(p) => p,
+            // Unparseable linkage — deny rather than leak the blob.
+            Err(_) => return Ok(false),
+        };
+        return Ok(checked_entity(t, ctx, pid, op).await.is_ok());
+    }
+    let referenced: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM core.report_instance
+         WHERE tenant_id=$1 AND file_id=$2)",
+    )
+    .bind(ctx.tenant_id)
+    .bind(file_id)
+    .fetch_one(&mut **t)
+    .await
+    .map_err(db_err)?;
+    if referenced {
+        return Ok(true);
+    }
+    let owner: Option<uuid::Uuid> = sqlx::query_scalar(
+        "SELECT created_by FROM core.file_object WHERE tenant_id=$1 AND file_id=$2",
+    )
+    .bind(ctx.tenant_id)
+    .bind(file_id)
+    .fetch_optional(&mut **t)
+    .await
+    .map_err(db_err)?
+    .flatten();
+    Ok(owner == Some(ctx.principal_id))
+}
 
 #[get("/files/<object_id>")]
 pub async fn get_file(
@@ -499,6 +590,10 @@ pub async fn get_file(
                 .await
                 .map_err(db_err)?
                 .ok_or_else(|| http_err(404, "file not found"))?;
+            let fid: uuid::Uuid = r.try_get("file_id").map_err(db_err)?;
+            if !gate_file_access(&mut t, &ctx, fid, crate::dataperm::Op::Read).await? {
+                return Err(http_err(404, "file not found"));
+            }
             Ok(file_json(&r))
         })
         .await
@@ -526,6 +621,9 @@ async fn fetch_blob(
         .await
         .map_err(db_err)?;
         let (ct, content) = row.ok_or_else(|| http_err(404, "file not found"))?;
+        if !gate_file_access(&mut t, &ctx, file_id, crate::dataperm::Op::Read).await? {
+            return Err(http_err(404, "file not found"));
+        }
         let bytes = content.ok_or_else(|| http_err(404, "file content missing"))?;
         Ok(json!({ "content_type": ct, "bytes_hex": hex::encode(bytes) }))
     })
@@ -563,6 +661,9 @@ pub async fn delete_file(
     let ctx = cap.ctx.clone();
     exec.run(Deadline::in_secs(10), move |pool| async move {
         let mut t = tx(&pool, &ctx).await?;
+        if !gate_file_access(&mut t, &ctx, fid, crate::dataperm::Op::Update).await? {
+            return Err(http_err(404, "file not found"));
+        }
         let changed = sqlx::query("DELETE FROM core.file_object WHERE tenant_id=$1 AND file_id=$2")
             .bind(ctx.tenant_id)
             .bind(fid)
@@ -889,6 +990,61 @@ pub async fn list_reports(
             .fetch_all(&mut *t)
             .await
             .map_err(db_err)?;
+            // Each row exposes `entity_public_id` (and a download url into
+            // the entity's rendered fields) — a report about an entity the
+            // caller cannot read is hidden entirely, same strictness as
+            // the relation endpoints (docs/28 §5).
+            let perm = crate::entity_pg::perm_for(&mut t, &ctx).await?;
+            let mut pids: Vec<uuid::Uuid> = rows
+                .iter()
+                .filter_map(|r| {
+                    r.try_get::<Value, _>("params")
+                        .ok()?
+                        .get("entity_id")?
+                        .as_str()?
+                        .parse()
+                        .ok()
+                })
+                .collect();
+            pids.sort_unstable();
+            pids.dedup();
+            let mut visible: std::collections::HashSet<uuid::Uuid> =
+                std::collections::HashSet::new();
+            if !pids.is_empty() {
+                let erows: Vec<crate::entity_pg::EntityRowTuple> = sqlx::query_as(&format!(
+                    "{} AND e.public_id = ANY($2)",
+                    crate::entity_pg::ENTITY_SELECT
+                ))
+                .bind(ctx.tenant_id)
+                .bind(&pids)
+                .fetch_all(&mut *t)
+                .await
+                .map_err(db_err)?;
+                visible = erows
+                    .into_iter()
+                    .map(crate::entity_pg::row_to_entity_row)
+                    .filter(|e| crate::entity_pg::entity_visible(&perm, e))
+                    .map(|e| e.public_id)
+                    .collect();
+            }
+            let rows: Vec<_> = rows
+                .into_iter()
+                .filter(|r| {
+                    match r
+                        .try_get::<Value, _>("params")
+                        .ok()
+                        .and_then(|p| {
+                            p.get("entity_id")
+                                .and_then(Value::as_str)
+                                .map(str::to_string)
+                        })
+                        .and_then(|s| s.parse::<uuid::Uuid>().ok())
+                    {
+                        Some(pid) => visible.contains(&pid),
+                        None => true,
+                    }
+                })
+                .collect();
             Ok(Value::Array(rows.iter().map(report_row).collect()))
         })
         .await
@@ -933,24 +1089,13 @@ pub async fn create_report(
             let pid: uuid::Uuid = entity_public_id
                 .parse()
                 .map_err(|_| http_err(404, "entity not found"))?;
-            let row: Option<_> = sqlx::query_as::<
-                _,
-                (
-                    i64,
-                    uuid::Uuid,
-                    uuid::Uuid,
-                    String,
-                    i16,
-                    i64,
-                    chrono::DateTime<chrono::Utc>,
-                    Option<chrono::DateTime<chrono::Utc>>,
-                ),
-            >(&format!("{ENTITY_SELECT} AND e.public_id = $2"))
-            .bind(ctx.tenant_id)
-            .bind(pid)
-            .fetch_optional(&mut *t)
-            .await
-            .map_err(db_err)?;
+            let row: Option<crate::entity_pg::EntityRowTuple> =
+                sqlx::query_as(&format!("{ENTITY_SELECT} AND e.public_id = $2"))
+                    .bind(ctx.tenant_id)
+                    .bind(pid)
+                    .fetch_optional(&mut *t)
+                    .await
+                    .map_err(db_err)?;
             let er = crate::entity_pg::row_to_entity_row(
                 row.ok_or_else(|| http_err(404, "entity not found"))?,
             );

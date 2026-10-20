@@ -1,4 +1,4 @@
-import { schemaEn } from '../schema';
+import { catalogEn, schemaEn } from '../schema';
 
 export default {
   "app":   {
@@ -328,6 +328,7 @@ export default {
       },
     },
   },
+  "catalog": catalogEn,
   "schema":   {
     ...schemaEn,
     "title": 'Schemaverwaltung',
@@ -801,6 +802,8 @@ export default {
     "default_managers_desc": 'Anträge erstellen und Objekte ansehen',
     group_class: 'Gruppenklasse',
     class_capability: 'System',
+    tab_data: 'Datenzugriff',
+    tab_system: 'Systemzugriff',
     inherits: 'Erbt',
     parent_role: 'Übergeordnete Rolle',
     parent_role_hint: 'Erbt alle Rechte der übergeordneten Rolle, Erweiterung möglich',
@@ -809,6 +812,7 @@ export default {
     res_relation: 'Relationstyp',
     res_relation_instance: 'Konkrete Relation',
     res_url: 'URL',
+    res_url_placeholder: '/admin oder /api/v1/...',
     res_capability: 'Systemfunktion',
     act_all: 'Alle Aktionen',
     effect_allow: 'Erlauben',

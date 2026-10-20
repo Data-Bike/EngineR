@@ -17,19 +17,22 @@ import type {
 export class SchemaEndpoints {
   constructor(private readonly client: ApiClient) {}
 
-  /** GET /schemas/types — list published types. */
-  async listTypes(): Promise<ParsedResponse<unknown[]>> {
-    return this.client.get<unknown[]>('/schemas/types');
+  /** GET /schemas/types — list published types. `catalog` picks one
+   * catalog's stream; without it every accessible catalog contributes
+   * (each record carries a `catalog` field, docs/28 §3). */
+  async listTypes(options?: { catalog?: string }): Promise<ParsedResponse<unknown[]>> {
+    return this.client.get<unknown[]>('/schemas/types', { query: options });
   }
 
-  /** GET /schemas/types/{typeId} — get a type definition. */
-  async getType(typeId: string): Promise<ParsedResponse<unknown>> {
-    return this.client.get<unknown>(`/schemas/types/${typeId}`);
+  /** GET /schemas/types/{typeId} — get a type definition. `catalog`
+   * disambiguates aliases shared between catalogs. */
+  async getType(typeId: string, options?: { catalog?: string }): Promise<ParsedResponse<unknown>> {
+    return this.client.get<unknown>(`/schemas/types/${typeId}`, { query: options });
   }
 
   /** GET /schemas/types/{typeId}/view — get a view definition. */
-  async getTypeView(typeId: string, viewType: string): Promise<ParsedResponse<unknown>> {
-    return this.client.get<unknown>(`/schemas/types/${typeId}/view`, { query: { view_type: viewType } });
+  async getTypeView(typeId: string, viewType: string, options?: { catalog?: string }): Promise<ParsedResponse<unknown>> {
+    return this.client.get<unknown>(`/schemas/types/${typeId}/view`, { query: { view_type: viewType, catalog: options?.catalog } });
   }
 
   /** POST /schemas/types — create a type. */
@@ -47,9 +50,10 @@ export class SchemaEndpoints {
     return this.client.delete<unknown>(`/schemas/types/${typeId}`);
   }
 
-  /** GET /schemas/drafts — list schema drafts. */
-  async listDrafts(): Promise<ParsedResponse<SchemaRevisionRecord[]>> {
-    return this.client.get<SchemaRevisionRecord[]>('/schemas/drafts');
+  /** GET /schemas/drafts — list schema drafts (per-catalog stream when
+   * `catalog` is given; always permission-filtered per catalog). */
+  async listDrafts(options?: { catalog?: string }): Promise<ParsedResponse<SchemaRevisionRecord[]>> {
+    return this.client.get<SchemaRevisionRecord[]>('/schemas/drafts', { query: options });
   }
 
   /** GET /schemas/drafts/{draftId} — get a schema draft. */
@@ -62,9 +66,10 @@ export class SchemaEndpoints {
     return this.client.delete<SchemaDraftTombstone>(`/schemas/drafts/${draftId}`, { ifMatch });
   }
 
-  /** GET /schemas/published — list published schemas. */
-  async listPublished(): Promise<ParsedResponse<SchemaRevisionRecord[]>> {
-    return this.client.get<SchemaRevisionRecord[]>('/schemas/published');
+  /** GET /schemas/published — list published schemas (one stream per
+   * catalog; `catalog` filters to a single stream). */
+  async listPublished(options?: { catalog?: string }): Promise<ParsedResponse<SchemaRevisionRecord[]>> {
+    return this.client.get<SchemaRevisionRecord[]>('/schemas/published', { query: options });
   }
 
   /** GET /schemas/revisions/{id} — get an immutable revision. */
@@ -72,9 +77,10 @@ export class SchemaEndpoints {
     return this.client.get<SchemaRevisionRecord>(`/schemas/revisions/${revisionId}`);
   }
 
-  /** GET /schemas/predicates — list predicates. */
-  async listPredicates(): Promise<ParsedResponse<unknown[]>> {
-    return this.client.get<unknown[]>('/schemas/predicates');
+  /** GET /schemas/predicates — list predicates. `catalog` picks one
+   * catalog's stream. */
+  async listPredicates(options?: { catalog?: string }): Promise<ParsedResponse<unknown[]>> {
+    return this.client.get<unknown[]>('/schemas/predicates', { query: options });
   }
 
   /** POST /schemas/predicates — create a predicate. */
@@ -92,9 +98,10 @@ export class SchemaEndpoints {
     return this.client.delete<unknown>(`/schemas/predicates/${alias}`);
   }
 
-  /** POST /schemas/drafts — create a schema draft. */
-  async createDraft(body: CreateSchemaDraftBody): Promise<ParsedResponse<SchemaRevisionRecord>> {
-    return this.client.post<SchemaRevisionRecord>('/schemas/drafts', body);
+  /** POST /schemas/drafts — create a schema draft inside a catalog's
+   * stream (`catalog`, default `general`). */
+  async createDraft(body: CreateSchemaDraftBody, options?: { catalog?: string }): Promise<ParsedResponse<SchemaRevisionRecord>> {
+    return this.client.post<SchemaRevisionRecord>('/schemas/drafts', body, { query: options });
   }
 
   /** PUT /schemas/drafts/{id} — update a draft. */

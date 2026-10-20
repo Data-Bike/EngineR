@@ -88,6 +88,10 @@ pub struct UserContext {
     /// Frontend route/menu access rules derived from the principal's
     /// system.url policy rules (`{deny:[..], allowlist:[..]|null}`).
     pub ui_rules: serde_json::Value,
+    /// Catalogs the principal can read (docs/28 §6): drives the
+    /// catalog-selection menu in the UI. Empty when no catalog rule grants
+    /// access — the UI then shows nothing catalog-scoped at all.
+    pub catalogs: Vec<serde_json::Value>,
 }
 
 /// API envelope wrapper.
@@ -289,6 +293,48 @@ pub async fn me_context(
         .map_err(|_| Status::ServiceUnavailable)?
         .ok_or(Status::Unauthorized)?;
 
+    // Catalogs visible to this principal (docs/28 §6): every active
+    // catalog row filtered through DataPerm::can_catalog — the same gate
+    // the entity routes apply.
+    let catalogs = exec
+        .run(enginer_db_runtime::Deadline::in_secs(5), {
+            let ctx = ctx.clone();
+            move |pool| async move {
+                let mut tx = crate::entity_pg::rls_tx(&pool, &ctx, "me.catalogs").await?;
+                let perm = crate::entity_pg::perm_for(&mut tx, &ctx).await?;
+                let rows: Vec<(uuid::Uuid, String, String)> = sqlx::query_as(
+                    "SELECT public_id, alias, name FROM core.catalog
+                         WHERE tenant_id=$1 AND status='active' ORDER BY alias",
+                )
+                .bind(ctx.tenant_id)
+                .fetch_all(&mut *tx)
+                .await
+                .map_err(crate::entity_pg::db_err)?;
+                let out: Vec<serde_json::Value> = rows
+                    .iter()
+                    .filter(|(pid, alias, _)| {
+                        perm.can_catalog(
+                            &[&pid.to_string(), alias.as_str()],
+                            crate::dataperm::Op::Read,
+                        )
+                    })
+                    .map(|(pid, alias, name)| {
+                        serde_json::json!({
+                            "public_id": pid.to_string(),
+                            "alias": alias,
+                            "name": name,
+                        })
+                    })
+                    .collect();
+                tx.commit().await.map_err(crate::entity_pg::db_err)?;
+                Ok(serde_json::Value::Array(out))
+            }
+        })
+        .await
+        .ok()
+        .and_then(|v| v.as_array().cloned())
+        .unwrap_or_default();
+
     Ok(Json(ApiEnvelope {
         data: UserContext {
             principal_id: ctx.principal_id.to_string(),
@@ -303,6 +349,7 @@ pub async fn me_context(
             policy_revision: profile.policy_revision,
             csrf_token: ctx.csrf_token.clone(),
             ui_rules: profile.ui_rules,
+            catalogs,
         },
         meta: meta(),
     }))

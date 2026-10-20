@@ -48,7 +48,7 @@
 
 <script setup lang="ts">
 import { capability } from '~/middleware/capability';
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, onMounted, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 import type {
   ViewDefinition,
@@ -65,6 +65,14 @@ const { t } = useI18n();
 const route = useRoute();
 const toast = useToast();
 const api = useApi();
+const { catalogParams, selected } = useCatalog();
+// The type card on /objects may pin a catalog in the route query; it wins
+// over the header selection so the create form targets the same catalog
+// the user clicked.
+const scopedCatalogParams = () => {
+  const q = route.query.catalog;
+  return typeof q === 'string' && q ? { catalog: q } : catalogParams();
+};
 
 const typeAlias = computed(() => route.params.typeAlias as string);
 const view = ref<ViewDefinition | null>(null);
@@ -92,7 +100,7 @@ async function fetchView() {
   loadingView.value = true;
   viewError.value = null;
   try {
-    const res = await api.schemas.getTypeView(typeAlias.value, 'form');
+    const res = await api.schemas.getTypeView(typeAlias.value, 'form', scopedCatalogParams());
     view.value = res.data as ViewDefinition;
   } catch (e: unknown) {
     viewError.value = e instanceof Error ? e.message : t('entity.error');
@@ -170,7 +178,7 @@ async function checkDuplicates(body: FormSubmission): Promise<DuplicateMatch[]> 
       },
       page: { size: 5 },
     };
-    const res = await api.entities.query(queryBody);
+    const res = await api.entities.query(queryBody, scopedCatalogParams());
     const rows = res.data?.rows ?? [];
     const strongAliases = new Set(['inn', 'has_tax_id', 'has_ogrn', 'ogrn', 'snils', 'snilz', 'document_number']);
     // Field label lookup from the loaded view so the explanation shows
@@ -205,26 +213,19 @@ async function checkDuplicates(body: FormSubmission): Promise<DuplicateMatch[]> 
 }
 
 async function createEntity(body: FormSubmission) {
-  // Convert form fields to statements (docs/06 §6)
-  const statements = body.fields.map((f) => {
-    const v = f.value;
-    let statementValue: { kind: 'text'; value: string } | { kind: 'boolean'; value: boolean };
-    if (typeof v === 'boolean') {
-      statementValue = { kind: 'boolean', value: v };
-    } else {
-      statementValue = { kind: 'text', value: String(v ?? '') };
-    }
-    return {
-      predicate_id: f.predicate_id,
-      value: statementValue,
-    };
-  });
+  // Send raw form values (docs/06 §6): coerce_field_input on the server
+  // applies the declared field kind — forcing text here would store
+  // dates/money/geo/entity references as plain text scalars.
+  const statements = body.fields.map((f) => ({
+    predicate_id: f.predicate_id,
+    value: f.value ?? '',
+  }));
   const res = await api.entities.create({
     type_id: body.type_id,
     schema_revision: body.schema_revision,
     identity_mode: body.identity_mode,
     statements,
-  });
+  }, scopedCatalogParams());
   toast.add({
     title: res.data.outcome === 'deduplicated'
       ? t('entity.duplicate.open_existing')
@@ -273,4 +274,18 @@ function goBack() {
 }
 
 onMounted(fetchView);
+// Header catalog switch: keep the pinned ?catalog= in sync when present
+// (the form view then refetches via the pin watcher below), otherwise
+// reload the form scoped to the new selection.
+watch(selected, (alias) => {
+  if (typeof route.query.catalog === 'string' && route.query.catalog) {
+    navigateTo({
+      query: { ...route.query, catalog: alias || undefined },
+      replace: true,
+    });
+  } else {
+    fetchView();
+  }
+});
+watch(() => route.query.catalog, fetchView);
 </script>

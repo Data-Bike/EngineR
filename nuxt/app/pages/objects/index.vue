@@ -7,13 +7,15 @@
 
     <div v-if="loading" class="py-8 text-center text-[var(--ui-text-muted)]">{{ t('common.loading') }}</div>
     <div v-else class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-      <UCard v-for="typ in types" :key="typ.id" class="hover:border-[var(--ui-primary)] transition-colors cursor-pointer" @click="navigateTo(`/objects/${typ.id}`)">
+      <UCard v-for="typ in types" :key="`${typ.catalog ?? ''}:${typ.id}`" class="hover:border-[var(--ui-primary)] transition-colors cursor-pointer" @click="openType(typ)">
         <template #header>
           <div class="flex items-center gap-3">
             <UIcon :name="typeIcon(typ.id)" class="text-2xl text-[var(--ui-primary)]" />
             <div>
               <h3 class="font-semibold">{{ typ.display_name }}</h3>
-              <p class="text-xs text-[var(--ui-text-muted)] font-mono">{{ typ.id }}</p>
+              <p class="text-xs text-[var(--ui-text-muted)] font-mono">
+                {{ typ.id }}<template v-if="typ.catalog"> · {{ typ.catalog }}</template>
+              </p>
             </div>
           </div>
         </template>
@@ -28,7 +30,7 @@
 
 <script setup lang="ts">
 import { capability } from '~/middleware/capability';
-import { ref, onMounted } from 'vue';
+import { ref, onMounted, watch } from 'vue';
 import { useI18n } from 'vue-i18n';
 
 definePageMeta({ middleware: ['auth', capability('entity.read')] });
@@ -36,6 +38,7 @@ definePageMeta({ middleware: ['auth', capability('entity.read')] });
 const { t } = useI18n();
 const toast = useToast();
 const api = useApi();
+const { catalogParams, selected } = useCatalog();
 
 interface TypeRow {
   id: string;
@@ -43,6 +46,7 @@ interface TypeRow {
   display_name: string;
   status: string;
   version: number;
+  catalog?: string;
   entity_count?: number;
   count?: number;
 }
@@ -65,10 +69,17 @@ function typeIcon(typeId: string): string {
   }
 }
 
+function openType(typ: TypeRow) {
+  navigateTo({
+    path: `/objects/${typ.id}`,
+    query: typ.catalog ? { catalog: typ.catalog } : {},
+  });
+}
+
 async function fetchTypes() {
   loading.value = true;
   try {
-    const res = await api.schemas.listTypes();
+    const res = await api.schemas.listTypes(catalogParams());
     const schemaTypes = (res.data || []) as TypeRow[];
     types.value = schemaTypes.map((schemaType) => ({
       ...schemaType,
@@ -82,4 +93,6 @@ async function fetchTypes() {
 }
 
 onMounted(fetchTypes);
+// The header catalog selector scopes this listing — refetch on switch.
+watch(selected, fetchTypes);
 </script>

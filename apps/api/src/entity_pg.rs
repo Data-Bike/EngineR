@@ -87,6 +87,12 @@ pub(crate) fn object_to_wire(obj: &StatementObject) -> Value {
             CanonicalScalar::Decimal { value } => Value::String(value.clone()),
             CanonicalScalar::Date { value } => Value::String(value.to_string()),
             CanonicalScalar::Instant { value, .. } => Value::String(value.to_rfc3339()),
+            CanonicalScalar::LocalDateTime { value, zone } => {
+                json!({ "datetime": value.to_string(), "zone": zone })
+            }
+            CanonicalScalar::Geo { value } => {
+                serde_json::from_str(value).unwrap_or_else(|_| Value::String(value.clone()))
+            }
             CanonicalScalar::Uuid { value } => Value::String(value.to_string()),
             CanonicalScalar::Uri { value } => Value::String(value.clone()),
             CanonicalScalar::Email { local, domain } => Value::String(format!("{local}@{domain}")),
@@ -180,28 +186,40 @@ pub(crate) struct EntityRow {
     pub head_revision: i64,
     pub created_at: chrono::DateTime<chrono::Utc>,
     pub retired_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// Owning catalog (docs/28): internal id, public id and alias —
+    /// permission gates key on the public id/alias pair.
+    pub catalog_id: i64,
+    pub catalog_pid: uuid::Uuid,
+    pub catalog_alias: String,
 }
+
+/// sqlx row shape matching ENTITY_SELECT — shared by every entity query.
+pub(crate) type EntityRowTuple = (
+    i64,
+    uuid::Uuid,
+    uuid::Uuid,
+    String,
+    i16,
+    i64,
+    chrono::DateTime<chrono::Utc>,
+    Option<chrono::DateTime<chrono::Utc>>,
+    i64,
+    uuid::Uuid,
+    String,
+);
 
 pub(crate) const ENTITY_SELECT: &str = "SELECT e.entity_id, e.public_id, e.type_id,
         COALESCE(td.stable_alias, e.type_id::text) AS type_alias,
-        e.entity_class, e.head_revision, e.created_at, e.retired_at
+        e.entity_class, e.head_revision, e.created_at, e.retired_at,
+        e.catalog_id, c.public_id, c.alias
      FROM core.entity e
      LEFT JOIN meta.type_definition td
        ON td.tenant_id = e.tenant_id AND td.type_id = e.type_id
+     JOIN core.catalog c
+       ON c.tenant_id = e.tenant_id AND c.catalog_id = e.catalog_id
      WHERE e.tenant_id = $1";
 
-pub(crate) fn row_to_entity_row(
-    r: (
-        i64,
-        uuid::Uuid,
-        uuid::Uuid,
-        String,
-        i16,
-        i64,
-        chrono::DateTime<chrono::Utc>,
-        Option<chrono::DateTime<chrono::Utc>>,
-    ),
-) -> EntityRow {
+pub(crate) fn row_to_entity_row(r: EntityRowTuple) -> EntityRow {
     EntityRow {
         entity_id: r.0,
         public_id: r.1,
@@ -211,7 +229,16 @@ pub(crate) fn row_to_entity_row(
         head_revision: r.5,
         created_at: r.6,
         retired_at: r.7,
+        catalog_id: r.8,
+        catalog_pid: r.9,
+        catalog_alias: r.10,
     }
+}
+
+/// Keys a catalog permission rule may match: the catalog public id and its
+/// alias (the `*` wildcard is handled inside `DataPerm::can_catalog`).
+pub(crate) fn catalog_keys(row: &EntityRow) -> [String; 2] {
+    [row.catalog_pid.to_string(), row.catalog_alias.clone()]
 }
 
 pub(crate) fn entity_class_str(c: i16) -> &'static str {
@@ -239,12 +266,18 @@ pub(crate) fn type_keys(row: &EntityRow) -> [String; 2] {
     [row.type_id.to_string(), row.type_alias.clone()]
 }
 
-/// True when the entity row is readable under `perm` (type read + instance
-/// read; denied entities are indistinguishable from absent ones).
+/// True when the entity row is readable under `perm` — catalog gate first
+/// (docs/28 §4: no catalog grant ⇒ the entity is invisible regardless of
+/// type/field rules), then type read + instance read.
 pub(crate) fn entity_visible(perm: &crate::dataperm::DataPerm, row: &EntityRow) -> bool {
+    let ckeys = catalog_keys(row);
+    let ckey_refs: [&str; 2] = [&ckeys[0], &ckeys[1]];
+    if !perm.can_catalog(&ckey_refs, crate::dataperm::Op::Read) {
+        return false;
+    }
     let keys = type_keys(row);
     let key_refs: [&str; 2] = [&keys[0], &keys[1]];
-    perm.can_type(&key_refs, crate::dataperm::Op::Read)
+    perm.can_type(&key_refs, &ckey_refs, crate::dataperm::Op::Read)
         && perm.can_entity(&row.public_id.to_string(), crate::dataperm::Op::Read)
 }
 
@@ -260,28 +293,25 @@ pub(crate) async fn checked_entity(
     op: crate::dataperm::Op,
 ) -> Result<EntityRow, DbError> {
     let perm = perm_for(tx, ctx).await?;
-    let row: Option<(
-        i64,
-        uuid::Uuid,
-        uuid::Uuid,
-        String,
-        i16,
-        i64,
-        chrono::DateTime<chrono::Utc>,
-        Option<chrono::DateTime<chrono::Utc>>,
-    )> = sqlx::query_as(&format!("{ENTITY_SELECT} AND e.public_id = $2"))
-        .bind(ctx.tenant_id)
-        .bind(public_id)
-        .fetch_optional(&mut **tx)
-        .await
-        .map_err(db_err)?;
+    let row: Option<EntityRowTuple> =
+        sqlx::query_as(&format!("{ENTITY_SELECT} AND e.public_id = $2"))
+            .bind(ctx.tenant_id)
+            .bind(public_id)
+            .fetch_optional(&mut **tx)
+            .await
+            .map_err(db_err)?;
     let erow = row_to_entity_row(row.ok_or_else(|| http_err(404, "entity not found"))?);
+    let ckeys = catalog_keys(&erow);
+    let ckey_refs: [&str; 2] = [&ckeys[0], &ckeys[1]];
+    if !perm.can_catalog(&ckey_refs, op) {
+        return Err(http_err(404, "entity not found"));
+    }
     let allowed = if op == crate::dataperm::Op::Read {
         entity_visible(&perm, &erow)
     } else {
         let keys = type_keys(&erow);
         let key_refs: [&str; 2] = [&keys[0], &keys[1]];
-        perm.can_type(&key_refs, op) && perm.can_entity(&public_id.to_string(), op)
+        perm.can_type(&key_refs, &ckey_refs, op) && perm.can_entity(&public_id.to_string(), op)
     };
     if !allowed {
         return Err(http_err(404, "entity not found"));
@@ -305,8 +335,10 @@ pub(crate) async fn record_for(
             let mut fields = fields_map.remove(&r.entity_id).unwrap_or_default();
             let keys = type_keys(r);
             let key_refs: [&str; 2] = [&keys[0], &keys[1]];
-            perm.filter_fields(&key_refs, &mut fields);
-            perm.mask_fields(&key_refs, &mut fields);
+            let ckeys = catalog_keys(r);
+            let ckey_refs: [&str; 2] = [&ckeys[0], &ckeys[1]];
+            perm.filter_fields(&key_refs, &ckey_refs, &mut fields);
+            perm.mask_fields(&key_refs, &ckey_refs, &mut fields);
             EntityRecord {
                 public_id: r.public_id.to_string(),
                 type_id: r.type_alias.clone(),
@@ -324,6 +356,7 @@ pub(crate) async fn record_for(
                     .unwrap_or(r.created_at)
                     .max(r.created_at)
                     .to_rfc3339(),
+                catalog: r.catalog_alias.clone(),
                 fields: Some(Value::Object(fields)),
             }
         })
@@ -355,9 +388,14 @@ pub(crate) async fn input_to_object(
     input: &Value,
 ) -> Result<StatementObject, DbError> {
     let kind = input.get("kind").and_then(Value::as_str).unwrap_or("text");
-    if is_edge || kind == "entity" {
+    if is_edge
+        || matches!(kind, "entity" | "entity_reference" | "relation_editor")
+        || (input.get("kind").is_none()
+            && (input.get("entity_id").is_some() || input.get("entity_public_id").is_some()))
+    {
         let public = input
             .get("entity_public_id")
+            .or_else(|| input.get("entity_id"))
             .or_else(|| input.get("value"))
             .and_then(Value::as_str)
             .ok_or_else(|| http_err(422, "edge value requires entity_public_id"))?;
@@ -376,9 +414,99 @@ pub(crate) async fn input_to_object(
         let (eid,) = target.ok_or_else(|| http_err(422, "target entity not found"))?;
         return Ok(StatementObject::Entity(enginer_domain::EntityId(eid)));
     }
-    let scalar = match kind {
+    Ok(StatementObject::Scalar(input_to_scalar(input)?))
+}
+
+/// Convert a wire `{kind, ...}` value into a canonical scalar. Pure — no DB
+/// access, unit-tested directly. Unknown kinds fall back to `text`
+/// (lenient reads; the schema layer rejects unknown kinds on publish).
+/// Validate a canonical decimal literal: optional sign, digits with at most
+/// one fractional dot, at least one digit. Rejects `NaN`/`inf`, exponents
+/// (canonical form is fixed-point) and non-numeric garbage — such strings
+/// would poison numeric ordering and fingerprints if stored.
+fn parse_decimal_str(raw: &str) -> Option<String> {
+    let t = raw.trim();
+    let (neg, body) = match t.strip_prefix('-') {
+        Some(b) => (true, b),
+        None => (false, t.strip_prefix('+').unwrap_or(t)),
+    };
+    let mut parts = body.split('.');
+    let int_part = parts.next()?;
+    let frac = parts.next();
+    if parts.next().is_some() {
+        return None;
+    }
+    let int_ok = int_part.chars().all(|c| c.is_ascii_digit());
+    let frac_ok = frac.is_none_or(|f| f.chars().all(|c| c.is_ascii_digit()));
+    let any_digit = int_part.chars().any(|c| c.is_ascii_digit())
+        || frac.is_some_and(|f| f.chars().any(|c| c.is_ascii_digit()));
+    if !(int_ok && frac_ok && any_digit) {
+        return None;
+    }
+    // Canonicalise: `.5`→`0.5`, `5.`→`5`, a leading `+` is dropped — the
+    // stored form must be stable for fingerprints and ordering.
+    let mut out = String::with_capacity(t.len() + 1);
+    if neg {
+        out.push('-');
+    }
+    out.push_str(if int_part.is_empty() { "0" } else { int_part });
+    if let Some(f) = frac {
+        if !f.is_empty() {
+            out.push('.');
+            out.push_str(f);
+        }
+    }
+    Some(out)
+}
+
+/// Read a decimal amount from `amount`/`value` keys, validating shape.
+fn decimal_amount(input: &Value, what: &str) -> Result<String, DbError> {
+    let v = input
+        .get("amount")
+        .or_else(|| input.get("value"))
+        .ok_or_else(|| http_err(422, &format!("{what} requires an amount")))?;
+    let raw = match v {
+        Value::String(s) => s.clone(),
+        Value::Number(_) => v.to_string(),
+        _ => return Err(http_err(422, &format!("bad {what} amount"))),
+    };
+    parse_decimal_str(&raw).ok_or_else(|| http_err(422, &format!("bad {what} amount")))
+}
+
+/// ISO 4217 check: three ASCII letters, normalised to uppercase.
+fn parse_currency(raw: &str) -> Option<String> {
+    let t = raw.trim().to_ascii_uppercase();
+    (t.len() == 3 && t.chars().all(|c| c.is_ascii_uppercase())).then_some(t)
+}
+
+pub(crate) fn input_to_scalar(input: &Value) -> Result<CanonicalScalar, DbError> {
+    // Kind matching is case-insensitive — `"Money"` must not degrade to a
+    // text fallback and lose the structured value.
+    let kind_owned = input
+        .get("kind")
+        .and_then(Value::as_str)
+        .unwrap_or("text")
+        .to_ascii_lowercase();
+    let kind = kind_owned.as_str();
+    Ok(match kind {
         "boolean" => CanonicalScalar::Boolean {
-            value: input.get("value").and_then(Value::as_bool).unwrap_or(false),
+            value: match input.get("value") {
+                Some(Value::Bool(b)) => *b,
+                Some(Value::String(s)) => match s.trim().to_ascii_lowercase().as_str() {
+                    "true" | "1" | "yes" | "да" => true,
+                    "false" | "0" | "no" | "нет" | "" => false,
+                    _ => return Err(http_err(422, "bad boolean value")),
+                },
+                Some(Value::Number(n)) => match n.as_i64() {
+                    Some(0) => false,
+                    Some(1) => true,
+                    _ => return Err(http_err(422, "bad boolean value")),
+                },
+                // Absent/null stays a lenient `false`; anything else is an
+                // error rather than a silent wrong value.
+                None | Some(Value::Null) => false,
+                _ => return Err(http_err(422, "bad boolean value")),
+            },
         },
         "integer" => CanonicalScalar::Integer {
             value: input
@@ -386,19 +514,55 @@ pub(crate) async fn input_to_object(
                 .and_then(|v| {
                     v.as_i64()
                         .map(i128::from)
-                        .or_else(|| v.as_str().and_then(|s| s.parse::<i128>().ok()))
+                        .or_else(|| {
+                            // Integral floats like `12.0` are accepted — JSON
+                            // clients emit them freely.
+                            v.as_f64().and_then(|f| {
+                                (f.is_finite() && f.fract() == 0.0 && f.abs() < 1.0e38)
+                                    .then(|| f as i128)
+                            })
+                        })
+                        .or_else(|| v.as_str().and_then(|s| s.trim().parse::<i128>().ok()))
                 })
                 .ok_or_else(|| http_err(422, "bad integer value"))?,
         },
-        "decimal" => CanonicalScalar::Decimal {
-            value: input
+        "decimal" | "percent" => {
+            let v = input
                 .get("value")
-                .map(|v| {
-                    v.as_str()
-                        .map(str::to_string)
-                        .unwrap_or_else(|| v.to_string())
-                })
-                .ok_or_else(|| http_err(422, "bad decimal value"))?,
+                .ok_or_else(|| http_err(422, "bad decimal value"))?;
+            let raw = match v {
+                Value::String(s) => {
+                    if kind == "percent" {
+                        s.trim().trim_end_matches('%').trim().to_string()
+                    } else {
+                        s.clone()
+                    }
+                }
+                Value::Number(_) => v.to_string(),
+                _ => return Err(http_err(422, "bad decimal value")),
+            };
+            CanonicalScalar::Decimal {
+                value: parse_decimal_str(&raw).ok_or_else(|| http_err(422, "bad decimal value"))?,
+            }
+        }
+        "money" => CanonicalScalar::Money {
+            amount: decimal_amount(input, "money")?,
+            currency: match input.get("currency") {
+                Some(c) => c
+                    .as_str()
+                    .and_then(parse_currency)
+                    .ok_or_else(|| http_err(422, "bad currency code"))?,
+                None => "RUB".to_string(),
+            },
+        },
+        "measurement" => CanonicalScalar::Measurement {
+            amount: decimal_amount(input, "measurement")?,
+            unit: input
+                .get("unit")
+                .and_then(Value::as_str)
+                .filter(|u| !u.trim().is_empty())
+                .ok_or_else(|| http_err(422, "measurement requires a unit"))?
+                .to_string(),
         },
         "date" => CanonicalScalar::Date {
             value: input
@@ -414,8 +578,54 @@ pub(crate) async fn input_to_object(
                 .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
                 .map(|d| d.with_timezone(&chrono::Utc))
                 .ok_or_else(|| http_err(422, "bad instant value"))?,
-            source_zone: None,
+            source_zone: input
+                .get("source_zone")
+                .or_else(|| input.get("zone"))
+                .and_then(Value::as_str)
+                .map(str::to_string),
         },
+        // Local wall-clock + IANA zone (docs/03 §7). An offset-bearing
+        // RFC 3339 value is promoted to a UTC instant instead.
+        "local_datetime" | "datetime" => {
+            let raw = input
+                .get("value")
+                .and_then(Value::as_str)
+                .ok_or_else(|| http_err(422, "bad datetime value"))?;
+            if let Ok(instant) = chrono::DateTime::parse_from_rfc3339(raw) {
+                CanonicalScalar::Instant {
+                    value: instant.with_timezone(&chrono::Utc),
+                    source_zone: input
+                        .get("zone")
+                        .and_then(Value::as_str)
+                        .map(str::to_string),
+                }
+            } else {
+                let naive = [
+                    "%Y-%m-%dT%H:%M:%S",
+                    "%Y-%m-%dT%H:%M",
+                    "%Y-%m-%d %H:%M:%S",
+                    "%Y-%m-%d %H:%M",
+                ]
+                .iter()
+                .find_map(|fmt| chrono::NaiveDateTime::parse_from_str(raw, fmt).ok())
+                .or_else(|| {
+                    // Date-only input is midnight local.
+                    chrono::NaiveDate::parse_from_str(raw, "%Y-%m-%d")
+                        .ok()
+                        .map(|d| d.and_hms_opt(0, 0, 0).unwrap_or_default())
+                })
+                .ok_or_else(|| http_err(422, "bad datetime value"))?;
+                CanonicalScalar::LocalDateTime {
+                    value: naive,
+                    zone: input
+                        .get("zone")
+                        .or_else(|| input.get("source_zone"))
+                        .and_then(Value::as_str)
+                        .unwrap_or("UTC")
+                        .to_string(),
+                }
+            }
+        }
         "uuid" => CanonicalScalar::Uuid {
             value: input
                 .get("value")
@@ -423,69 +633,177 @@ pub(crate) async fn input_to_object(
                 .and_then(|s| s.parse().ok())
                 .ok_or_else(|| http_err(422, "bad uuid value"))?,
         },
-        "uri" => CanonicalScalar::Uri {
+        "uri" | "url" => CanonicalScalar::Uri {
             value: input
                 .get("value")
                 .and_then(Value::as_str)
                 .unwrap_or_default()
                 .to_string(),
         },
-        "email" => CanonicalScalar::Email {
-            local: input
-                .get("local")
-                .and_then(Value::as_str)
-                .or_else(|| {
+        "email" => {
+            let (local, domain) = if input.get("local").is_some() || input.get("domain").is_some() {
+                (
                     input
-                        .get("value")
+                        .get("local")
                         .and_then(Value::as_str)
-                        .and_then(|s| s.split('@').next())
-                })
-                .unwrap_or_default()
-                .to_string(),
-            domain: input
-                .get("domain")
-                .and_then(Value::as_str)
-                .or_else(|| {
+                        .unwrap_or_default()
+                        .to_string(),
                     input
-                        .get("value")
+                        .get("domain")
                         .and_then(Value::as_str)
-                        .and_then(|s| s.split('@').nth(1))
-                })
-                .unwrap_or_default()
-                .to_string(),
-        },
+                        .unwrap_or_default()
+                        .to_string(),
+                )
+            } else {
+                let raw = input
+                    .get("value")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| http_err(422, "bad email value"))?;
+                let (l, d) = raw
+                    .split_once('@')
+                    .ok_or_else(|| http_err(422, "bad email value"))?;
+                (l.to_string(), d.to_string())
+            };
+            if local.is_empty() || domain.is_empty() || domain.contains('@') {
+                return Err(http_err(422, "bad email value"));
+            }
+            CanonicalScalar::Email { local, domain }
+        }
         "phone" => CanonicalScalar::Phone {
             e164: input
                 .get("e164")
-                .and_then(Value::as_str)
-                .or_else(|| input.get("value").and_then(Value::as_str))
-                .unwrap_or_default()
-                .to_string(),
+                .or_else(|| input.get("value"))
+                .and_then(|v| {
+                    v.as_str()
+                        .map(str::to_string)
+                        .or_else(|| v.as_i64().map(|n| format!("+{n}")))
+                })
+                .filter(|s| !s.trim().is_empty())
+                .ok_or_else(|| http_err(422, "bad phone value"))?,
             extension: input
                 .get("extension")
                 .and_then(Value::as_str)
                 .map(str::to_string),
         },
-        "json" => CanonicalScalar::Json {
+        "json" | "address" | "contact" => CanonicalScalar::Json {
             value: serde_json::to_string(&input.get("value").cloned().unwrap_or(Value::Null))
                 .unwrap_or_else(|_| "null".to_string()),
         },
-        _ => CanonicalScalar::Text {
+        "tags" | "multi_value" | "repeating_group" => {
+            // Collection kinds always store a JSON array — a bare string is
+            // comma-split, a lone scalar wraps into a one-element array.
+            let arr = match input.get("value").cloned().unwrap_or(Value::Null) {
+                Value::String(s) => Value::Array(
+                    s.split(',')
+                        .map(|t| t.trim())
+                        .filter(|t| !t.is_empty())
+                        .map(|t| Value::String(t.to_string()))
+                        .collect(),
+                ),
+                Value::Null => Value::Array(Vec::new()),
+                v @ Value::Array(_) => v,
+                other => Value::Array(vec![other]),
+            };
+            CanonicalScalar::Json {
+                value: serde_json::to_string(&arr).unwrap_or_else(|_| "[]".to_string()),
+            }
+        }
+        "enum" | "dictionary" => CanonicalScalar::Text {
+            value_nfc: match input.get("value") {
+                Some(Value::String(s)) => s.clone(),
+                Some(v @ (Value::Number(_) | Value::Bool(_))) => v.to_string(),
+                _ => return Err(http_err(422, "enum value must be a string")),
+            },
+            language_tag: None,
+        },
+        "geo" => CanonicalScalar::Geo {
+            value: match input.get("value") {
+                Some(v) if v.is_object() || v.is_array() => {
+                    serde_json::to_string(v).unwrap_or_else(|_| "null".to_string())
+                }
+                // String form must still be JSON — a bare "Moscow" is not
+                // GeoJSON and would corrupt downstream parsers silently.
+                Some(Value::String(s))
+                    if !s.trim().is_empty() && serde_json::from_str::<Value>(s).is_ok() =>
+                {
+                    s.clone()
+                }
+                _ => return Err(http_err(422, "geo value requires GeoJSON")),
+            },
+        },
+        "blob" | "file" | "document" => {
+            let hash_raw = input
+                .get("content_hash")
+                .or_else(|| input.get("ref"))
+                .or_else(|| input.get("value"))
+                .and_then(Value::as_str)
+                .ok_or_else(|| http_err(422, "blob value requires content_hash"))?;
+            let bytes =
+                hex::decode(hash_raw).map_err(|_| http_err(422, "bad blob content_hash"))?;
+            if bytes.len() != 32 {
+                return Err(http_err(422, "blob content_hash must be 32 bytes"));
+            }
+            let mut arr = [0u8; 32];
+            arr.copy_from_slice(&bytes);
+            CanonicalScalar::Blob {
+                content_hash: enginer_domain::ContentHash(arr),
+                size_bytes: input
+                    .get("size_bytes")
+                    .or_else(|| input.get("size"))
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0),
+                mime: input
+                    .get("mime")
+                    .or_else(|| input.get("content_type"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("application/octet-stream")
+                    .to_string(),
+            }
+        }
+        "localized_text" | "ltext" => CanonicalScalar::Text {
             value_nfc: input
                 .get("value")
                 .and_then(Value::as_str)
-                .map(str::to_string)
-                .or_else(|| {
-                    input.get("value").and_then(|v| {
-                        (!v.is_null() && !v.is_string() && !v.is_object() && !v.is_array())
-                            .then(|| v.to_string())
-                    })
+                .unwrap_or_default()
+                .to_string(),
+            language_tag: input
+                .get("language_tag")
+                .or_else(|| input.get("language"))
+                .and_then(Value::as_str)
+                .map(str::to_string),
+        },
+        "derived" => {
+            return Err(http_err(
+                422,
+                "field kind 'derived' is computed and not writable",
+            ));
+        }
+        "time" => CanonicalScalar::Text {
+            value_nfc: input
+                .get("value")
+                .and_then(Value::as_str)
+                .filter(|s| {
+                    chrono::NaiveTime::parse_from_str(s, "%H:%M:%S").is_ok()
+                        || chrono::NaiveTime::parse_from_str(s, "%H:%M").is_ok()
+                })
+                .ok_or_else(|| http_err(422, "bad time value"))?
+                .to_string(),
+            language_tag: None,
+        },
+        _ => CanonicalScalar::Text {
+            // Objects/arrays keep their JSON form rather than collapsing to
+            // an empty string — lenient, but no silent data loss.
+            value_nfc: input
+                .get("value")
+                .map(|v| match v {
+                    Value::String(s) => s.clone(),
+                    Value::Null => String::new(),
+                    other => other.to_string(),
                 })
                 .unwrap_or_default(),
             language_tag: None,
         },
-    };
-    Ok(StatementObject::Scalar(scalar))
+    })
 }
 
 /// Extract a normalized identity component from a canonical scalar (mirrors
@@ -650,6 +968,7 @@ async fn insert_statement(
     tenant: uuid::Uuid,
     stmt_id: i64,
     subject: i64,
+    catalog: i64,
     predicate: uuid::Uuid,
     object: &StatementObject,
     valid_from: chrono::DateTime<chrono::Utc>,
@@ -672,13 +991,14 @@ async fn insert_statement(
     .to_hex();
     sqlx::query(
         "INSERT INTO core.statement
-         (tenant_id, statement_id, subject, predicate, object, object_kind,
+         (tenant_id, statement_id, subject, catalog_id, predicate, object, object_kind,
           valid_from, recorded_at, provenance, confidence, status, revision, fingerprint)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'1.0','active',$10,$11)",
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'1.0','active',$11,$12)",
     )
     .bind(tenant)
     .bind(stmt_id)
     .bind(subject)
+    .bind(catalog)
     .bind(predicate)
     .bind(obj_json)
     .bind(if object.is_edge() { "entity" } else { "scalar" })
@@ -700,16 +1020,37 @@ async fn bump_revision(
     actor: uuid::Uuid,
     command: &str,
     schema_revision: Option<i64>,
+    expected: Option<i64>,
 ) -> Result<i64, DbError> {
-    let (rev,): (i64,) = sqlx::query_as(
-        "UPDATE core.entity SET head_revision = head_revision + 1
-         WHERE tenant_id = $1 AND entity_id = $2 RETURNING head_revision",
-    )
-    .bind(tenant)
-    .bind(entity_id)
-    .fetch_one(&mut **tx)
-    .await
-    .map_err(db_err)?;
+    // `expected` enforces optimistic concurrency atomically: the earlier
+    // read-time compare can pass under READ COMMITTED while a concurrent
+    // writer has already bumped the row — the conditional UPDATE is the
+    // real guard, a lost check becomes a 0-row write.
+    let (rev,): (i64,) = match expected {
+        Some(exp) => {
+            let res = sqlx::query_as::<_, (i64,)>(
+                "UPDATE core.entity SET head_revision = head_revision + 1
+                 WHERE tenant_id = $1 AND entity_id = $2 AND head_revision = $3
+                 RETURNING head_revision",
+            )
+            .bind(tenant)
+            .bind(entity_id)
+            .bind(exp)
+            .fetch_optional(&mut **tx)
+            .await
+            .map_err(db_err)?;
+            res.ok_or_else(|| http_err(409, "stale revision"))?
+        }
+        None => sqlx::query_as::<_, (i64,)>(
+            "UPDATE core.entity SET head_revision = head_revision + 1
+             WHERE tenant_id = $1 AND entity_id = $2 RETURNING head_revision",
+        )
+        .bind(tenant)
+        .bind(entity_id)
+        .fetch_one(&mut **tx)
+        .await
+        .map_err(db_err)?,
+    };
     sqlx::query(
         "INSERT INTO core.entity_revision
          (tenant_id, entity_id, revision, schema_revision_id, actor, command, previous_revision)
@@ -751,42 +1092,179 @@ async fn outbox_event(
     Ok(())
 }
 
+/// Resolved catalog identity: internal id, public id, alias.
+pub(crate) struct CatalogRef {
+    pub catalog_id: i64,
+    pub public_id: uuid::Uuid,
+    pub alias: String,
+    pub status: String,
+}
+
+impl CatalogRef {
+    /// Permission keys for `DataPerm::can_catalog`.
+    pub fn keys(&self) -> [String; 2] {
+        [self.public_id.to_string(), self.alias.clone()]
+    }
+}
+
+/// Resolve `?catalog=` (alias or public_id) to a catalog row.
+/// 422 `catalog.unknown` when missing, 409 `catalog.retired` when retired.
+pub(crate) async fn resolve_catalog(
+    tx: &mut Transaction<'_, Postgres>,
+    tenant: uuid::Uuid,
+    reference: &str,
+) -> Result<CatalogRef, DbError> {
+    let row: Option<(i64, uuid::Uuid, String, String)> =
+        if let Ok(pid) = reference.parse::<uuid::Uuid>() {
+            sqlx::query_as(
+                "SELECT catalog_id, public_id, alias, status FROM core.catalog
+             WHERE tenant_id=$1 AND public_id=$2",
+            )
+            .bind(tenant)
+            .bind(pid)
+            .fetch_optional(&mut **tx)
+            .await
+            .map_err(db_err)?
+        } else {
+            sqlx::query_as(
+                "SELECT catalog_id, public_id, alias, status FROM core.catalog
+             WHERE tenant_id=$1 AND alias=$2",
+            )
+            .bind(tenant)
+            .bind(reference)
+            .fetch_optional(&mut **tx)
+            .await
+            .map_err(db_err)?
+        };
+    let (catalog_id, public_id, alias, status) =
+        row.ok_or_else(|| http_err(422, "catalog.unknown"))?;
+    Ok(CatalogRef {
+        catalog_id,
+        public_id,
+        alias,
+        status,
+    })
+}
+
+/// Optional `?catalog=` lookup: `None` (no filter), or the resolved catalog.
+/// Absent parameter ≠ unknown alias — a present-but-unresolvable value is
+/// always an error.
+pub(crate) async fn optional_catalog(
+    tx: &mut Transaction<'_, Postgres>,
+    tenant: uuid::Uuid,
+    param: Option<&str>,
+) -> Result<Option<CatalogRef>, DbError> {
+    match param.filter(|p| !p.trim().is_empty()) {
+        Some(p) => Ok(Some(resolve_catalog(tx, tenant, p.trim()).await?)),
+        None => Ok(None),
+    }
+}
+
+/// The published schema revision of a catalog (docs/28 §3). When `catalog`
+/// is `None` the first published revision tenant-wide is returned —
+/// kept for legacy call sites that predate catalogs.
 async fn published_schema_revision(
     tx: &mut Transaction<'_, Postgres>,
     tenant: uuid::Uuid,
+    catalog: Option<i64>,
 ) -> Result<Option<i64>, DbError> {
-    let row: Option<(i64,)> = sqlx::query_as(
-        "SELECT revision_id FROM meta.schema_revision WHERE tenant_id=$1 AND state='published'",
-    )
-    .bind(tenant)
-    .fetch_optional(&mut **tx)
-    .await
-    .map_err(db_err)?;
+    let row: Option<(i64,)> = match catalog {
+        Some(cid) => sqlx::query_as(
+            "SELECT revision_id FROM meta.schema_revision
+                 WHERE tenant_id=$1 AND catalog_id=$2 AND state='published'",
+        )
+        .bind(tenant)
+        .bind(cid)
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(db_err)?,
+        None => sqlx::query_as(
+            "SELECT revision_id FROM meta.schema_revision
+                 WHERE tenant_id=$1 AND state='published' LIMIT 1",
+        )
+        .bind(tenant)
+        .fetch_optional(&mut **tx)
+        .await
+        .map_err(db_err)?,
+    };
     Ok(row.map(|r| r.0))
 }
 
+/// Load the published type definition (the `types[]` entry matching the
+/// alias or type id) of a schema revision — used to coerce inputs by the
+/// declared field kind and to validate `required` flags.
+pub(crate) async fn load_type_def(
+    tx: &mut Transaction<'_, Postgres>,
+    tenant: uuid::Uuid,
+    revision: Option<i64>,
+    type_alias: &str,
+    type_id: uuid::Uuid,
+) -> Result<Option<Value>, DbError> {
+    let Some(rev) = revision else {
+        return Ok(None);
+    };
+    let content: Option<Value> = sqlx::query_scalar(
+        "SELECT content FROM meta.schema_revision
+         WHERE tenant_id=$1 AND revision_id=$2",
+    )
+    .bind(tenant)
+    .bind(rev)
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(db_err)?;
+    let type_id_str = type_id.to_string();
+    Ok(content
+        .as_ref()
+        .and_then(|c| c.get("types"))
+        .and_then(Value::as_array)
+        .and_then(|types| {
+            types.iter().find(|t| {
+                let alias = t
+                    .get("stable_alias")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
+                let tid = t.get("type_id").and_then(Value::as_str).unwrap_or_default();
+                alias == type_alias || tid == type_alias || tid == type_id_str
+            })
+        })
+        .cloned())
+}
+
+/// Resolve a type reference inside a catalog's namespace. `catalog`
+/// restricts the lookup — the same alias in another catalog does not
+/// match (docs/28 §3). A type_id uuid resolves across catalogs (ids are
+/// globally unique) but only when `catalog` is `None`.
 async fn resolve_type(
     tx: &mut Transaction<'_, Postgres>,
     tenant: uuid::Uuid,
     reference: &str,
-) -> Result<(uuid::Uuid, String), DbError> {
-    let row: Option<(uuid::Uuid, String)> = if let Ok(id) = reference.parse::<uuid::Uuid>() {
+    catalog: Option<i64>,
+) -> Result<(uuid::Uuid, String, i64), DbError> {
+    let row: Option<(uuid::Uuid, String, i64)> = if let Ok(id) = reference.parse::<uuid::Uuid>() {
         sqlx::query_as(
-            "SELECT type_id, stable_alias FROM meta.type_definition
-             WHERE tenant_id=$1 AND type_id=$2 AND retired_revision IS NULL",
+            "SELECT type_id, stable_alias, catalog_id FROM meta.type_definition
+             WHERE tenant_id=$1 AND type_id=$2 AND retired_revision IS NULL
+               AND ($3::bigint IS NULL OR catalog_id = $3)",
         )
         .bind(tenant)
         .bind(id)
+        .bind(catalog)
         .fetch_optional(&mut **tx)
         .await
         .map_err(db_err)?
     } else {
+        // Without a catalog hint an alias may collide across catalogs —
+        // prefer a deterministic pick (lowest catalog_id) and let the
+        // caller pass ?catalog= when disambiguation matters.
         sqlx::query_as(
-            "SELECT type_id, stable_alias FROM meta.type_definition
-             WHERE tenant_id=$1 AND stable_alias=$2 AND retired_revision IS NULL",
+            "SELECT type_id, stable_alias, catalog_id FROM meta.type_definition
+             WHERE tenant_id=$1 AND stable_alias=$2 AND retired_revision IS NULL
+               AND ($3::bigint IS NULL OR catalog_id = $3)
+             ORDER BY catalog_id LIMIT 1",
         )
         .bind(tenant)
         .bind(reference)
+        .bind(catalog)
         .fetch_optional(&mut **tx)
         .await
         .map_err(db_err)?
@@ -794,18 +1272,32 @@ async fn resolve_type(
     row.ok_or_else(|| http_err(422, "unknown type"))
 }
 
+/// Resolve predicate aliases inside a catalog's namespace. Aliases are
+/// per-catalog (docs/28 §3): the same name in another catalog is a
+/// different predicate, so the owning catalog's row wins. A predicate the
+/// catalog does not declare falls back to a tenant-wide lookup — shared
+/// scalar predicates (`name`, `inn`, …) and cross-catalog edge predicates
+/// (`wh_keeper` on a general-catalog `person` subject) stay usable, with
+/// the lowest catalog id as the deterministic pick among duplicates
+/// (docs/28 §5).
 async fn resolve_predicates(
     tx: &mut Transaction<'_, Postgres>,
     tenant: uuid::Uuid,
     aliases: &[String],
+    catalog: Option<i64>,
 ) -> Result<HashMap<String, (uuid::Uuid, bool)>, DbError> {
     let rows: Vec<(String, uuid::Uuid, bool)> = sqlx::query_as(
-        "SELECT stable_alias, predicate_id, is_edge FROM meta.predicate_definition
+        "SELECT DISTINCT ON (stable_alias) stable_alias, predicate_id, is_edge
+         FROM meta.predicate_definition
          WHERE tenant_id=$1 AND retired_revision IS NULL
-           AND (stable_alias = ANY($2) OR predicate_id::text = ANY($2))",
+           AND (stable_alias = ANY($2) OR predicate_id::text = ANY($2))
+         ORDER BY stable_alias,
+                  (catalog_id = $3) DESC,
+                  catalog_id, predicate_id",
     )
     .bind(tenant)
     .bind(aliases)
+    .bind(catalog)
     .fetch_all(&mut **tx)
     .await
     .map_err(db_err)?;
@@ -837,7 +1329,9 @@ fn json_to<T: serde::de::DeserializeOwned>(v: Value) -> Result<T, Status> {
 // ---------------------------------------------------------------------------
 
 /// `GET /entities` — page through entities by internal id cursor.
-#[get("/entities?<type>&<search>&<limit>&<cursor>")]
+/// `?catalog=` scopes the listing to one catalog; without it every catalog
+/// the caller may read contributes rows (docs/28 §6).
+#[get("/entities?<type>&<search>&<limit>&<cursor>&<catalog>")]
 pub async fn pg_query_entities(
     cap: CapabilityGuard,
     state: &State<AppState>,
@@ -845,6 +1339,7 @@ pub async fn pg_query_entities(
     search: Option<String>,
     limit: Option<u32>,
     cursor: Option<String>,
+    catalog: Option<String>,
 ) -> Result<Json<ApiEnvelope<Vec<EntityRecord>>>, Status> {
     let exec = exec_of(state)?;
     let ctx = cap.ctx.clone();
@@ -855,27 +1350,28 @@ pub async fn pg_query_entities(
         .run(Deadline::in_secs(10), move |pool| async move {
             let mut tx = rls_tx(&pool, &ctx, "entity.list").await?;
             let perm = perm_for(&mut tx, &ctx).await?;
+            let cat = optional_catalog(&mut tx, ctx.tenant_id, catalog.as_deref()).await?;
+            if let Some(c) = &cat {
+                let ckey_refs: [&str; 2] = [&c.public_id.to_string(), &c.alias];
+                if !perm.can_catalog(&ckey_refs, crate::dataperm::Op::Read) {
+                    return Err(http_err(403, "no access to catalog"));
+                }
+            }
+            let catalog_id = cat.as_ref().map(|c| c.catalog_id);
             // When searching, load a bounded batch and filter in memory —
             // display_name and field values live in statement rows.
             let fetch_limit = if search.is_some() { 2000 } else { limit };
-            let rows: Vec<(
-                i64,
-                uuid::Uuid,
-                uuid::Uuid,
-                String,
-                i16,
-                i64,
-                chrono::DateTime<chrono::Utc>,
-                Option<chrono::DateTime<chrono::Utc>>,
-            )> = if let Some(t) = r#type.as_deref() {
+            let rows: Vec<EntityRowTuple> = if let Some(t) = r#type.as_deref() {
                 sqlx::query_as(&format!(
                     "{ENTITY_SELECT} AND (td.stable_alias = $2 OR e.type_id::text = $2)
                        AND e.entity_id > $3 AND e.retired_at IS NULL
-                     ORDER BY e.entity_id LIMIT $4"
+                       AND ($4::bigint IS NULL OR e.catalog_id = $4)
+                     ORDER BY e.entity_id LIMIT $5"
                 ))
                 .bind(ctx.tenant_id)
                 .bind(t)
                 .bind(after)
+                .bind(catalog_id)
                 .bind(fetch_limit)
                 .fetch_all(&mut *tx)
                 .await
@@ -883,10 +1379,12 @@ pub async fn pg_query_entities(
             } else {
                 sqlx::query_as(&format!(
                     "{ENTITY_SELECT} AND e.entity_id > $2 AND e.retired_at IS NULL
-                     ORDER BY e.entity_id LIMIT $3"
+                       AND ($3::bigint IS NULL OR e.catalog_id = $3)
+                     ORDER BY e.entity_id LIMIT $4"
                 ))
                 .bind(ctx.tenant_id)
                 .bind(after)
+                .bind(catalog_id)
                 .bind(fetch_limit)
                 .fetch_all(&mut *tx)
                 .await
@@ -919,12 +1417,14 @@ pub async fn pg_query_entities(
     }))
 }
 
-/// `GET /entities/{public_id}`.
-#[get("/entities/<public_id>")]
+/// `GET /entities/{public_id}`. `?catalog=` asserts the active catalog —
+/// a foreign-catalog entity is indistinguishable from missing (404).
+#[get("/entities/<public_id>?<catalog>")]
 pub async fn pg_get_entity(
     cap: CapabilityGuard,
     state: &State<AppState>,
     public_id: String,
+    catalog: Option<String>,
 ) -> Result<Json<ApiEnvelope<EntityRecord>>, Status> {
     let exec = exec_of(state)?;
     let ctx = cap.ctx.clone();
@@ -933,21 +1433,27 @@ pub async fn pg_get_entity(
         .run(Deadline::in_secs(10), move |pool| async move {
             let mut tx = rls_tx(&pool, &ctx, "entity.get").await?;
             let perm = perm_for(&mut tx, &ctx).await?;
-            let row: Option<(
-                i64,
-                uuid::Uuid,
-                uuid::Uuid,
-                String,
-                i16,
-                i64,
-                chrono::DateTime<chrono::Utc>,
-                Option<chrono::DateTime<chrono::Utc>>,
-            )> = sqlx::query_as(&format!("{ENTITY_SELECT} AND e.public_id = $2"))
-                .bind(ctx.tenant_id)
-                .bind(pid)
-                .fetch_optional(&mut *tx)
-                .await
-                .map_err(db_err)?;
+            let cat = optional_catalog(&mut tx, ctx.tenant_id, catalog.as_deref()).await?;
+            if let Some(c) = &cat {
+                let ckey_refs: [&str; 2] = [&c.public_id.to_string(), &c.alias];
+                // Denied catalog selector → 403 like the list endpoints;
+                // the entity lookup below still 404s on any visibility
+                // failure, so entity existence stays hidden either way.
+                if !perm.can_catalog(&ckey_refs, crate::dataperm::Op::Read) {
+                    return Err(http_err(403, "catalog access denied"));
+                }
+            }
+            let cat_id = cat.map(|c| c.catalog_id);
+            let row: Option<EntityRowTuple> = sqlx::query_as(&format!(
+                "{ENTITY_SELECT} AND e.public_id = $2
+                   AND ($3::bigint IS NULL OR e.catalog_id = $3)"
+            ))
+            .bind(ctx.tenant_id)
+            .bind(pid)
+            .bind(cat_id)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(db_err)?;
             let row = row_to_entity_row(row.ok_or_else(|| http_err(404, "entity not found"))?);
             if !entity_visible(&perm, &row) {
                 return Err(http_err(404, "entity not found"));
@@ -965,10 +1471,13 @@ pub async fn pg_get_entity(
 }
 
 /// `POST /entities` — create entity with statements + dedup via identity keys.
-#[post("/entities", data = "<body>")]
+/// `?catalog=` picks the catalog namespace; without it the catalog of the
+/// resolved type is used (docs/28 §6).
+#[post("/entities?<catalog>", data = "<body>")]
 pub async fn pg_create_entity(
     cap: CapabilityGuard,
     state: &State<AppState>,
+    catalog: Option<String>,
     body: Json<Value>,
 ) -> Result<Json<ApiEnvelope<Value>>, Status> {
     let exec = exec_of(state)?;
@@ -984,19 +1493,77 @@ pub async fn pg_create_entity(
                 .get("type_id")
                 .and_then(Value::as_str)
                 .ok_or_else(|| http_err(422, "type_id required"))?;
-            let (type_id, type_alias) = resolve_type(&mut tx, tenant, type_ref).await?;
+            // ?catalog= (or body.catalog for tool callers) picks the
+            // namespace; without it the type's own catalog wins. Both
+            // spelled but different → the request is ambiguous, refuse.
+            let cat_param = catalog
+                .as_deref()
+                .or_else(|| body.get("catalog").and_then(Value::as_str));
+            if let (Some(q), Some(b)) = (
+                catalog.as_deref(),
+                body.get("catalog").and_then(Value::as_str),
+            ) {
+                if q != b {
+                    return Err(http_err(422, "catalog.conflict"));
+                }
+            }
+            let cat = optional_catalog(&mut tx, tenant, cat_param).await?;
+            if let Some(c) = &cat {
+                if c.status != "active" {
+                    return Err(http_err(409, "catalog.retired"));
+                }
+            }
+            let (type_id, type_alias, type_catalog) =
+                resolve_type(&mut tx, tenant, type_ref, cat.as_ref().map(|c| c.catalog_id))
+                    .await?;
+            let catalog_id = cat.as_ref().map(|c| c.catalog_id).unwrap_or(type_catalog);
+            let catalog: CatalogRef = match cat {
+                Some(c) => c,
+                None => {
+                    let row: Option<(i64, uuid::Uuid, String, String)> = sqlx::query_as(
+                        "SELECT catalog_id, public_id, alias, status FROM core.catalog
+                         WHERE tenant_id=$1 AND catalog_id=$2",
+                    )
+                    .bind(tenant)
+                    .bind(catalog_id)
+                    .fetch_optional(&mut *tx)
+                    .await
+                    .map_err(db_err)?;
+                    let (catalog_id, public_id, alias, status) =
+                        row.ok_or_else(|| http_err(422, "catalog.unknown"))?;
+                    CatalogRef {
+                        catalog_id,
+                        public_id,
+                        alias,
+                        status,
+                    }
+                }
+            };
+            // Status check applies whether the catalog came from ?catalog=
+            // or was inferred from the type — no writes into retired spaces.
+            if catalog.status != "active" {
+                return Err(http_err(409, "catalog.retired"));
+            }
 
-            // Data-access check (1.1): create on the object type.
+            // Data-access checks: catalog membership, then create on the
+            // object type (docs/28 §4: catalog gate first).
             let perm = perm_for(&mut tx, &ctx).await?;
+            let ckeys = catalog.keys();
+            let ckey_refs: [&str; 2] = [&ckeys[0], &ckeys[1]];
+            if !perm.can_catalog(&ckey_refs, crate::dataperm::Op::Create) {
+                return Err(http_err(403, "no access to catalog"));
+            }
             let tkeys = [type_id.to_string(), type_alias.clone()];
             if !perm.can_type(
                 &[&tkeys[0], &tkeys[1]],
+                &ckey_refs,
                 crate::dataperm::Op::Create,
             ) {
                 return Err(http_err(403, "no create access to type"));
             }
 
-            let published = published_schema_revision(&mut tx, tenant).await?;
+            let published =
+                published_schema_revision(&mut tx, tenant, Some(catalog.catalog_id)).await?;
             let requested_rev = body
                 .get("schema_revision")
                 .and_then(Value::as_i64)
@@ -1006,32 +1573,37 @@ pub async fn pg_create_entity(
                     return Err(http_err(422, "schema_revision not published"));
                 }
             }
+
+            // Load the published type definition once: declared field kinds
+            // drive input coercion below and `required` flags drive the
+            // validation further down.
+            let type_def =
+                load_type_def(&mut tx, tenant, published, &type_alias, type_id).await?;
+            let field_map = crate::field_kinds::field_map_of(type_def.as_ref());
+
             let identity_mode = body
                 .get("identity_mode")
                 .and_then(Value::as_str)
                 .unwrap_or("return_existing");
-            let statements = body
-                .get("statements")
-                .and_then(Value::as_array)
-                .cloned()
-                .or_else(|| {
-                    body.get("fields")
-                        .and_then(Value::as_object)
-                        .map(|o| {
-                            o.iter()
-                                .map(|(k, v)| {
-                                    json!({ "predicate_id": k, "value": { "kind": "text", "value": v } })
-                                })
-                                .collect()
-                        })
-                })
-                .unwrap_or_default();
+            let statements = match body.get("statements") {
+                Some(Value::Array(a)) => a.clone(),
+                Some(_) => return Err(http_err(422, "statements must be an array")),
+                None => match body.get("fields") {
+                    Some(Value::Object(o)) => o
+                        .iter()
+                        .map(|(k, v)| json!({ "predicate_id": k, "value": v }))
+                        .collect(),
+                    Some(_) => return Err(http_err(422, "fields must be an object")),
+                    None => Vec::new(),
+                },
+            };
 
             let aliases: Vec<String> = statements
                 .iter()
                 .filter_map(|s| s.get("predicate_id").and_then(Value::as_str).map(str::to_string))
                 .collect();
-            let preds = resolve_predicates(&mut tx, tenant, &aliases).await?;
+            let preds =
+                resolve_predicates(&mut tx, tenant, &aliases, Some(catalog.catalog_id)).await?;
 
             // Build canonical objects.
             let mut objects: Vec<(uuid::Uuid, StatementObject)> = Vec::new();
@@ -1041,22 +1613,34 @@ pub async fn pg_create_entity(
                     .and_then(Value::as_str)
                     .unwrap_or_default();
                 let input = stmt.get("value").cloned().unwrap_or(Value::Null);
+                let input = crate::field_kinds::coerce_field_input(
+                    field_map.get(alias),
+                    &input,
+                )
+                .map_err(|e| http_err(422, &e))?;
                 let (pid, is_edge) = preds
                     .get(alias)
                     .copied()
                     .or_else(|| {
-                        alias
-                            .parse::<uuid::Uuid>()
-                            .ok()
-                            .map(|u| (u, input.get("kind").and_then(Value::as_str) == Some("entity")))
+                        alias.parse::<uuid::Uuid>().ok().map(|u| {
+                            (
+                                u,
+                                input.get("kind").and_then(Value::as_str) == Some("entity"),
+                            )
+                        })
                     })
                     .ok_or_else(|| http_err(422, "unknown predicate"))?;
                 // Edge statements need relation-create on the predicate type;
                 // scalars need field-create on the object type (1.2/1.4).
                 let allowed = if is_edge {
-                    perm.can_relation_dir(alias, crate::dataperm::Op::Create, Some(true))
+                    perm.can_relation_dir(alias, &ckey_refs, crate::dataperm::Op::Create, Some(true))
                 } else {
-                    perm.can_field(&[&tkeys[0], &tkeys[1]], alias, crate::dataperm::Op::Create)
+                    perm.can_field(
+                        &[&tkeys[0], &tkeys[1]],
+                        &ckey_refs,
+                        alias,
+                        crate::dataperm::Op::Create,
+                    )
                 };
                 if !allowed {
                     return Err(http_err(403, "no write access to field"));
@@ -1068,35 +1652,8 @@ pub async fn pg_create_entity(
             // Required-field validation against the published type
             // definition (`fields[].required`). Blank text values count as
             // missing — a whitespace-only required field is not satisfied.
-            if let Some(rev) = published {
-                let content: Option<Value> = sqlx::query_scalar(
-                    "SELECT content FROM meta.schema_revision
-                     WHERE tenant_id=$1 AND revision_id=$2",
-                )
-                .bind(tenant)
-                .bind(rev)
-                .fetch_optional(&mut *tx)
-                .await
-                .map_err(db_err)?;
-                let type_id_str = type_id.to_string();
-                let type_def = content
-                    .as_ref()
-                    .and_then(|c| c.get("types"))
-                    .and_then(Value::as_array)
-                    .and_then(|types| {
-                        types.iter().find(|t| {
-                            let alias = t
-                                .get("stable_alias")
-                                .and_then(Value::as_str)
-                                .unwrap_or_default();
-                            let tid = t
-                                .get("type_id")
-                                .and_then(Value::as_str)
-                                .unwrap_or_default();
-                            alias == type_alias || tid == type_alias || tid == type_id_str
-                        })
-                    });
-                if let Some(type_def) = type_def {
+            {
+                if let Some(type_def) = type_def.as_ref() {
                     let required: Vec<String> = type_def
                         .get("fields")
                         .and_then(Value::as_array)
@@ -1117,7 +1674,8 @@ pub async fn pg_create_entity(
                         .unwrap_or_default();
                     if !required.is_empty() {
                         let req_preds =
-                            resolve_predicates(&mut tx, tenant, &required).await?;
+                            resolve_predicates(&mut tx, tenant, &required, Some(catalog.catalog_id))
+                                .await?;
                         let mut missing: Vec<String> = Vec::new();
                         for alias in &required {
                             let Some((pid, _)) = req_preds.get(alias) else {
@@ -1203,14 +1761,33 @@ pub async fn pg_create_entity(
                     .fetch_optional(&mut *tx)
                     .await
                     .map_err(db_err)?;
-                    if let Some((_, public, rev)) = found {
+                    if let Some((found_id, public, rev)) = found {
                         if identity_mode == "reject" {
                             return Err(http_err(409, "identity collision"));
                         }
+                        // The key match is unavoidable (identity is the
+                        // dedup contract), but the entity's public_id is
+                        // only returned when the caller may read it —
+                        // Create-without-Read would otherwise leak a
+                        // handle to an invisible entity.
+                        let visible = {
+                            let rows: Vec<EntityRowTuple> = sqlx::query_as(
+                                &format!("{ENTITY_SELECT} AND e.entity_id = $2"),
+                            )
+                            .bind(tenant)
+                            .bind(found_id)
+                            .fetch_all(&mut *tx)
+                            .await
+                            .map_err(db_err)?;
+                            rows.into_iter()
+                                .map(row_to_entity_row)
+                                .next()
+                                .is_some_and(|r| entity_visible(&perm, &r))
+                        };
                         return ok_json(json!({
-                            "public_id": public,
-                            "entity_id": 0,
-                            "revision": rev,
+                            "public_id": if visible { Value::from(public.to_string()) } else { Value::Null },
+                            "entity_id": if visible { Value::from(found_id) } else { Value::Null },
+                            "revision": if visible { Value::from(rev) } else { Value::Null },
                             "outcome": "deduplicated",
                         }));
                     }
@@ -1222,8 +1799,8 @@ pub async fn pg_create_entity(
             let now = chrono::Utc::now();
             sqlx::query(
                 "INSERT INTO core.entity
-                 (tenant_id, entity_id, public_id, type_id, entity_class, created_at, created_by, head_revision)
-                 VALUES ($1,$2,$3,$4,0,$5,$6,1)",
+                 (tenant_id, entity_id, public_id, type_id, entity_class, created_at, created_by, head_revision, catalog_id)
+                 VALUES ($1,$2,$3,$4,0,$5,$6,1,$7)",
             )
             .bind(tenant)
             .bind(entity_id)
@@ -1231,13 +1808,26 @@ pub async fn pg_create_entity(
             .bind(type_id)
             .bind(now)
             .bind(actor)
+            .bind(catalog.catalog_id)
             .execute(&mut *tx)
             .await
             .map_err(db_err)?;
 
             for (pid, obj) in &objects {
                 let sid = next_val(&mut tx, "core.statement_id_seq").await?;
-                insert_statement(&mut tx, tenant, sid, entity_id, *pid, obj, now, actor, 1).await?;
+                insert_statement(
+                    &mut tx,
+                    tenant,
+                    sid,
+                    entity_id,
+                    catalog.catalog_id,
+                    *pid,
+                    obj,
+                    now,
+                    actor,
+                    1,
+                )
+                .await?;
             }
             for (policy_id, key) in &keys {
                 sqlx::query(
@@ -1292,11 +1882,14 @@ pub async fn pg_create_entity(
 }
 
 /// `PUT /entities/{public_id}` — replace field values (optimistic revision).
-#[put("/entities/<public_id>", data = "<body>")]
+/// `?catalog=` asserts the caller's active catalog; a mismatch with the
+/// entity's owning catalog is a 409 (docs/28 §6).
+#[put("/entities/<public_id>?<catalog>", data = "<body>")]
 pub async fn pg_update_entity(
     cap: CapabilityGuard,
     state: &State<AppState>,
     public_id: String,
+    catalog: Option<String>,
     body: Json<Value>,
 ) -> Result<Json<ApiEnvelope<Value>>, Status> {
     let exec = exec_of(state)?;
@@ -1309,21 +1902,13 @@ pub async fn pg_update_entity(
             let tenant = ctx.tenant_id;
             let actor = ctx.principal_id;
             let perm = perm_for(&mut tx, &ctx).await?;
-            let row: Option<(
-                i64,
-                uuid::Uuid,
-                uuid::Uuid,
-                String,
-                i16,
-                i64,
-                chrono::DateTime<chrono::Utc>,
-                Option<chrono::DateTime<chrono::Utc>>,
-            )> = sqlx::query_as(&format!("{ENTITY_SELECT} AND e.public_id = $2"))
-                .bind(tenant)
-                .bind(pid)
-                .fetch_optional(&mut *tx)
-                .await
-                .map_err(db_err)?;
+            let row: Option<EntityRowTuple> =
+                sqlx::query_as(&format!("{ENTITY_SELECT} AND e.public_id = $2"))
+                    .bind(tenant)
+                    .bind(pid)
+                    .fetch_optional(&mut *tx)
+                    .await
+                    .map_err(db_err)?;
             let erow = row_to_entity_row(row.ok_or_else(|| http_err(404, "entity not found"))?);
             let entity_id = erow.entity_id;
             let head_rev = erow.head_revision;
@@ -1331,8 +1916,24 @@ pub async fn pg_update_entity(
             let type_id = erow.type_id;
             let tkeys = type_keys(&erow);
             let tkey_refs: [&str; 2] = [&tkeys[0], &tkeys[1]];
-            // Data-access checks: type update + instance update (1.1/1.3).
-            if !perm.can_type(&tkey_refs, crate::dataperm::Op::Update)
+            // Read gate first: a catalog-less caller gets 404 — confirming
+            // the entity exists via 403/409 would leak it across catalogs.
+            let ckeys = catalog_keys(&erow);
+            let ckey_refs: [&str; 2] = [&ckeys[0], &ckeys[1]];
+            if !perm.can_catalog(&ckey_refs, crate::dataperm::Op::Read) {
+                return Err(http_err(404, "entity not found"));
+            }
+            // Catalog context: ?catalog= asserts the active catalog —
+            // writing an entity that lives in a different catalog is a
+            // hard 409, not a silent redirect.
+            if let Some(cat) = optional_catalog(&mut tx, tenant, catalog.as_deref()).await? {
+                if cat.catalog_id != erow.catalog_id {
+                    return Err(http_err(409, "catalog.mismatch"));
+                }
+            }
+            // Catalog gate first, then type update + instance update.
+            if !perm.can_catalog(&ckey_refs, crate::dataperm::Op::Update)
+                || !perm.can_type(&tkey_refs, &ckey_refs, crate::dataperm::Op::Update)
                 || !perm.can_entity(&pid.to_string(), crate::dataperm::Op::Update)
             {
                 return Err(http_err(403, "no update access"));
@@ -1340,16 +1941,30 @@ pub async fn pg_update_entity(
             if retired.is_some() {
                 return Err(http_err(409, "entity retired"));
             }
-            if let Some(expected) = body.get("revision").and_then(Value::as_i64) {
+            let expected_rev = body.get("revision").and_then(Value::as_i64);
+            if let Some(expected) = expected_rev {
                 if expected != head_rev {
                     return Err(http_err(409, "stale revision"));
                 }
             }
-            let fields = body
-                .get("fields")
-                .and_then(Value::as_array)
-                .cloned()
-                .unwrap_or_default();
+            let fields = match body.get("fields") {
+                Some(Value::Array(a)) => a.clone(),
+                // Friendly map shorthand `{fields: {alias: value}}` — same
+                // shape `pg_create_entity` accepts.
+                Some(Value::Object(m)) => m
+                    .iter()
+                    .map(|(k, v)| json!({ "predicate_id": k, "value": v }))
+                    .collect(),
+                Some(_) => return Err(http_err(422, "fields must be an object or array")),
+                None => Vec::new(),
+            };
+            let field_map = {
+                let published =
+                    published_schema_revision(&mut tx, tenant, Some(erow.catalog_id)).await?;
+                let type_def =
+                    load_type_def(&mut tx, tenant, published, &erow.type_alias, type_id).await?;
+                crate::field_kinds::field_map_of(type_def.as_ref())
+            };
             let aliases: Vec<String> = fields
                 .iter()
                 .filter_map(|s| {
@@ -1358,7 +1973,8 @@ pub async fn pg_update_entity(
                         .map(str::to_string)
                 })
                 .collect();
-            let preds = resolve_predicates(&mut tx, tenant, &aliases).await?;
+            let preds =
+                resolve_predicates(&mut tx, tenant, &aliases, Some(erow.catalog_id)).await?;
             let now = chrono::Utc::now();
             let mut changed: Vec<String> = Vec::new();
             for stmt in &fields {
@@ -1367,15 +1983,22 @@ pub async fn pg_update_entity(
                     .and_then(Value::as_str)
                     .unwrap_or_default();
                 let input = stmt.get("value").cloned().unwrap_or(Value::Null);
+                let input = crate::field_kinds::coerce_field_input(field_map.get(alias), &input)
+                    .map_err(|e| http_err(422, &e))?;
                 let (pred, is_edge) = preds
                     .get(alias)
                     .copied()
                     .ok_or_else(|| http_err(422, "unknown predicate"))?;
                 // Field/relation update permission per touched predicate.
                 let allowed = if is_edge {
-                    perm.can_relation_dir(alias, crate::dataperm::Op::Update, Some(true))
+                    perm.can_relation_dir(
+                        alias,
+                        &ckey_refs,
+                        crate::dataperm::Op::Update,
+                        Some(true),
+                    )
                 } else {
-                    perm.can_field(&tkey_refs, alias, crate::dataperm::Op::Update)
+                    perm.can_field(&tkey_refs, &ckey_refs, alias, crate::dataperm::Op::Update)
                 };
                 if !allowed {
                     return Err(http_err(403, "no update access to field"));
@@ -1394,8 +2017,19 @@ pub async fn pg_update_entity(
                 .await
                 .map_err(db_err)?;
                 let sid = next_val(&mut tx, "core.statement_id_seq").await?;
-                insert_statement(&mut tx, tenant, sid, entity_id, pred, &obj, now, actor, 1)
-                    .await?;
+                insert_statement(
+                    &mut tx,
+                    tenant,
+                    sid,
+                    entity_id,
+                    erow.catalog_id,
+                    pred,
+                    &obj,
+                    now,
+                    actor,
+                    1,
+                )
+                .await?;
                 changed.push(format!("{alias}:{obj_json}"));
             }
             if changed.is_empty() {
@@ -1409,6 +2043,7 @@ pub async fn pg_update_entity(
                 actor,
                 &serde_json::json!({"op":"update","changes":changed}).to_string(),
                 None,
+                expected_rev,
             )
             .await?;
             outbox_event(
@@ -1420,21 +2055,13 @@ pub async fn pg_update_entity(
                 json!({ "public_id": pid }),
             )
             .await?;
-            let row: (
-                i64,
-                uuid::Uuid,
-                uuid::Uuid,
-                String,
-                i16,
-                i64,
-                chrono::DateTime<chrono::Utc>,
-                Option<chrono::DateTime<chrono::Utc>>,
-            ) = sqlx::query_as(&format!("{ENTITY_SELECT} AND e.public_id = $2"))
-                .bind(tenant)
-                .bind(pid)
-                .fetch_one(&mut *tx)
-                .await
-                .map_err(db_err)?;
+            let row: EntityRowTuple =
+                sqlx::query_as(&format!("{ENTITY_SELECT} AND e.public_id = $2"))
+                    .bind(tenant)
+                    .bind(pid)
+                    .fetch_one(&mut *tx)
+                    .await
+                    .map_err(db_err)?;
             let records = record_for(&mut tx, tenant, &[row_to_entity_row(row)], &perm).await?;
             tx.commit().await.map_err(db_err)?;
             ok_json(serde_json::to_value(&records[0]).unwrap_or(Value::Null))
@@ -1468,26 +2095,28 @@ pub async fn pg_retire_entity(
             let mut tx = rls_tx(&pool, &ctx, "entity.retire").await?;
             let tenant = ctx.tenant_id;
             let perm = perm_for(&mut tx, &ctx).await?;
-            let row: Option<(
-                i64,
-                uuid::Uuid,
-                uuid::Uuid,
-                String,
-                i16,
-                i64,
-                chrono::DateTime<chrono::Utc>,
-                Option<chrono::DateTime<chrono::Utc>>,
-            )> = sqlx::query_as(&format!("{ENTITY_SELECT} AND e.public_id = $2"))
-                .bind(tenant)
-                .bind(pid)
-                .fetch_optional(&mut *tx)
-                .await
-                .map_err(db_err)?;
+            let row: Option<EntityRowTuple> =
+                sqlx::query_as(&format!("{ENTITY_SELECT} AND e.public_id = $2"))
+                    .bind(tenant)
+                    .bind(pid)
+                    .fetch_optional(&mut *tx)
+                    .await
+                    .map_err(db_err)?;
             let erow = row_to_entity_row(row.ok_or_else(|| http_err(404, "entity not found"))?);
             let entity_id = erow.entity_id;
             let retired = erow.retired_at;
             let tkeys = type_keys(&erow);
-            if !perm.can_type(&[&tkeys[0], &tkeys[1]], crate::dataperm::Op::Delete)
+            let ckeys = catalog_keys(&erow);
+            let ckey_refs: [&str; 2] = [&ckeys[0], &ckeys[1]];
+            if !perm.can_catalog(&ckey_refs, crate::dataperm::Op::Read) {
+                return Err(http_err(404, "entity not found"));
+            }
+            if !perm.can_catalog(&ckey_refs, crate::dataperm::Op::Delete)
+                || !perm.can_type(
+                    &[&tkeys[0], &tkeys[1]],
+                    &ckey_refs,
+                    crate::dataperm::Op::Delete,
+                )
                 || !perm.can_entity(&pid.to_string(), crate::dataperm::Op::Delete)
             {
                 return Err(http_err(403, "no delete access"));
@@ -1501,6 +2130,7 @@ pub async fn pg_retire_entity(
                 entity_id,
                 ctx.principal_id,
                 &serde_json::json!({"op":"retire","reason":reason}).to_string(),
+                None,
                 None,
             )
             .await?;
@@ -1583,24 +2213,42 @@ pub async fn pg_merge_entity(
             {
                 return Err(http_err(403, "no merge access"));
             }
-            let can: Option<(i64, Option<chrono::DateTime<chrono::Utc>>)> = sqlx::query_as(
-                "SELECT entity_id, retired_at FROM core.entity WHERE tenant_id=$1 AND public_id=$2",
-            )
-            .bind(tenant)
-            .bind(canonical)
-            .fetch_optional(&mut *tx)
-            .await
-            .map_err(db_err)?;
-            let los: Option<(i64, Option<chrono::DateTime<chrono::Utc>>)> = sqlx::query_as(
-                "SELECT entity_id, retired_at FROM core.entity WHERE tenant_id=$1 AND public_id=$2",
-            )
-            .bind(tenant)
-            .bind(loser)
-            .fetch_optional(&mut *tx)
-            .await
-            .map_err(db_err)?;
-            let (can_id, can_ret) = can.ok_or_else(|| http_err(404, "canonical not found"))?;
-            let (los_id, los_ret) = los.ok_or_else(|| http_err(404, "loser not found"))?;
+            let can: Option<EntityRowTuple> =
+                sqlx::query_as(&format!("{ENTITY_SELECT} AND e.public_id = $2"))
+                    .bind(tenant)
+                    .bind(canonical)
+                    .fetch_optional(&mut *tx)
+                    .await
+                    .map_err(db_err)?;
+            let los: Option<EntityRowTuple> =
+                sqlx::query_as(&format!("{ENTITY_SELECT} AND e.public_id = $2"))
+                    .bind(tenant)
+                    .bind(loser)
+                    .fetch_optional(&mut *tx)
+                    .await
+                    .map_err(db_err)?;
+            let can_row = row_to_entity_row(can.ok_or_else(|| http_err(404, "canonical not found"))?);
+            let los_row = row_to_entity_row(los.ok_or_else(|| http_err(404, "loser not found"))?);
+            let (can_id, can_ret) = (can_row.entity_id, can_row.retired_at);
+            let (los_id, los_ret) = (los_row.entity_id, los_row.retired_at);
+            // Both catalogs must be writable — merging requires the same
+            // catalog anyway. Read-denial is a 404 (no existence leak);
+            // write-denial a real 403.
+            for row in [&can_row, &los_row] {
+                let ckeys = catalog_keys(row);
+                let ckey_refs: [&str; 2] = [&ckeys[0], &ckeys[1]];
+                if !perm.can_catalog(&ckey_refs, crate::dataperm::Op::Read) {
+                    return Err(http_err(404, "entity not found"));
+                }
+                if !perm.can_catalog(&ckey_refs, crate::dataperm::Op::Update) {
+                    return Err(http_err(403, "no access to catalog"));
+                }
+            }
+            // Statements are owned by the subject's catalog: merging across
+            // catalogs would orphan loser's statement ownership — rejected.
+            if can_row.catalog_id != los_row.catalog_id {
+                return Err(http_err(422, "cannot merge across catalogs"));
+            }
             if can_id == los_id {
                 return Err(http_err(422, "cannot merge entity into itself"));
             }
@@ -1643,6 +2291,7 @@ pub async fn pg_merge_entity(
                 can_id,
                 ctx.principal_id,
                 &serde_json::json!({"op":"merge","loser":loser,"reason":reason}).to_string(),
+                None,
                 None,
             )
             .await?;
@@ -1893,7 +2542,8 @@ async fn load_trans_through(
         "SELECT s.statement_id, pd.stable_alias, s.subject,
                 (s.object->>'entity_id')::bigint AS object_id,
                 se.public_id, COALESCE(sd.stable_alias, se.type_id::text),
-                oe.public_id, COALESCE(od.stable_alias, oe.type_id::text)
+                oe.public_id, COALESCE(od.stable_alias, oe.type_id::text),
+                sc.public_id, sc.alias, oc.public_id, oc.alias
          FROM core.statement s
          JOIN meta.predicate_definition pd
            ON pd.tenant_id=s.tenant_id AND pd.predicate_id=s.predicate
@@ -1902,6 +2552,10 @@ async fn load_trans_through(
          JOIN core.entity oe
            ON oe.tenant_id=s.tenant_id
           AND oe.entity_id = (s.object->>'entity_id')::bigint
+         JOIN core.catalog sc
+           ON sc.tenant_id=se.tenant_id AND sc.catalog_id=se.catalog_id
+         JOIN core.catalog oc
+           ON oc.tenant_id=oe.tenant_id AND oc.catalog_id=oe.catalog_id
          LEFT JOIN meta.type_definition sd
            ON sd.tenant_id=se.tenant_id AND sd.type_id=se.type_id
          LEFT JOIN meta.type_definition od
@@ -1922,7 +2576,9 @@ async fn load_trans_through(
     let peers: Vec<i64> = edge_rows.iter().flat_map(|r| [r.2, r.3]).collect();
     let peer_fields = load_fields(tx, tenant, &peers).await?;
     let rec_idx: HashMap<i64, usize> = trans_ids.iter().copied().collect();
-    for (sid, alias, subj, object_id, s_public, s_type, o_public, o_type) in edge_rows {
+    for (sid, alias, subj, object_id, s_public, s_type, o_public, o_type, s_cp, s_ca, o_cp, o_ca) in
+        edge_rows
+    {
         // An edge may touch two junctions (junction → junction): attach it
         // to the through-list of every junction it touches, with the peer
         // resolved relative to that junction.
@@ -1938,21 +2594,37 @@ async fn load_trans_through(
                 continue;
             }
             let outgoing = subj == junction;
-            let (peer, peer_public, peer_type) = if outgoing {
-                (object_id, o_public, o_type.clone())
+            let (peer, peer_public, peer_type, peer_ckeys) = if outgoing {
+                (
+                    object_id,
+                    o_public,
+                    o_type.clone(),
+                    [o_cp.to_string(), o_ca.clone()],
+                )
             } else {
-                (subj, s_public, s_type.clone())
+                (
+                    subj,
+                    s_public,
+                    s_type.clone(),
+                    [s_cp.to_string(), s_ca.clone()],
+                )
             };
-            if !perm.can_relation_dir(&alias, crate::dataperm::Op::Read, Some(outgoing))
+            let peer_crefs: [&str; 2] = [&peer_ckeys[0], &peer_ckeys[1]];
+            // Predicate rules scope to the statement's owning catalog —
+            // which is the subject end's catalog, not the peer's.
+            let s_ckeys = [s_cp.to_string(), s_ca.clone()];
+            let s_crefs: [&str; 2] = [&s_ckeys[0], &s_ckeys[1]];
+            if !perm.can_relation_dir(&alias, &s_crefs, crate::dataperm::Op::Read, Some(outgoing))
                 || !perm.can_relation_instance(&sid.to_string(), crate::dataperm::Op::Read)
                 || !perm.can_entity(&peer_public.to_string(), crate::dataperm::Op::Read)
-                || !perm.can_type(&[&peer_type], crate::dataperm::Op::Read)
+                || !perm.can_type(&[&peer_type], &peer_crefs, crate::dataperm::Op::Read)
+                || !perm.can_catalog(&peer_crefs, crate::dataperm::Op::Read)
             {
                 continue;
             }
             let mut f = peer_fields.get(&peer).cloned().unwrap_or_default();
-            perm.filter_fields(&[&peer_type], &mut f);
-            perm.mask_fields(&[&peer_type], &mut f);
+            perm.filter_fields(&[&peer_type], &peer_crefs, &mut f);
+            perm.mask_fields(&[&peer_type], &peer_crefs, &mut f);
             records[rec_i].through.push(RelationThroughEdge {
                 relation_id: sid.to_string(),
                 predicate: alias.clone(),
@@ -1972,8 +2644,9 @@ async fn load_trans_through(
 }
 
 /// One edge row from the through-query: statement id, predicate alias,
-/// subject/object entity ids, then public id + type alias of both ends —
-/// a junction → junction edge resolves its "peer" per junction.
+/// subject/object entity ids, then public id + type alias + catalog
+/// (public id, alias) of both ends — a junction → junction edge resolves
+/// its "peer" per junction, so both catalog keys ride along.
 type TransEdgeRow = (
     i64,
     String,
@@ -1983,10 +2656,17 @@ type TransEdgeRow = (
     String,
     uuid::Uuid,
     String,
+    uuid::Uuid,
+    String,
+    uuid::Uuid,
+    String,
 );
 
 /// One edge row from the relations query: statement id, predicate alias,
-/// subject, peer entity id/public id/type alias, validity window.
+/// subject, peer entity id/public id/type alias, validity window, the peer
+/// catalog's public id + alias for the endpoint gate, then the statement's
+/// own catalog keys — catalog-scoped relation rules apply there (the
+/// statement is owned by its catalog, not by the peer's).
 type RelationEdgeRow = (
     i64,
     String,
@@ -1996,6 +2676,10 @@ type RelationEdgeRow = (
     String,
     chrono::DateTime<chrono::Utc>,
     Option<chrono::DateTime<chrono::Utc>>,
+    uuid::Uuid,
+    String,
+    uuid::Uuid,
+    String,
 );
 
 /// Build relation records from edge rows: direction filter, the 1.3-1.6
@@ -2014,7 +2698,21 @@ fn build_relation_records(
 ) -> (Vec<RelationRecord>, Vec<(i64, usize)>) {
     let mut records = Vec::with_capacity(rows.len());
     let mut trans_ids: Vec<(i64, usize)> = Vec::new();
-    for (sid, alias, subj, other, other_public, other_type, vf, vt) in rows {
+    for (
+        sid,
+        alias,
+        subj,
+        other,
+        other_public,
+        other_type,
+        vf,
+        vt,
+        oc_pid,
+        oc_alias,
+        sc_pid,
+        sc_alias,
+    ) in rows
+    {
         let outgoing = subj == eid;
         if let Some(dir) = direction {
             if dir == "outgoing" && !outgoing {
@@ -2024,19 +2722,27 @@ fn build_relation_records(
                 continue;
             }
         }
-        // Relation type read + instance read + hidden-object rule (1.3-1.5).
-        if !perm.can_relation_dir(&alias, crate::dataperm::Op::Read, Some(outgoing))
+        // Relation type read + instance read + hidden-object rule (1.3-1.5)
+        // + the peer's catalog gate (docs/28 §5: strict endpoint visibility —
+        // an edge into an unreadable catalog is hidden entirely). Predicate
+        // rules are scoped to the statement's owning catalog.
+        let oc_keys = [oc_pid.to_string(), oc_alias];
+        let oc_refs: [&str; 2] = [&oc_keys[0], &oc_keys[1]];
+        let sc_keys = [sc_pid.to_string(), sc_alias];
+        let sc_refs: [&str; 2] = [&sc_keys[0], &sc_keys[1]];
+        if !perm.can_relation_dir(&alias, &sc_refs, crate::dataperm::Op::Read, Some(outgoing))
             || !perm.can_relation_instance(&sid.to_string(), crate::dataperm::Op::Read)
             || !perm.can_entity(&other_public.to_string(), crate::dataperm::Op::Read)
+            || !perm.can_catalog(&oc_refs, crate::dataperm::Op::Read)
         {
             continue;
         }
         // Clone, not remove: the same entity can be the peer of several
         // relations — every record needs its fields.
         let mut f = fields_map.get(&other).cloned().unwrap_or_default();
-        perm.filter_fields(&[&other_type], &mut f);
-        perm.mask_fields(&[&other_type], &mut f);
-        let type_visible = perm.can_type(&[&other_type], crate::dataperm::Op::Read);
+        perm.filter_fields(&[&other_type], &oc_refs, &mut f);
+        perm.mask_fields(&[&other_type], &oc_refs, &mut f);
+        let type_visible = perm.can_type(&[&other_type], &oc_refs, crate::dataperm::Op::Read);
         let (target_name, target_type) = if type_visible {
             (display_name_of(&other_type, &f, other), other_type.clone())
         } else {
@@ -2137,15 +2843,20 @@ pub async fn pg_get_relations(
             let mut tx = rls_tx(&pool, &ctx, "entity.relations").await?;
             let tenant = ctx.tenant_id;
             let perm = perm_for(&mut tx, &ctx).await?;
-            let subject: Option<(i64,)> = sqlx::query_as(
-                "SELECT entity_id FROM core.entity WHERE tenant_id=$1 AND public_id=$2",
-            )
-            .bind(tenant)
-            .bind(pid)
-            .fetch_optional(&mut *tx)
-            .await
-            .map_err(db_err)?;
-            let (eid,) = subject.ok_or_else(|| http_err(404, "entity not found"))?;
+            let subject: Option<EntityRowTuple> =
+                sqlx::query_as(&format!("{ENTITY_SELECT} AND e.public_id = $2"))
+                    .bind(tenant)
+                    .bind(pid)
+                    .fetch_optional(&mut *tx)
+                    .await
+                    .map_err(db_err)?;
+            let srow = row_to_entity_row(subject.ok_or_else(|| http_err(404, "entity not found"))?);
+            // Subject visibility includes its catalog gate — a catalog-less
+            // caller cannot enumerate the entity's edges at all.
+            if !entity_visible(&perm, &srow) {
+                return Err(http_err(404, "entity not found"));
+            }
+            let eid = srow.entity_id;
             // Edges touching this entity; `te` is always the "other" side.
             // `as_of` narrows to relations whose validity window covers t.
             let as_of_clause = if as_of.is_some() {
@@ -2158,7 +2869,11 @@ pub async fn pg_get_relations(
                         te.entity_id AS other_id,
                         te.public_id AS other_public,
                         COALESCE(td.stable_alias, te.type_id::text) AS other_type,
-                        s.valid_from, s.valid_to
+                        s.valid_from, s.valid_to,
+                        tc.public_id AS other_catalog_pid,
+                        tc.alias AS other_catalog_alias,
+                        sc.public_id AS stmt_catalog_pid,
+                        sc.alias AS stmt_catalog_alias
                  FROM core.statement s
                  JOIN meta.predicate_definition pd
                    ON pd.tenant_id=s.tenant_id AND pd.predicate_id=s.predicate
@@ -2167,6 +2882,10 @@ pub async fn pg_get_relations(
                   AND te.entity_id = CASE WHEN s.subject=$2
                                           THEN (s.object->>'entity_id')::bigint
                                           ELSE s.subject END
+                 JOIN core.catalog tc
+                   ON tc.tenant_id=te.tenant_id AND tc.catalog_id=te.catalog_id
+                 JOIN core.catalog sc
+                   ON sc.tenant_id=s.tenant_id AND sc.catalog_id=s.catalog_id
                  LEFT JOIN meta.type_definition td
                    ON td.tenant_id=te.tenant_id AND td.type_id=te.type_id
                  WHERE s.tenant_id=$1 AND s.object_kind='entity' AND s.status='active'
@@ -2236,21 +2955,37 @@ pub async fn pg_create_relation(
             let mut tx = rls_tx(&pool, &ctx, "entity.relation.create").await?;
             let tenant = ctx.tenant_id;
             let perm = perm_for(&mut tx, &ctx).await?;
-            let subject: Option<(i64,)> = sqlx::query_as(
-                "SELECT entity_id FROM core.entity WHERE tenant_id=$1 AND public_id=$2 AND retired_at IS NULL",
-            )
-            .bind(tenant)
-            .bind(pid)
-            .fetch_optional(&mut *tx)
-            .await
-            .map_err(db_err)?;
-            let (eid,) = subject.ok_or_else(|| http_err(404, "entity not found"))?;
+            let subject: Option<EntityRowTuple> =
+                sqlx::query_as(&format!("{ENTITY_SELECT} AND e.public_id = $2"))
+                    .bind(tenant)
+                    .bind(pid)
+                    .fetch_optional(&mut *tx)
+                    .await
+                    .map_err(db_err)?;
+            let srow = row_to_entity_row(subject.ok_or_else(|| http_err(404, "entity not found"))?);
+            let eid = srow.entity_id;
+            // Subject's catalog must be writable — a relation statement is
+            // owned by the subject's catalog (docs/28 §5). Read-denial is a
+            // 404 so existence does not leak; write-denial is a real 403.
+            let ckeys = catalog_keys(&srow);
+            let ckey_refs: [&str; 2] = [&ckeys[0], &ckeys[1]];
+            if !perm.can_catalog(&ckey_refs, crate::dataperm::Op::Read) {
+                return Err(http_err(404, "entity not found"));
+            }
+            if !perm.can_catalog(&ckey_refs, crate::dataperm::Op::Update) {
+                return Err(http_err(403, "no access to catalog"));
+            }
+            if srow.retired_at.is_some() {
+                return Err(http_err(409, "entity retired"));
+            }
             let alias = parsed
                 .get("predicate")
                 .or_else(|| parsed.get("predicate_id"))
                 .and_then(Value::as_str)
                 .ok_or_else(|| http_err(422, "predicate required"))?;
-            let preds = resolve_predicates(&mut tx, tenant, &[alias.to_string()]).await?;
+            let preds =
+                resolve_predicates(&mut tx, tenant, &[alias.to_string()], Some(srow.catalog_id))
+                    .await?;
             let (pred, is_edge) = preds
                 .get(alias)
                 .copied()
@@ -2258,7 +2993,7 @@ pub async fn pg_create_relation(
             if !is_edge {
                 return Err(http_err(422, "predicate is not an edge"));
             }
-            if !perm.can_relation_dir(alias, crate::dataperm::Op::Create, Some(true)) {
+            if !perm.can_relation_dir(alias, &ckey_refs, crate::dataperm::Op::Create, Some(true)) {
                 return Err(http_err(403, "no create access to relation type"));
             }
             if !perm.can_entity(&pid.to_string(), crate::dataperm::Op::Update) {
@@ -2270,15 +3005,30 @@ pub async fn pg_create_relation(
                 .and_then(Value::as_str)
                 .and_then(|s| s.parse().ok())
                 .ok_or_else(|| http_err(422, "target_entity_id required"))?;
-            let target: Option<(i64,)> = sqlx::query_as(
-                "SELECT entity_id FROM core.entity WHERE tenant_id=$1 AND public_id=$2 AND retired_at IS NULL",
-            )
-            .bind(tenant)
-            .bind(target_public)
-            .fetch_optional(&mut *tx)
-            .await
-            .map_err(db_err)?;
-            let (tid,) = target.ok_or_else(|| http_err(404, "target not found"))?;
+            let target: Option<EntityRowTuple> =
+                sqlx::query_as(&format!("{ENTITY_SELECT} AND e.public_id = $2"))
+                    .bind(tenant)
+                    .bind(target_public)
+                    .fetch_optional(&mut *tx)
+                    .await
+                    .map_err(db_err)?;
+            let trow = row_to_entity_row(target.ok_or_else(|| http_err(404, "target not found"))?);
+            let tid = trow.entity_id;
+            // Cross-catalog edges are allowed, but the caller must be able
+            // to see the target's catalog to link to it (docs/28 §5) —
+            // checked before any 409 so a hidden target stays hidden.
+            {
+                let ckeys = catalog_keys(&trow);
+                let ckey_refs: [&str; 2] = [&ckeys[0], &ckeys[1]];
+                if !perm.can_catalog(&ckey_refs, crate::dataperm::Op::Read)
+                    || !perm.can_entity(&target_public.to_string(), crate::dataperm::Op::Read)
+                {
+                    return Err(http_err(404, "target not found"));
+                }
+            }
+            if trow.retired_at.is_some() {
+                return Err(http_err(409, "target retired"));
+            }
             let dup: Option<(i64,)> = sqlx::query_as(
                 "SELECT statement_id FROM core.statement
                  WHERE tenant_id=$1 AND subject=$2 AND predicate=$3
@@ -2301,6 +3051,7 @@ pub async fn pg_create_relation(
                 tenant,
                 sid,
                 eid,
+                srow.catalog_id,
                 pred,
                 &StatementObject::Entity(enginer_domain::EntityId(tid)),
                 chrono::Utc::now(),
@@ -2313,7 +3064,9 @@ pub async fn pg_create_relation(
                 tenant,
                 eid,
                 ctx.principal_id,
-                &serde_json::json!({"op":"relation.add","predicate":alias,"target":target_public}).to_string(),
+                &serde_json::json!({"op":"relation.add","predicate":alias,"target":target_public})
+                    .to_string(),
+                None,
                 None,
             )
             .await?;
@@ -2344,15 +3097,18 @@ pub async fn pg_delete_relation(
             let mut tx = rls_tx(&pool, &ctx, "entity.relation.delete").await?;
             let tenant = ctx.tenant_id;
             let perm = perm_for(&mut tx, &ctx).await?;
-            // Resolve the relation first: instance delete + predicate delete.
-            let rel: Option<(String,)> = sqlx::query_as(
-                "SELECT pd.stable_alias
+            // Resolve the relation first: instance delete + predicate delete
+            // + subject catalog gate (the statement is catalog-owned).
+            let rel: Option<(String, uuid::Uuid, String)> = sqlx::query_as(
+                "SELECT pd.stable_alias, c.public_id, c.alias
                  FROM core.statement s
                  JOIN meta.predicate_definition pd
                    ON pd.tenant_id=s.tenant_id AND pd.predicate_id=s.predicate
                  JOIN core.entity e
                    ON e.tenant_id=s.tenant_id AND e.entity_id=s.subject
                   AND e.public_id=$3
+                 JOIN core.catalog c
+                   ON c.tenant_id=s.tenant_id AND c.catalog_id=s.catalog_id
                  WHERE s.tenant_id=$1 AND s.statement_id=$2 AND s.status='active'",
             )
             .bind(tenant)
@@ -2361,11 +3117,25 @@ pub async fn pg_delete_relation(
             .fetch_optional(&mut *tx)
             .await
             .map_err(db_err)?;
-            let Some((rel_alias,)) = rel else {
+            let Some((rel_alias, cat_pid, cat_alias)) = rel else {
                 return Err(http_err(404, "relation not found"));
             };
-            if !perm.can_relation_instance(&sid.to_string(), crate::dataperm::Op::Delete)
-                || !perm.can_relation_dir(&rel_alias, crate::dataperm::Op::Delete, Some(true))
+            let ckeys = [cat_pid.to_string(), cat_alias];
+            let ckey_refs: [&str; 2] = [&ckeys[0], &ckeys[1]];
+            if !perm.can_catalog(&ckey_refs, crate::dataperm::Op::Read) {
+                return Err(http_err(404, "relation not found"));
+            }
+            // The subject entity itself must be reachable — catalog-level
+            // delete on a hidden instance would still leak via 404 vs 200.
+            checked_entity(&mut tx, &ctx, pid, crate::dataperm::Op::Read).await?;
+            if !perm.can_catalog(&ckey_refs, crate::dataperm::Op::Delete)
+                || !perm.can_relation_instance(&sid.to_string(), crate::dataperm::Op::Delete)
+                || !perm.can_relation_dir(
+                    &rel_alias,
+                    &ckey_refs,
+                    crate::dataperm::Op::Delete,
+                    Some(true),
+                )
             {
                 return Err(http_err(403, "no delete access to relation"));
             }
@@ -2415,15 +3185,19 @@ pub async fn pg_get_entity_history(
             if !perm.can_entity(&pid.to_string(), crate::dataperm::Op::Read) {
                 return Err(http_err(404, "entity not found"));
             }
-            let entity: Option<(i64,)> = sqlx::query_as(
-                "SELECT entity_id FROM core.entity WHERE tenant_id=$1 AND public_id=$2",
-            )
-            .bind(tenant)
-            .bind(pid)
-            .fetch_optional(&mut *tx)
-            .await
-            .map_err(db_err)?;
-            let (eid,) = entity.ok_or_else(|| http_err(404, "entity not found"))?;
+            let entity: Option<EntityRowTuple> =
+                sqlx::query_as(&format!("{ENTITY_SELECT} AND e.public_id = $2"))
+                    .bind(tenant)
+                    .bind(pid)
+                    .fetch_optional(&mut *tx)
+                    .await
+                    .map_err(db_err)?;
+            let erow = row_to_entity_row(entity.ok_or_else(|| http_err(404, "entity not found"))?);
+            // History is a read on the entity — catalog gate applies too.
+            if !entity_visible(&perm, &erow) {
+                return Err(http_err(404, "entity not found"));
+            }
+            let eid = erow.entity_id;
             let rows: Vec<(
                 i64,
                 Option<uuid::Uuid>,
@@ -2548,15 +3322,21 @@ pub async fn pg_get_entity_graph(
             if !perm.can_entity(&pid.to_string(), crate::dataperm::Op::Read) {
                 return Err(http_err(404, "entity not found"));
             }
-            let root: Option<(i64,)> = sqlx::query_as(
-                "SELECT entity_id FROM core.entity WHERE tenant_id=$1 AND public_id=$2",
-            )
-            .bind(tenant)
-            .bind(pid)
-            .fetch_optional(&mut *tx)
-            .await
-            .map_err(db_err)?;
-            let (root_id,) = root.ok_or_else(|| http_err(404, "entity not found"))?;
+            let root: Option<EntityRowTuple> =
+                sqlx::query_as(&format!("{ENTITY_SELECT} AND e.public_id = $2"))
+                    .bind(tenant)
+                    .bind(pid)
+                    .fetch_optional(&mut *tx)
+                    .await
+                    .map_err(db_err)?;
+            let rrow = row_to_entity_row(root.ok_or_else(|| http_err(404, "entity not found"))?);
+            // Root must pass the same visibility bar as any node — a
+            // catalog-less principal cannot graph-traverse from a hidden
+            // entity (docs/28 §5).
+            if !entity_visible(&perm, &rrow) {
+                return Err(http_err(404, "entity not found"));
+            }
+            let root_id = rrow.entity_id;
 
             // Localized predicate labels (docs/10 §4): requested locale first,
             // then ru/en fallbacks, then the stable alias.
@@ -2605,12 +3385,15 @@ pub async fn pg_get_entity_graph(
             } else {
                 ""
             };
-            let edges: Vec<(i64, String, i64, i64)> = sqlx::query_as(&format!(
+            let edges: Vec<(i64, String, i64, i64, uuid::Uuid, String)> = sqlx::query_as(&format!(
                 "SELECT s.statement_id, pd.stable_alias, s.subject,
-                        (s.object->>'entity_id')::bigint
+                        (s.object->>'entity_id')::bigint,
+                        sc.public_id, sc.alias
                  FROM core.statement s
                  JOIN meta.predicate_definition pd
                    ON pd.tenant_id=s.tenant_id AND pd.predicate_id=s.predicate
+                 JOIN core.catalog sc
+                   ON sc.tenant_id=s.tenant_id AND sc.catalog_id=s.catalog_id
                  WHERE s.tenant_id=$1 AND s.object_kind='entity' AND s.status='active'{as_of_clause}
                  LIMIT 5000"
             ))
@@ -2626,16 +3409,16 @@ pub async fn pg_get_entity_graph(
             let mut seen_edges: HashSet<String> = HashSet::new();
             // Denied relation instances never reach BFS (1.5); predicate
             // direction is checked per-traversal below (1.4 + direction).
-            let edges: Vec<(i64, String, i64, i64)> = edges
+            let edges: Vec<(i64, String, i64, i64, uuid::Uuid, String)> = edges
                 .into_iter()
-                .filter(|(sid, _, _, _)| {
+                .filter(|(sid, _, _, _, _, _)| {
                     perm.can_relation_instance(&sid.to_string(), crate::dataperm::Op::Read)
                 })
                 .collect();
             for _ in 0..max_depth {
                 let mut next = Vec::new();
                 for node in &frontier {
-                    for (sid, alias, subj, tgt) in &edges {
+                    for (sid, alias, subj, tgt, sc_pid, sc_alias) in &edges {
                         let traversable = match direction.as_str() {
                             "outgoing" => subj == node,
                             "incoming" => tgt == node,
@@ -2644,9 +3427,12 @@ pub async fn pg_get_entity_graph(
                         if !traversable {
                             continue;
                         }
-                        // Direction is relative to the node we expand from.
+                        // Direction is relative to the node we expand from;
+                        // the statement's own catalog scopes the rule.
+                        let sc_keys = [sc_pid.to_string(), sc_alias.clone()];
                         if !perm.can_relation_dir(
                             alias,
+                            &[&sc_keys[0], &sc_keys[1]],
                             crate::dataperm::Op::Read,
                             Some(subj == node),
                         ) {
@@ -2677,7 +3463,7 @@ pub async fn pg_get_entity_graph(
                 }
             }
 
-            // Resolve nodes: public_id + display name + type.
+            // Resolve nodes: public_id + display name + type + catalog.
             let ids: Vec<i64> = discovered.iter().copied().collect();
             let ent_rows: Vec<(
                 i64,
@@ -2685,10 +3471,15 @@ pub async fn pg_get_entity_graph(
                 uuid::Uuid,
                 String,
                 Option<chrono::DateTime<chrono::Utc>>,
+                uuid::Uuid,
+                String,
             )> = sqlx::query_as(
                 "SELECT e.entity_id, e.public_id, e.type_id,
-                        COALESCE(td.stable_alias, e.type_id::text), e.retired_at
+                        COALESCE(td.stable_alias, e.type_id::text), e.retired_at,
+                        c.public_id, c.alias
                  FROM core.entity e
+                 JOIN core.catalog c
+                   ON c.tenant_id=e.tenant_id AND c.catalog_id=e.catalog_id
                  LEFT JOIN meta.type_definition td
                    ON td.tenant_id=e.tenant_id AND td.type_id=e.type_id
                  WHERE e.tenant_id=$1 AND e.entity_id = ANY($2)",
@@ -2702,13 +3493,19 @@ pub async fn pg_get_entity_graph(
             let mut id_to_public: HashMap<i64, String> = HashMap::new();
             let mut nodes = Vec::new();
             let mut root_visible = false;
-            for (eid, public, tid, alias, retired) in ent_rows {
+            for (eid, public, tid, alias, retired, cat_pid, cat_alias) in ent_rows {
                 // Hidden entities never appear in the graph — their edges drop
-                // below when endpoint ids fail to resolve (1.3).
-                let type_readable =
-                    perm.can_type(&[&tid.to_string(), &alias], crate::dataperm::Op::Read);
+                // below when endpoint ids fail to resolve (1.3 + catalog gate).
+                let ckeys = [cat_pid.to_string(), cat_alias];
+                let ckey_refs: [&str; 2] = [&ckeys[0], &ckeys[1]];
+                let type_readable = perm.can_type(
+                    &[&tid.to_string(), &alias],
+                    &ckey_refs,
+                    crate::dataperm::Op::Read,
+                );
                 if !type_readable
                     || !perm.can_entity(&public.to_string(), crate::dataperm::Op::Read)
+                    || !perm.can_catalog(&ckey_refs, crate::dataperm::Op::Read)
                 {
                     continue;
                 }
@@ -2716,8 +3513,8 @@ pub async fn pg_get_entity_graph(
                     root_visible = true;
                 }
                 let mut fields = fields_map.remove(&eid).unwrap_or_default();
-                perm.filter_fields(&[&tid.to_string(), &alias], &mut fields);
-                perm.mask_fields(&[&tid.to_string(), &alias], &mut fields);
+                perm.filter_fields(&[&tid.to_string(), &alias], &ckey_refs, &mut fields);
+                perm.mask_fields(&[&tid.to_string(), &alias], &ckey_refs, &mut fields);
                 id_to_public.insert(eid, public.to_string());
                 nodes.push(GraphNodeRecord {
                     id: public.to_string(),
@@ -2729,7 +3526,10 @@ pub async fn pg_get_entity_graph(
                     } else {
                         "active".to_string()
                     },
-                    has_children: edges.iter().any(|(_, _, s, t)| s == &eid || t == &eid),
+                    // Filled below, after invisible edges are dropped —
+                    // counting raw edges would reveal that a hidden
+                    // neighbour exists.
+                    has_children: false,
                     cycle: false,
                 });
             }
@@ -2745,6 +3545,11 @@ pub async fn pg_get_entity_graph(
                 }
             }
             edge_out.retain(|e| !e.source.is_empty() && !e.target.is_empty());
+            for node in &mut nodes {
+                node.has_children = edge_out
+                    .iter()
+                    .any(|e| e.source == node.id || e.target == node.id);
+            }
             if !root_visible {
                 return Err(http_err(404, "entity not found"));
             }
@@ -2860,10 +3665,13 @@ fn eval_where(
     }
 }
 
-#[post("/entities/query", data = "<body>")]
+/// `POST /entities/query` — structured query. `?catalog=` (or `catalog` in
+/// the query object) scopes the search to one catalog namespace.
+#[post("/entities/query?<catalog>", data = "<body>")]
 pub async fn pg_query_entities_post(
     cap: CapabilityGuard,
     state: &State<AppState>,
+    catalog: Option<String>,
     body: String,
 ) -> Result<Json<ApiEnvelope<QueryResponseRecord>>, Status> {
     let exec = exec_of(state)?;
@@ -2908,30 +3716,50 @@ pub async fn pg_query_entities_post(
                 .and_then(|c| c.parse::<usize>().ok())
                 .unwrap_or_default();
 
-            let rows: Vec<(
-                i64,
-                uuid::Uuid,
-                uuid::Uuid,
-                String,
-                i16,
-                i64,
-                chrono::DateTime<chrono::Utc>,
-                Option<chrono::DateTime<chrono::Utc>>,
-            )> = if type_id.is_empty() {
+            // Catalog scope: query param wins, then the query object's own
+            // `catalog` field; absent means "all catalogs I may read".
+            // Both spelled but different → ambiguous, refuse.
+            if let (Some(q), Some(b)) = (
+                catalog.as_deref(),
+                query.get("catalog").and_then(Value::as_str),
+            ) {
+                if q != b {
+                    return Err(http_err(422, "catalog.conflict"));
+                }
+            }
+            let cat_param = catalog
+                .as_deref()
+                .or_else(|| query.get("catalog").and_then(Value::as_str));
+            let cat = optional_catalog(&mut tx, tenant, cat_param).await?;
+            if let Some(c) = &cat {
+                let ckey_refs: [&str; 2] = [&c.public_id.to_string(), &c.alias];
+                if !perm.can_catalog(&ckey_refs, crate::dataperm::Op::Read) {
+                    return Err(http_err(403, "no access to catalog"));
+                }
+            }
+            let catalog_id = cat.as_ref().map(|c| c.catalog_id);
+
+            let rows: Vec<EntityRowTuple> = if type_id.is_empty() {
                 sqlx::query_as(&format!(
-                    "{ENTITY_SELECT} AND e.retired_at IS NULL ORDER BY e.entity_id LIMIT 2000"
+                    "{ENTITY_SELECT} AND e.retired_at IS NULL
+                       AND ($2::bigint IS NULL OR e.catalog_id = $2)
+                     ORDER BY e.entity_id LIMIT 2000"
                 ))
                 .bind(tenant)
+                .bind(catalog_id)
                 .fetch_all(&mut *tx)
                 .await
                 .map_err(db_err)?
             } else {
                 sqlx::query_as(&format!(
                     "{ENTITY_SELECT} AND (td.stable_alias=$2 OR e.type_id::text=$2)
-                       AND e.retired_at IS NULL ORDER BY e.entity_id LIMIT 2000"
+                       AND e.retired_at IS NULL
+                       AND ($3::bigint IS NULL OR e.catalog_id = $3)
+                     ORDER BY e.entity_id LIMIT 2000"
                 ))
                 .bind(tenant)
                 .bind(&type_id)
+                .bind(catalog_id)
                 .fetch_all(&mut *tx)
                 .await
                 .map_err(db_err)?
@@ -3072,4 +3900,264 @@ pub fn routes() -> Vec<rocket::Route> {
         pg_get_entity_history,
         pg_get_entity_graph,
     ]
+}
+
+#[cfg(test)]
+mod input_scalar_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn scalar(input: &Value) -> CanonicalScalar {
+        match input_to_scalar(input).unwrap() {
+            // the wrapper returns Ok(Scalar) — unwrap the inner value via
+            // a direct call; keep the helper small
+            s => s,
+        }
+    }
+
+    #[test]
+    fn money_and_measurement() {
+        let s = input_to_scalar(&json!({"kind":"money","value":450000,"currency":"RUB"})).unwrap();
+        assert_eq!(
+            s,
+            CanonicalScalar::Money {
+                amount: "450000".to_string(),
+                currency: "RUB".to_string()
+            }
+        );
+        let s = input_to_scalar(&json!({"kind":"money","amount":"12.5"})).unwrap();
+        assert!(matches!(s, CanonicalScalar::Money { currency, .. } if currency == "RUB"));
+
+        let s =
+            input_to_scalar(&json!({"kind":"measurement","amount":"1200.5","unit":"kg"})).unwrap();
+        assert_eq!(
+            s,
+            CanonicalScalar::Measurement {
+                amount: "1200.5".to_string(),
+                unit: "kg".to_string()
+            }
+        );
+        assert!(input_to_scalar(&json!({"kind":"measurement","value":1})).is_err());
+    }
+
+    #[test]
+    fn percent_strips_sign() {
+        let s = input_to_scalar(&json!({"kind":"percent","value":"16 %"})).unwrap();
+        assert_eq!(
+            s,
+            CanonicalScalar::Decimal {
+                value: "16".to_string()
+            }
+        );
+        let s = input_to_scalar(&json!({"kind":"decimal","value":"1.5"})).unwrap();
+        assert_eq!(
+            s,
+            CanonicalScalar::Decimal {
+                value: "1.5".to_string()
+            }
+        );
+    }
+
+    #[test]
+    fn local_datetime_forms() {
+        // naive local time + zone
+        let s = input_to_scalar(&json!({
+            "kind": "local_datetime", "value": "2026-10-20T14:30:00",
+            "zone": "Europe/Moscow"
+        }))
+        .unwrap();
+        assert_eq!(
+            s,
+            CanonicalScalar::LocalDateTime {
+                value: chrono::NaiveDate::from_ymd_opt(2026, 10, 20)
+                    .unwrap()
+                    .and_hms_opt(14, 30, 0)
+                    .unwrap(),
+                zone: "Europe/Moscow".to_string()
+            }
+        );
+        // RFC3339 with offset promotes to Instant
+        let s = input_to_scalar(&json!({
+            "kind": "datetime", "value": "2026-10-20T14:30:00+03:00"
+        }))
+        .unwrap();
+        assert!(matches!(s, CanonicalScalar::Instant { .. }));
+        // date-only becomes midnight local, UTC default zone
+        let s = input_to_scalar(&json!({"kind":"datetime","value":"2026-10-20"})).unwrap();
+        assert!(matches!(s, CanonicalScalar::LocalDateTime { zone, .. } if zone == "UTC"));
+        // garbage rejected
+        assert!(input_to_scalar(&json!({"kind":"datetime","value":"soon"})).is_err());
+    }
+
+    #[test]
+    fn geo_and_json_families() {
+        let s = input_to_scalar(&json!({
+            "kind": "geo",
+            "value": {"type": "Point", "coordinates": [37.6, 55.7]}
+        }))
+        .unwrap();
+        assert!(matches!(s, CanonicalScalar::Geo { .. }));
+
+        let s = input_to_scalar(&json!({"kind":"tags","value":["a","b"]})).unwrap();
+        assert!(matches!(s, CanonicalScalar::Json { value } if value == "[\"a\",\"b\"]"));
+
+        let s = input_to_scalar(&json!({"kind":"address","value":{"city":"Москва"}})).unwrap();
+        assert!(matches!(s, CanonicalScalar::Json { .. }));
+    }
+
+    #[test]
+    fn uri_email_phone_ltext() {
+        let s = input_to_scalar(&json!({"kind":"url","value":"https://example.com"})).unwrap();
+        assert!(matches!(s, CanonicalScalar::Uri { .. }));
+
+        let s = input_to_scalar(&json!({"kind":"email","value":"a@b.ru"})).unwrap();
+        assert_eq!(
+            s,
+            CanonicalScalar::Email {
+                local: "a".to_string(),
+                domain: "b.ru".to_string()
+            }
+        );
+
+        let s = input_to_scalar(&json!({"kind":"phone","value":"+74951112233","extension":"12"}))
+            .unwrap();
+        assert!(matches!(s, CanonicalScalar::Phone { extension: Some(e), .. } if e == "12"));
+
+        let s = input_to_scalar(&json!({
+            "kind": "localized_text", "value": "Привет", "language_tag": "ru"
+        }))
+        .unwrap();
+        assert!(matches!(
+            s,
+            CanonicalScalar::Text { language_tag: Some(t), .. } if t == "ru"
+        ));
+    }
+
+    #[test]
+    fn blob_requires_valid_hash() {
+        let s = input_to_scalar(&json!({
+            "kind": "blob",
+            "content_hash": "aa".repeat(32),
+            "size": 10,
+            "mime": "image/png"
+        }))
+        .unwrap();
+        assert!(
+            matches!(s, CanonicalScalar::Blob { size_bytes: 10, mime, .. } if mime == "image/png")
+        );
+        assert!(input_to_scalar(&json!({"kind":"blob","content_hash":"zz"})).is_err());
+        assert!(input_to_scalar(&json!({"kind":"file","content_hash":"aabb"})).is_err());
+    }
+
+    #[test]
+    fn enum_and_presentation_kinds_store_text() {
+        let s = input_to_scalar(&json!({"kind":"enum","value":"хранение"})).unwrap();
+        assert!(matches!(s, CanonicalScalar::Text { .. }));
+        let s = input_to_scalar(&json!({"kind":"duration","value":"P30D"})).unwrap();
+        assert!(matches!(s, CanonicalScalar::Text { .. }));
+        assert!(input_to_scalar(&json!({"kind":"derived","value":"x"})).is_err());
+    }
+
+    #[test]
+    fn numeric_edge_inputs() {
+        // garbage decimals are rejected, not stored
+        assert!(input_to_scalar(&json!({"kind":"decimal","value":"abc"})).is_err());
+        assert!(input_to_scalar(&json!({"kind":"decimal","value":"1.2.3"})).is_err());
+        assert!(input_to_scalar(&json!({"kind":"decimal","value":{"a":1}})).is_err());
+        let s = input_to_scalar(&json!({"kind":"decimal","value":"-0.5"})).unwrap();
+        assert_eq!(
+            s,
+            CanonicalScalar::Decimal {
+                value: "-0.5".to_string()
+            }
+        );
+        // integral float is a valid integer
+        let s = input_to_scalar(&json!({"kind":"integer","value":12.0})).unwrap();
+        assert_eq!(s, CanonicalScalar::Integer { value: 12 });
+        assert!(input_to_scalar(&json!({"kind":"integer","value":1.5})).is_err());
+        assert!(input_to_scalar(&json!({"kind":"integer","value":"1e3"})).is_err());
+        // money: amount validated, currency normalised/checked
+        let s = input_to_scalar(&json!({"kind":"money","amount":"10","currency":"usd"})).unwrap();
+        assert!(matches!(s, CanonicalScalar::Money { currency, .. } if currency == "USD"));
+        assert!(input_to_scalar(&json!({"kind":"money","amount":10,"currency":"dollar"})).is_err());
+        assert!(
+            input_to_scalar(&json!({"kind":"money","amount":"lots","currency":"RUB"})).is_err()
+        );
+    }
+
+    #[test]
+    fn scalar_form_edge_inputs() {
+        // boolean accepts common spellings, rejects nonsense
+        let s = input_to_scalar(&json!({"kind":"boolean","value":"yes"})).unwrap();
+        assert_eq!(s, CanonicalScalar::Boolean { value: true });
+        assert!(input_to_scalar(&json!({"kind":"boolean","value":"maybe"})).is_err());
+        // email must carry an @-form
+        assert!(input_to_scalar(&json!({"kind":"email","value":"no-at-sign"})).is_err());
+        assert!(input_to_scalar(&json!({"kind":"email","local":"a","domain":"b@c"})).is_err());
+        // phone numbers may arrive as JSON numbers
+        let s = input_to_scalar(&json!({"kind":"phone","value":74951112233i64})).unwrap();
+        assert!(matches!(s, CanonicalScalar::Phone { e164, .. } if e164 == "+74951112233"));
+        assert!(input_to_scalar(&json!({"kind":"phone","value":""})).is_err());
+        // geo without a value is an error, not a self-serialised wrapper
+        assert!(input_to_scalar(&json!({"kind":"geo"})).is_err());
+        // time validated
+        assert!(input_to_scalar(&json!({"kind":"time","value":"25:61"})).is_err());
+        let s = input_to_scalar(&json!({"kind":"time","value":"09:30"})).unwrap();
+        assert!(matches!(s, CanonicalScalar::Text { .. }));
+    }
+
+    #[test]
+    fn collections_and_text_fallback() {
+        // a string under an explicit collection kind is still an array
+        let s = input_to_scalar(&json!({"kind":"tags","value":"a,b"})).unwrap();
+        assert!(matches!(s, CanonicalScalar::Json { value } if value == "[\"a\",\"b\"]"));
+        // lone scalar wraps into a one-element array
+        let s = input_to_scalar(&json!({"kind":"multi_value","value":5})).unwrap();
+        assert!(matches!(s, CanonicalScalar::Json { value } if value == "[5]"));
+        // null becomes an empty collection
+        let s = input_to_scalar(&json!({"kind":"tags","value":null})).unwrap();
+        assert!(matches!(s, CanonicalScalar::Json { value } if value == "[]"));
+        // objects in a text field keep their JSON form — no silent loss
+        let s = input_to_scalar(&json!({"kind":"text","value":{"k":1}})).unwrap();
+        assert_eq!(
+            s,
+            CanonicalScalar::Text {
+                value_nfc: "{\"k\":1}".to_string(),
+                language_tag: None
+            }
+        );
+        // enum objects rejected
+        assert!(input_to_scalar(&json!({"kind":"enum","value":{"x":1}})).is_err());
+    }
+
+    #[test]
+    fn object_to_wire_new_variants() {
+        let s = StatementObject::Scalar(CanonicalScalar::LocalDateTime {
+            value: chrono::NaiveDate::from_ymd_opt(2026, 10, 20)
+                .unwrap()
+                .and_hms_opt(14, 30, 0)
+                .unwrap(),
+            zone: "Europe/Moscow".to_string(),
+        });
+        let w = object_to_wire(&s);
+        assert_eq!(w["zone"], "Europe/Moscow");
+        assert!(w["datetime"].as_str().unwrap().starts_with("2026-10-20"));
+
+        let s = StatementObject::Scalar(CanonicalScalar::Geo {
+            value: "{\"type\":\"Point\"}".to_string(),
+        });
+        assert_eq!(object_to_wire(&s)["type"], "Point");
+
+        let s = StatementObject::Scalar(CanonicalScalar::Money {
+            amount: "100".to_string(),
+            currency: "RUB".to_string(),
+        });
+        assert_eq!(object_to_wire(&s)["currency"], "RUB");
+    }
+
+    #[allow(dead_code)]
+    fn _unused(s: CanonicalScalar) {
+        let _ = scalar(&json!({}));
+        let _ = s;
+    }
 }

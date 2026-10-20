@@ -26,6 +26,8 @@ export interface AuditRecord {
   bytes: number | null;
   client: string | null;
   service: string | null;
+  /** Catalog alias the event is tagged with (docs/28 §8); null = system event. */
+  catalog: string | null;
   metadata: Record<string, unknown>;
 }
 
@@ -57,6 +59,8 @@ export interface AuditQuery {
   to?: string;
   limit?: number;
   cursor?: number;
+  /** Slice events to one catalog (alias or public id, docs/28 §9). */
+  catalog?: string;
 }
 
 /** Chain checkpoint. */

@@ -59,6 +59,14 @@
         <UFormField :label="t('audit.filter.to')">
           <UInput v-model="filters.to" type="datetime-local" class="w-full sm:w-48" />
         </UFormField>
+        <UFormField :label="t('catalog.selector')">
+          <USelect
+            v-model="catalogChoice"
+            :items="catalogOptions"
+            value-key="value"
+            class="w-full sm:w-48"
+          />
+        </UFormField>
         <UButton @click="fetchAudit" icon="i-lucide-search">
           {{ t('common.search') }}
         </UButton>
@@ -86,6 +94,7 @@
             <th class="py-2 px-3 font-medium text-[var(--ui-text-muted)]">{{ t('audit.col.action') }}</th>
             <th class="py-2 px-3 font-medium text-[var(--ui-text-muted)]">{{ t('audit.col.resource') }}</th>
             <th class="py-2 px-3 font-medium text-[var(--ui-text-muted)]">{{ t('audit.col.effect') }}</th>
+            <th class="py-2 px-3 font-medium text-[var(--ui-text-muted)]">{{ t('catalog.selector') }}</th>
             <th class="py-2 px-3 font-medium text-[var(--ui-text-muted)]">{{ t('audit.col.hash') }}</th>
             <th class="py-2 px-3"></th>
           </tr>
@@ -115,6 +124,9 @@
                 <span v-else class="text-[var(--ui-text-muted)]">—</span>
               </td>
               <td class="py-2 px-3 font-mono text-xs text-[var(--ui-text-muted)]">
+                {{ entry.catalog ?? '—' }}
+              </td>
+              <td class="py-2 px-3 font-mono text-xs text-[var(--ui-text-muted)]">
                 {{ entry.entry_hash.slice(0, 12) }}…
               </td>
               <td class="py-2 px-3">
@@ -126,7 +138,7 @@
             </tr>
             <!-- Expanded detail row -->
             <tr v-if="expandedId === entry.audit_id">
-              <td colspan="9" class="py-4 px-6 bg-[var(--ui-bg-muted)]">
+              <td colspan="10" class="py-4 px-6 bg-[var(--ui-bg-muted)]">
                 <div class="grid grid-cols-2 md:grid-cols-4 gap-4 text-sm">
                   <div>
                     <div class="text-[var(--ui-text-muted)] mb-1">{{ t('audit.detail.entry_id') }}</div>
@@ -331,6 +343,7 @@ definePageMeta({
 const { t } = useI18n();
 const api = useApi();
 const toast = useToast();
+const { available: catalogList } = useCatalog();
 
 const entries = ref<AuditRecord[]>([]);
 const loading = ref(false);
@@ -350,7 +363,22 @@ const filters = reactive({
   action: '' as string,
   from: '' as string,
   to: '' as string,
+  catalog: '__all__' as string,
 });
+
+// `__all__` is the USelect sentinel — an empty-string item value is
+// rejected by Reka UI; it maps back to "no catalog filter" here.
+const catalogOptions = computed(() => [
+  { label: t('catalog.all_catalogs'), value: '__all__' },
+  ...catalogList.value.map((c) => ({ label: `${c.name} (${c.alias})`, value: c.alias })),
+]);
+const catalogChoice = computed({
+  get: () => filters.catalog,
+  set: (v: string) => { filters.catalog = v || '__all__'; },
+});
+const catalogFilter = computed(() =>
+  filters.catalog !== '__all__' ? filters.catalog : undefined,
+);
 
 const retentionForm = reactive({
   retention_days: 365,
@@ -420,6 +448,7 @@ function resetFilters() {
   filters.action = '';
   filters.from = '';
   filters.to = '';
+  filters.catalog = '__all__';
   fetchAudit();
 }
 
@@ -433,6 +462,7 @@ async function fetchAudit() {
       action: filters.action || undefined,
       from: filters.from ? new Date(filters.from).toISOString() : undefined,
       to: filters.to ? new Date(filters.to).toISOString() : undefined,
+      catalog: catalogFilter.value,
     });
     entries.value = res.data;
   } catch (err) {
@@ -459,6 +489,7 @@ async function loadMore() {
       action: filters.action || undefined,
       from: filters.from ? new Date(filters.from).toISOString() : undefined,
       to: filters.to ? new Date(filters.to).toISOString() : undefined,
+      catalog: catalogFilter.value,
     });
     entries.value.push(...res.data);
   } catch (err) {

@@ -682,6 +682,56 @@ publish); empty/blank identity components never produce identity keys;
   (20 scenarios incl. masks, instance deny, URL deny, role inheritance,
   superuser boundary, user activity/filters).
 
+## Catalogs (docs/28)
+
+- `core.catalog` is a first-class relational table (not a graph entity):
+  `catalog_id`, `public_id`, `alias` (`^[a-z][a-z0-9_-]{0,62}$`), name,
+  description, `status` active/retired, settings, timestamps. Migration
+  `20261020000025_core_catalog.sql` seeds `general`/`sys`/`wh`, backfills
+  `catalog_id` on entity/statement/type/predicate/schema_revision, and
+  scopes alias uniqueness + published-revision uniqueness per
+  `(tenant, catalog)`. FORCE RLS is enabled after the per-tenant backfill.
+- Everything except principals belongs to exactly one catalog and never
+  moves (`catalog_id` immutable — move = retire + recreate). The same
+  alias (`person`, `wh_product`) can be a *different* type in different
+  catalogs — resolution always carries a catalog.
+- `?catalog=<alias|public_id>` selects the catalog on entity and schema
+  routes: scope for list/query, owning catalog for create (defaults to the
+  type's catalog), mismatch check on get/update (foreign-catalog entity →
+  404, existence not disclosed).
+- Permissions: `DataPerm::can_catalog(keys, op)` is the FIRST gate in
+  `entity_visible`/`checked_entity` — deny-by-default for principals with
+  no catalog rule. Rules: `data.catalog.<op>` with `{"catalog": alias|uuid|"*"}`;
+  every other data rule accepts a `"catalog"` qualifier
+  (`{"type":"person","catalog":"hr"}`). `data.*`/`data.all.*` still imply
+  catalog access for compatibility; explicit `deny data.catalog.*` beats
+  the wildcard. Migration granted every existing data group
+  `data.catalog.* {catalog:"*"}`.
+- Capability: `catalog.manage` (`CapabilityAction::CatalogManage`) guards
+  `POST/PUT/DELETE /api/v1/catalogs`; `security.manage` is the umbrella.
+  `GET /catalogs` lists only catalogs the caller can read.
+- `/me/context.catalogs` = readable catalogs `{public_id, alias, name}` —
+  drives the Nuxt selector (`useCatalog` composable: header USelect when
+  >1, localStorage `enginer.catalog`, `catalogParams()` injected into
+  entity/schema calls; `''` = all catalogs).
+- Schema is per catalog: each catalog has its own draft→published stream
+  (`stable_alias` unique per catalog). `/schemas/drafts?catalog=` defaults
+  `general` when needed; list endpoints without `catalog` return all
+  *readable* catalogs' records.
+- MCP: `catalog` arg on entity/schema tools; `catalogs.*` tools.
+- Group admin: `canonical_rule` maps `resource_type:"catalog"` →
+  `data.catalog.<op>`; `catalog` qualifier round-trips through group
+  edit so scoped rules aren't widened silently.
+- E2E check: `docs/testing/warehouse/catalog_isolation_check.py`
+  (32 checks: qa_wh_only group / qa_wh_viewer see only `wh`; foreign
+  catalogs → 403, foreign entity GET → 404; catalog CRUD incl. dup-409,
+  alias-422, missing-404, sys-retire-422, non-empty-retire-409,
+  empty retire/reactivate; draft→publish inside `qa_t` as an independent
+  stream; `person` alias collision general↔qa_t; catalog-local identity
+  dedup; `?catalog=wh` rejects a qa_t type; cross-catalog edge is
+  creatable by admin but the qa_t peer is hidden from the restricted
+  viewer). `GET /catalogs/<missing>` returns 404.
+
 ## MCP bridge (apps/mcp)
 
 - Endpoint `POST http://localhost:8020/mcp`, JSON-RPC 2.0 over streamable
@@ -892,3 +942,35 @@ MCP-level fallback; keep both in mind when touching
   `ENGINER_CORS_ORIGINS` (comma-separated). Arbitrary `Origin` values are
   never reflected — without the allowlist any site could read
   credentialed responses. Session cookie is `HttpOnly, SameSite=Lax`.
+- Field kinds (`apps/api/src/field_kinds.rs`): full kind set for
+  `types[].fields[].kind` — canonical scalars (docs/03 §7: text, ltext,
+  boolean, integer, decimal, date, instant, local_datetime/datetime, uuid,
+  uri/url, email, phone, money, measurement, geo, json, blob, entity) +
+  presentation kinds (docs/16 §6: textarea, rich_text, enum, dictionary,
+  entity_reference, multi_value, repeating_group, tags, address, contact,
+  document, file, duration, percent, derived, relation_editor).
+  `entities.create`/`entities.update` coerce `fields` shorthand values by
+  the DECLARED kind of the published type (previously everything was
+  forced to `text`); `{entity_id}` values become entity refs on
+  entity-typed/undeclared fields only (on scalar fields they are data),
+  enum values are checked against `values[]` even for explicit
+  `{kind,value}` inputs, tags accept comma strings → JSON array,
+  `{value: x, unit|currency|zone|...}` objects inject the declared kind.
+  `input_to_scalar` (pure fn, unit-tested) validates hard: decimals must
+  be fixed-point numeric, money currency is ISO 4217 (default RUB),
+  email requires `@`, phone needs a non-empty number, geo needs GeoJSON,
+  boolean accepts true/false/yes/no/да/нет/1/0, integer accepts integral
+  floats, time is `HH:MM[:SS]`, date-only `local_datetime` → midnight,
+  `percent` strips `%`, `derived`/`enum`-objects → 422, and scalar/object
+  kind mismatches against the declaration → 422. Malformed `fields`
+  (non-object/array) on create/update → 422, not a silent no-op.
+  `input_to_object` handles all canonical kinds incl. money/measurement/
+  geo/blob/local_datetime; `CanonicalScalar::LocalDateTime`/`Geo`
+  variants in `crates/domain` (serde tag `local_datetime`; lang-tagged
+  Text reports `ScalarKind::LocalizedText`). Draft validation errors on
+  unknown `fields[].kind` (`field.kind.unknown`), warns on enum w/o
+  `values` and entity_reference w/o `target_type_id`. `TypeFieldRecord`
+  exposes `values`/`unit`/`currency`; `view_field` emits `options[]`
+  for enum/dictionary and `validation.unit/currency` so Nuxt selects
+  render choices. MCP `entities.update` fields shim no longer forces
+  `text`.

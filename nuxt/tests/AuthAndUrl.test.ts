@@ -125,6 +125,74 @@ describe('useAuthStore URL rules', () => {
   });
 });
 
+describe('menu access decision', () => {
+  it('grants when no capability is required and URL is allowed', () => {
+    const store = useAuthStore();
+    store.user = userProfile({ capabilities: [] });
+    expect(store.canAccessMenuItem({ to: '/docs' })).toBe(true);
+  });
+
+  it('hides a menu item without the required capability', () => {
+    const store = useAuthStore();
+    store.user = userProfile({ capabilities: ['entity.read'] });
+    expect(
+      store.canAccessMenuItem({ to: '/audit', capability: 'audit.read' }),
+    ).toBe(false);
+  });
+
+  it('hides a menu item denied by a URL rule even with the capability', () => {
+    const store = useAuthStore();
+    store.user = userProfile({
+      capabilities: ['audit.read'],
+      ui_rules: { rules: [{ path: '/audit', allow: false }], blanket: false },
+    });
+    expect(
+      store.canAccessMenuItem({ to: '/audit', capability: 'audit.read' }),
+    ).toBe(false);
+  });
+
+  it('grants when the capability is present and the URL allowed', () => {
+    const store = useAuthStore();
+    store.user = userProfile({ capabilities: ['audit.read'] });
+    expect(
+      store.canAccessMenuItem({ to: '/audit', capability: 'audit.read' }),
+    ).toBe(true);
+  });
+
+  it('any-of capabilities: umbrella manage capability unlocks the item', () => {
+    const store = useAuthStore();
+    store.user = userProfile({ capabilities: ['users.manage'] });
+    expect(
+      store.canAccessMenuItem({
+        to: '/admin/users',
+        capabilities: ['user.read', 'users.manage'],
+      }),
+    ).toBe(true);
+  });
+
+  it('any-of capabilities: denies when none of them is granted', () => {
+    const store = useAuthStore();
+    store.user = userProfile({ capabilities: ['entity.read'] });
+    expect(
+      store.canAccessMenuItem({
+        to: '/admin/users',
+        capabilities: ['user.read', 'users.manage'],
+      }),
+    ).toBe(false);
+  });
+
+  it('capability + capabilities union: single required entry is enough', () => {
+    const store = useAuthStore();
+    store.user = userProfile({ capabilities: ['security.manage'] });
+    expect(
+      store.canAccessMenuItem({
+        to: '/admin/dump',
+        capability: 'security.manage',
+      }),
+    ).toBe(true);
+  });
+});
+
 describe('capability middleware', () => {
   const to = { path: '/x', fullPath: '/x' };
 

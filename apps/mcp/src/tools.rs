@@ -66,6 +66,26 @@ const ALIAS: Param = Param {
     desc: "Stable alias, e.g. legal_entity or owns.",
 };
 
+/// Catalog selector — every entity/type/schema stream is catalog-scoped
+/// (docs/28): the same alias may mean different things in different
+/// catalogs, so `?catalog` disambiguates.
+const CATALOG: Param = Param {
+    name: "catalog",
+    loc: Q,
+    ty: "string",
+    required: false,
+    desc: "Catalog alias or public id — scopes the call to one catalog.",
+};
+
+/// Catalog path segment for `/catalogs/{ref}` routes.
+const CATALOG_REF: Param = Param {
+    name: "catalog_ref",
+    loc: P,
+    ty: "string",
+    required: true,
+    desc: "Catalog alias or public id.",
+};
+
 /// Destructive-restore confirmation — sent in the request body.
 const CONFIRM_RESTORE: Param = Param {
     name: "confirm",
@@ -99,6 +119,48 @@ pub static TOOLS: &[ToolDef] = &[
         method: "GET", path: "/dashboard/stats", capability: Some("entity.read"), params: &[],
     },
 
+    // --- Catalogs (docs/28) -------------------------------------------------
+    ToolDef {
+        name: "catalogs.list",
+        desc: "List catalogs visible to the caller (catalog-gated).",
+        method: "GET", path: "/catalogs", capability: Some("entity.read"), params: &[],
+    },
+    ToolDef {
+        name: "catalogs.get",
+        desc: "Catalog detail by alias or public id.",
+        method: "GET", path: "/catalogs/{catalog_ref}", capability: Some("entity.read"),
+        params: &[CATALOG_REF],
+    },
+    ToolDef {
+        name: "catalogs.create",
+        desc: "Create a custom catalog (alias, name, description, settings).",
+        method: "POST", path: "/catalogs", capability: Some("catalog.manage"),
+        params: &[
+            Param { name: "alias", loc: B, ty: "string", required: true, desc: "Catalog alias: ^[a-z][a-z0-9_-]{0,62}$." },
+            Param { name: "name", loc: B, ty: "string", required: true, desc: "Display name." },
+            Param { name: "description", loc: B, ty: "string", required: false, desc: "Description." },
+            Param { name: "settings", loc: B, ty: "object", required: false, desc: "Free-form settings." },
+        ],
+    },
+    ToolDef {
+        name: "catalogs.update",
+        desc: "Update a catalog (name/description/settings/status).",
+        method: "PUT", path: "/catalogs/{catalog_ref}", capability: Some("catalog.manage"),
+        params: &[
+            CATALOG_REF,
+            Param { name: "name", loc: B, ty: "string", required: false, desc: "Display name." },
+            Param { name: "description", loc: B, ty: "string", required: false, desc: "Description." },
+            Param { name: "settings", loc: B, ty: "object", required: false, desc: "Free-form settings." },
+            Param { name: "status", loc: B, ty: "string", required: false, desc: "active|retired — retire fails while the catalog holds live entities." },
+        ],
+    },
+    ToolDef {
+        name: "catalogs.retire",
+        desc: "Retire a catalog (fails while it still holds live entities).",
+        method: "POST", path: "/catalogs/{catalog_ref}/retire", capability: Some("catalog.manage"),
+        params: &[CATALOG_REF],
+    },
+
     // --- Entities ---------------------------------------------------------
     ToolDef {
         name: "entities.list",
@@ -109,17 +171,18 @@ pub static TOOLS: &[ToolDef] = &[
             Param { name: "search", loc: Q, ty: "string", required: false, desc: "Free-text search." },
             Param { name: "limit", loc: Q, ty: "integer", required: false, desc: "Page size (default server-side)." },
             Param { name: "cursor", loc: Q, ty: "string", required: false, desc: "Pagination cursor." },
+            CATALOG,
         ],
     },
     ToolDef {
         name: "entities.get",
         desc: "Get a single entity with its statements and attributes.",
         method: "GET", path: "/entities/{id}", capability: Some("entity.read"),
-        params: &[ID],
+        params: &[ID, CATALOG],
     },
     ToolDef {
         name: "entities.create",
-        desc: "Create an entity. `type_id` selects the schema type (uuid or alias); `fields` carries predicate values.",
+        desc: "Create an entity. `type_id` selects the schema type (uuid or alias); `fields` carries predicate values. `catalog` picks the owning catalog — without it the type's own catalog is used.",
         method: "POST", path: "/entities", capability: Some("entity.create"),
         params: &[
             Param { name: "type_id", loc: B, ty: "string", required: true, desc: "Published type alias or uuid." },
@@ -127,11 +190,12 @@ pub static TOOLS: &[ToolDef] = &[
             Param { name: "statements", loc: B, ty: "array", required: false, desc: "Explicit statements (predicate_id, kind, value)." },
             Param { name: "identity_mode", loc: B, ty: "string", required: false, desc: "Identity conflict mode: deduplicate (default)|reject|create_candidate." },
             Param { name: "schema_revision", loc: B, ty: "integer", required: false, desc: "Pin to a published schema revision." },
+            CATALOG,
         ],
     },
     ToolDef {
         name: "entities.update",
-        desc: "Update entity fields (predicate values).",
+        desc: "Update entity fields (predicate values). `catalog` is a mismatch check — entities never change catalogs.",
         method: "PUT", path: "/entities/{id}", capability: Some("entity.edit"),
         params: &[
             ID,
@@ -139,6 +203,7 @@ pub static TOOLS: &[ToolDef] = &[
             Param { name: "predicate_id", loc: B, ty: "string", required: false, desc: "Single predicate to set (with `value`)." },
             Param { name: "value", loc: B, ty: "object", required: false, desc: "Value for `predicate_id`." },
             Param { name: "revision", loc: B, ty: "integer", required: false, desc: "Expected revision (optimistic concurrency)." },
+            CATALOG,
         ],
     },
     ToolDef {
@@ -162,10 +227,11 @@ pub static TOOLS: &[ToolDef] = &[
     },
     ToolDef {
         name: "entities.query",
-        desc: "Run an advanced entity query (AST filters, facets, sort).",
+        desc: "Run an advanced entity query (AST filters, facets, sort). `catalog` scopes the query to one catalog.",
         method: "POST", path: "/entities/query", capability: Some("query.advanced"),
         params: &[
             Param { name: "query", loc: B, ty: "object", required: true, desc: "Query AST per docs/12." },
+            CATALOG,
         ],
     },
     ToolDef {
@@ -458,14 +524,15 @@ pub static TOOLS: &[ToolDef] = &[
     // --- Schema administration -------------------------------------------------
     ToolDef {
         name: "schema.types",
-        desc: "Published entity types (permission-filtered).",
-        method: "GET", path: "/schemas/types", capability: Some("entity.read"), params: &[],
+        desc: "Published entity types (permission-filtered). `catalog` picks one catalog's stream — the same alias may differ across catalogs.",
+        method: "GET", path: "/schemas/types", capability: Some("entity.read"),
+        params: &[CATALOG],
     },
     ToolDef {
         name: "schema.type_get",
         desc: "Type detail with predicate slots.",
         method: "GET", path: "/schemas/types/{alias}", capability: Some("entity.read"),
-        params: &[ALIAS],
+        params: &[ALIAS, CATALOG],
     },
     ToolDef {
         name: "schema.type_view",
@@ -474,22 +541,26 @@ pub static TOOLS: &[ToolDef] = &[
         params: &[
             ALIAS,
             Param { name: "view_type", loc: Q, ty: "string", required: true, desc: "form|list." },
+            CATALOG,
         ],
     },
     ToolDef {
         name: "schema.predicates",
         desc: "Published predicates (relation predicates are permission-filtered).",
-        method: "GET", path: "/schemas/predicates", capability: Some("entity.read"), params: &[],
+        method: "GET", path: "/schemas/predicates", capability: Some("entity.read"),
+        params: &[CATALOG],
     },
     ToolDef {
         name: "schema.published",
-        desc: "Published schema revisions.",
-        method: "GET", path: "/schemas/published", capability: Some("entity.read"), params: &[],
+        desc: "Published schema revisions (one stream per catalog).",
+        method: "GET", path: "/schemas/published", capability: Some("entity.read"),
+        params: &[CATALOG],
     },
     ToolDef {
         name: "schema.drafts",
-        desc: "List schema drafts.",
-        method: "GET", path: "/schemas/drafts", capability: Some("schema.draft"), params: &[],
+        desc: "List schema drafts (per-catalog when `catalog` is given).",
+        method: "GET", path: "/schemas/drafts", capability: Some("schema.draft"),
+        params: &[CATALOG],
     },
     ToolDef {
         name: "schema.draft_get",
@@ -499,11 +570,12 @@ pub static TOOLS: &[ToolDef] = &[
     },
     ToolDef {
         name: "schema.draft_create",
-        desc: "Create a schema draft.",
+        desc: "Create a schema draft inside a catalog's stream (`catalog` — default `general`).",
         method: "POST", path: "/schemas/drafts", capability: Some("schema.draft"),
         params: &[
             Param { name: "name", loc: B, ty: "string", required: true, desc: "Draft name." },
             Param { name: "base_revision", loc: B, ty: "string", required: false, desc: "Revision to branch from." },
+            CATALOG,
         ],
     },
     ToolDef {
@@ -735,7 +807,8 @@ pub static TOOLS: &[ToolDef] = &[
             Param { name: "from", loc: Q, ty: "string", required: false, desc: "RFC3339 lower bound." },
             Param { name: "to", loc: Q, ty: "string", required: false, desc: "RFC3339 upper bound." },
             Param { name: "limit", loc: Q, ty: "integer", required: false, desc: "Page size." },
-            Param { name: "cursor", loc: Q, ty: "string", required: false, desc: "Pagination cursor." },
+            Param { name: "cursor", loc: Q, ty: "integer", required: false, desc: "Pagination cursor (sequence).", },
+            CATALOG,
         ],
     },
     ToolDef {

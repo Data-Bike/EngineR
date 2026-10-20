@@ -28,6 +28,7 @@ export class AuditEndpoints {
     if (query.to) params.set('to', query.to);
     if (query.limit) params.set('limit', String(query.limit));
     if (query.cursor) params.set('cursor', String(query.cursor));
+    if (query.catalog) params.set('catalog', query.catalog);
     const qs = params.toString();
     const path = qs ? `/audit?${qs}` : '/audit';
     return this.client.get<AuditRecord[]>(path);

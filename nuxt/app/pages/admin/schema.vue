@@ -523,6 +523,7 @@ definePageMeta({ middleware: ['auth', capability('schema.draft')] });
 
 const { t, locale } = useI18n();
 const api = useApi();
+const { catalogParams, selected: selectedCatalog } = useCatalog();
 const toast = useToast();
 const { hasCapability } = useCapability();
 
@@ -662,8 +663,8 @@ async function reloadAll(): Promise<void> {
   loadError.value = '';
   try {
     const [draftResponse, revisionResponse] = await Promise.all([
-      api.schemas.listDrafts(),
-      api.schemas.listPublished(),
+      api.schemas.listDrafts(catalogParams()),
+      api.schemas.listPublished(catalogParams()),
     ]);
     drafts.value = draftResponse.data;
     revisions.value = revisionResponse.data;
@@ -878,4 +879,6 @@ async function deleteSelectedDraft(): Promise<void> {
 }
 
 onMounted(reloadAll);
+// Header catalog switch re-scopes drafts and published revisions.
+watch(selectedCatalog, reloadAll);
 </script>

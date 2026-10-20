@@ -1,4 +1,4 @@
-import { schemaEn } from '../schema';
+import { catalogEn, schemaEn } from '../schema';
 
 export default {
   "app":   {
@@ -328,6 +328,7 @@ export default {
       },
     },
   },
+  "catalog": catalogEn,
   "schema":   {
     ...schemaEn,
     "title": 'إدارة المخطط',
@@ -801,6 +802,8 @@ export default {
     "default_managers_desc": 'إنشاء الطلبات وعرض الكائنات',
     group_class: 'فئة المجموعة',
     class_capability: 'نظام',
+    tab_data: 'وصول إلى البيانات',
+    tab_system: 'وصول إلى النظام',
     inherits: 'يرث',
     parent_role: 'الدور الأصل',
     parent_role_hint: 'يرث جميع أذونات الأصل مع إمكانية الإضافة والتجاوز',
@@ -809,6 +812,7 @@ export default {
     res_relation: 'نوع العلاقة',
     res_relation_instance: 'علاقة محددة',
     res_url: 'URL',
+    res_url_placeholder: '/admin أو /api/v1/...',
     res_capability: 'وظيفة النظام',
     act_all: 'جميع الإجراءات',
     effect_allow: 'سماح',

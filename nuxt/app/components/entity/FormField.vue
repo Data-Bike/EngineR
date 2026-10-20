@@ -34,11 +34,22 @@
       @update:model-value="emit('update:value', $event)"
     />
 
-    <!-- Integer / Decimal / Money -->
+    <!-- Integer / Decimal / Money / Percent / Measurement -->
     <UInput
-      v-else-if="['integer', 'decimal', 'money'].includes(field.kind)"
-      :model-value="modelValue as string"
+      v-else-if="['integer', 'decimal', 'money', 'percent', 'measurement'].includes(field.kind)"
+      :model-value="scalarValue as string"
       type="number"
+      :placeholder="field.placeholder_key ? t(field.placeholder_key) : undefined"
+      :disabled="field.read_only"
+      class="w-full"
+      @update:model-value="emit('update:value', $event)"
+    />
+
+    <!-- Url / Email / Phone / Duration -->
+    <UInput
+      v-else-if="['url', 'email', 'phone', 'duration'].includes(field.kind)"
+      :model-value="modelValue as string"
+      :type="field.kind === 'url' ? 'url' : field.kind === 'email' ? 'email' : field.kind === 'phone' ? 'tel' : 'text'"
       :placeholder="field.placeholder_key ? t(field.placeholder_key) : undefined"
       :disabled="field.read_only"
       class="w-full"
@@ -55,10 +66,20 @@
       @update:model-value="emit('update:value', $event)"
     />
 
+    <!-- Time -->
+    <UInput
+      v-else-if="field.kind === 'time'"
+      :model-value="modelValue as string"
+      type="time"
+      :disabled="field.read_only"
+      class="w-full"
+      @update:model-value="emit('update:value', $event)"
+    />
+
     <!-- Datetime -->
     <UInput
-      v-else-if="field.kind === 'datetime'"
-      :model-value="modelValue as string"
+      v-else-if="['datetime', 'local_datetime'].includes(field.kind)"
+      :model-value="scalarValue as string"
       type="datetime-local"
       :disabled="field.read_only"
       class="w-full"
@@ -84,9 +105,9 @@
       @update:model-value="emit('update:value', $event)"
     />
 
-    <!-- Multi-value / Repeating group -->
+    <!-- Multi-value / Repeating group / Tags -->
     <MultiValueField
-      v-else-if="field.kind === 'multi_value' || field.kind === 'repeating_group'"
+      v-else-if="['multi_value', 'repeating_group', 'tags'].includes(field.kind)"
       :field="field"
       :model-value="modelValue"
       :disabled="field.read_only"
@@ -107,7 +128,7 @@
       v-else-if="field.kind === 'derived' || field.read_only"
       class="px-3 py-2 rounded-md bg-[var(--ui-bg-muted)] text-[var(--ui-text-muted)]"
     >
-      {{ modelValue ?? '—' }}
+      {{ scalarValue ?? '—' }}
     </div>
 
     <!-- Unknown kind: safe unsupported component (docs/16 §6) -->
@@ -151,8 +172,25 @@ const enumOptions = computed(() =>
   })),
 );
 
-const canonicalPreview = computed(() => {
+/**
+ * Wire values for structured kinds arrive as objects — money
+ * `{amount, currency}`, measurement `{amount, unit}`, local datetime
+ * `{datetime, zone}`, blob `{blob}` (docs/26). Scalar inputs need the
+ * inner primitive; the zone/currency suffix stays server-side.
+ */
+const scalarValue = computed(() => {
   const v = props.modelValue;
+  if (v && typeof v === 'object' && !Array.isArray(v)) {
+    const o = v as Record<string, unknown>;
+    if (typeof o.amount === 'string' || typeof o.amount === 'number') return String(o.amount);
+    if (typeof o.datetime === 'string') return o.datetime.replace(' ', 'T').slice(0, 16);
+    if (typeof o.blob === 'string') return o.blob;
+  }
+  return v;
+});
+
+const canonicalPreview = computed(() => {
+  const v = scalarValue.value;
   if (typeof v === 'string') {
     return v.normalize('NFC').trim().toLowerCase();
   }

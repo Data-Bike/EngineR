@@ -3,6 +3,7 @@
  */
 
 import { vi } from 'vitest';
+import { ref } from 'vue';
 
 const tMock = (key: string, params?: Record<string, unknown>) => {
   if (params && 'count' in params) return `${key}:${params.count}`;
@@ -11,6 +12,7 @@ const tMock = (key: string, params?: Record<string, unknown>) => {
 
 const i18nInstance = {
   t: tMock,
+  te: (key: string) => !!key,
   locale: { value: 'en' },
   locales: { value: [{ code: 'en', name: 'English', dir: 'ltr' }] },
   setLocale: vi.fn(),
@@ -52,9 +54,38 @@ vi.mock('vue-i18n', () => ({
 ;(globalThis as any).__onBeforeRouteLeave = (...args: unknown[]) => (globalThis as any).onBeforeRouteLeave(...args);
 ;(globalThis as any).useRoute = () => ({ params: {}, query: {} });
 ;(globalThis as any).__useRoute = (...args: unknown[]) => (globalThis as any).useRoute(...args);
+// Router stub: resolve returns empty `matched` for paths listed in
+// globalThis.__routerDeny (defaults to /entities — no index route exists).
+;(globalThis as any).__routerDeny = ['/entities'];
+;(globalThis as any).useRouter = () => ({
+  resolve: (p: string) => ({
+    matched: (globalThis as any).__routerDeny.includes(p) ? [] : [{}],
+  }),
+});
+;(globalThis as any).__useRouter = (...args: unknown[]) => (globalThis as any).useRouter(...args);
 ;(globalThis as any).useAuth = () => ({
   isAuthenticated: { value: false },
   fetchContext: vi.fn(),
+  hasCapability: vi.fn().mockReturnValue(true),
+  canUrl: vi.fn().mockReturnValue(true),
+  canAccessMenuItem: vi.fn().mockReturnValue(true),
 });
 ;(globalThis as any).__useAuth = (...args: unknown[]) => (globalThis as any).useAuth(...args);
 ;(globalThis as any).useToast = () => ({ add: vi.fn() });
+;(globalThis as any).__useToast = (...args: unknown[]) => (globalThis as any).useToast(...args);
+// Catalog selection composable (docs/28 §6). Per-test overrides replace
+// globalThis.useCatalog before mounting a component.
+// Real refs — pages `watch(selected)` on catalog switch; plain objects
+// would make Vue warn "Invalid watch source" and silently not fire.
+;(globalThis as any).useCatalog = () => ({
+  catalogParams: () => ({}),
+  selected: ref(''),
+  available: ref([]),
+  hasMultiple: ref(false),
+  select: vi.fn(),
+});
+;(globalThis as any).__useCatalog = (...args: unknown[]) => (globalThis as any).useCatalog(...args);
+;(globalThis as any).useAuthStore = () => ({ hasCapability: vi.fn().mockReturnValue(true) });
+;(globalThis as any).__useAuthStore = (...args: unknown[]) => (globalThis as any).useAuthStore(...args);
+;(globalThis as any).defineNuxtRouteMiddleware = (fn: unknown) => fn;
+;(globalThis as any).createError = (e: unknown) => e;

@@ -16,6 +16,13 @@ export interface UiRules {
   blanket: boolean;
 }
 
+/** Catalog entry from /me/context (docs/28 §6). */
+export interface CatalogContextEntry {
+  public_id: string;
+  alias: string;
+  name: string;
+}
+
 /** User profile from /me/context. */
 export interface UserProfile {
   principal_id: string;
@@ -30,6 +37,8 @@ export interface UserProfile {
   policy_revision: number;
   csrf_token: string;
   ui_rules?: UiRules;
+  /** Catalogs the principal can read — drives the catalog selector. */
+  catalogs?: CatalogContextEntry[];
 }
 
 // Singleflight for /me/context: app.vue onMounted and the auth middleware can
@@ -130,6 +139,27 @@ export const useAuthStore = defineStore('auth', {
       }
       return !uiRules.blanket;
     },
+
+    /**
+     * Menu access decision (capability + URL rule) — shared by the sidebar,
+     * admin dashboard cards and any navigation surface so they cannot
+     * drift apart. `capabilities` are alternatives (any-of, e.g. a manage
+     * umbrella over a granular read). The server re-checks every API call.
+     */
+    canAccessMenuItem(item: {
+      to: string;
+      capability?: string;
+      capabilities?: string[];
+    }): boolean {
+      const caps = [
+        item.capability,
+        ...(item.capabilities ?? []),
+      ].filter((c): c is string => !!c);
+      return (
+        (caps.length === 0 || caps.some((c) => this.hasCapability(c))) &&
+        this.canUrl(item.to)
+      );
+    },
   },
 });
 
@@ -154,5 +184,12 @@ export function useAuth() {
     fetchContext: () => store.fetchContext(),
     logout: () => store.clear(),
     requireCapability,
+    hasCapability: (cap: string) => store.hasCapability(cap),
+    canUrl: (path: string) => store.canUrl(path),
+    canAccessMenuItem: (item: {
+      to: string;
+      capability?: string;
+      capabilities?: string[];
+    }) => store.canAccessMenuItem(item),
   };
 }

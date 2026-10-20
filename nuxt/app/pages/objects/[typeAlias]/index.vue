@@ -8,7 +8,7 @@
       </div>
       <UButton
         icon="i-lucide-plus"
-        :to="`/objects/${typeAlias}/create`"
+        :to="{ path: `/objects/${typeAlias}/create`, query: route.query.catalog ? { catalog: route.query.catalog } : {} }"
       >
         {{ t('entity.create') }}
       </UButton>
@@ -118,6 +118,14 @@ const { t, te } = useI18n();
 const route = useRoute();
 const toast = useToast();
 const api = useApi();
+const { catalogParams, selected } = useCatalog();
+// A type card carries its own catalog in the route query — an alias may
+// exist in several catalogs, so the row's catalog wins over the header
+// selection for every call on this page.
+const scopedCatalogParams = () => {
+  const q = route.query.catalog;
+  return typeof q === 'string' && q ? { catalog: q } : catalogParams();
+};
 
 const typeAlias = computed(() => route.params.typeAlias as string | undefined);
 const searchQuery = ref('');
@@ -173,7 +181,7 @@ function clearAdvanced() {
 
 async function fetchViewColumns() {
   try {
-    const res = await api.schemas.getTypeView(typeAlias.value ?? 'unknown', 'list');
+    const res = await api.schemas.getTypeView(typeAlias.value ?? 'unknown', 'list', scopedCatalogParams());
     const data = res.data as { columns?: Array<{ alias: string; label_key?: string }> } | undefined;
     if (data?.columns && data.columns.length > 0) {
       columns.value = data.columns.map((c) => ({ alias: c.alias, label_key: c.label_key }));
@@ -200,7 +208,7 @@ async function doSearch() {
       filters: Object.keys(filters).length > 0 ? filters : undefined,
       sort: [{ field: { system: 'display_name' }, direction: 'asc' }],
       page: { size: 10 },
-    });
+    }, scopedCatalogParams());
     rows.value = res.data.rows || [];
     cursor.value = res.data.cursor;
   } catch (e: unknown) {
@@ -221,7 +229,7 @@ async function loadMore() {
       select: columns.value.map((col) => ({ field: queryField(col.alias), alias: col.alias })),
       sort: [{ field: { system: 'display_name' }, direction: 'asc' }],
       page: { size: 10, after: cursor.value },
-    });
+    }, scopedCatalogParams());
     rows.value.push(...(res.data.rows || []));
     cursor.value = res.data.cursor;
   } catch (e: unknown) {
@@ -243,6 +251,26 @@ function formatValue(v: unknown): string {
 }
 
 onMounted(() => {
+  fetchViewColumns();
+  doSearch();
+});
+// Header catalog switch: a pinned ?catalog= follows the new selection so
+// the list stays scoped to what the selector shows; without a pin the
+// list simply refetches with the new scope.
+watch(selected, (alias) => {
+  if (typeof route.query.catalog === 'string' && route.query.catalog) {
+    navigateTo({
+      query: { ...route.query, catalog: alias || undefined },
+      replace: true,
+    });
+  } else {
+    fetchViewColumns();
+    doSearch();
+  }
+});
+// Another type card or a shared link may change the alias or the pin —
+// reload everything scoped to the new scope.
+watch([typeAlias, () => route.query.catalog], () => {
   fetchViewColumns();
   doSearch();
 });

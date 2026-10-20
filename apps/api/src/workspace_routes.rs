@@ -171,6 +171,12 @@ fn required_capabilities(method: &str, path: &str) -> Vec<&'static str> {
         ("GET", ["", "api", "v1", "audit", ..]) => one("audit.read"),
         (_, ["", "api", "v1", "audit", ..]) => one("security.manage"),
 
+        // Catalog registry (docs/28): listing is entity metadata, CRUD is a
+        // dedicated capability with `security.manage` as umbrella so
+        // existing admins keep working.
+        ("GET", ["", "api", "v1", "catalogs", ..]) => one("entity.read"),
+        (_, ["", "api", "v1", "catalogs", ..]) => vec!["catalog.manage", "security.manage"],
+
         // Checks: view catalog/instances, run new checks.
         ("GET", ["", "api", "v1", "checks", ..]) => one("check.view"),
         ("POST", ["", "api", "v1", "checks"]) => one("check.run"),
@@ -290,6 +296,15 @@ pub struct TypeFieldRecord {
     pub identity: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub target_type_id: Option<String>,
+    /// Allowed values for `enum`/`dictionary` fields.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub values: Option<Vec<String>>,
+    /// Measurement unit for `measurement` fields.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unit: Option<String>,
+    /// ISO 4217 currency for `money` fields.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub currency: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -328,6 +343,10 @@ pub struct EntityRecord {
     pub status: String,
     pub created_at: String,
     pub updated_at: String,
+    /// Owning catalog alias (docs/28) — shown by the UI so identical type
+    /// aliases in different catalogs stay distinguishable.
+    #[serde(default)]
+    pub catalog: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fields: Option<serde_json::Value>,
 }
@@ -447,7 +466,7 @@ pub struct GraphDataRecord {
 }
 
 fn view_field(field: &TypeFieldRecord, order: usize) -> Value {
-    serde_json::json!({
+    let mut v = serde_json::json!({
         "predicate_id": field.alias,
         "alias": field.alias,
         "label_key": field.label,
@@ -460,7 +479,29 @@ fn view_field(field: &TypeFieldRecord, order: usize) -> Value {
         "max_cardinality": 1,
         "order": order,
         "target_type_id": field.target_type_id,
-    })
+    });
+    // Enum/dictionary options — the form registry renders a select from
+    // `options`; without it enum fields would be empty dropdowns.
+    if let Some(values) = &field.values {
+        v["options"] = serde_json::json!(values
+            .iter()
+            .map(|val| serde_json::json!({
+                "value": val,
+                "label_key": val,
+            }))
+            .collect::<Vec<_>>());
+    }
+    if field.unit.is_some() || field.currency.is_some() {
+        let mut validation = serde_json::Map::new();
+        if let Some(unit) = &field.unit {
+            validation.insert("unit".to_string(), Value::String(unit.clone()));
+        }
+        if let Some(currency) = &field.currency {
+            validation.insert("currency".to_string(), Value::String(currency.clone()));
+        }
+        v["validation"] = Value::Object(validation);
+    }
+    v
 }
 
 pub(crate) fn build_type_view(schema_type: &SchemaTypeRecord, view_type: &str) -> Value {

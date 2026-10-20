@@ -1,4 +1,4 @@
-import { schemaEn } from '../schema';
+import { catalogEn, schemaEn } from '../schema';
 
 export default {
   "app":   {
@@ -328,6 +328,7 @@ export default {
       },
     },
   },
+  "catalog": catalogEn,
   "schema":   {
     ...schemaEn,
     "title": '模式管理',
@@ -801,6 +802,8 @@ export default {
     "default_managers_desc": '创建申请和查看对象',
     group_class: '组类别',
     class_capability: '系统',
+    tab_data: '数据访问',
+    tab_system: '系统访问',
     inherits: '继承',
     parent_role: '父角色',
     parent_role_hint: '继承父级全部权限，可添加或覆盖',
@@ -809,6 +812,7 @@ export default {
     res_relation: '关系类型',
     res_relation_instance: '具体关系',
     res_url: 'URL',
+    res_url_placeholder: '/admin 或 /api/v1/...',
     res_capability: '系统功能',
     act_all: '所有操作',
     effect_allow: '允许',

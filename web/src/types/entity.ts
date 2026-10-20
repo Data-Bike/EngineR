@@ -23,11 +23,13 @@ export type DedupOutcome = 'created' | 'deduplicated';
 /** Canonical scalar kind (docs/03 §7). */
 export type ScalarKind =
   | 'text'
+  | 'localized_text'
   | 'boolean'
   | 'integer'
   | 'decimal'
   | 'date'
   | 'instant'
+  | 'local_datetime'
   | 'uuid'
   | 'uri'
   | 'email'
@@ -46,15 +48,16 @@ export type CanonicalScalar =
   | { kind: 'decimal'; value: string }
   | { kind: 'date'; value: string }
   | { kind: 'instant'; value: string; source_zone?: string }
+  | { kind: 'local_datetime'; value: string; zone: string }
   | { kind: 'uuid'; value: string }
   | { kind: 'uri'; value: string }
   | { kind: 'email'; local: string; domain: string }
   | { kind: 'phone'; e164: string; extension?: string }
-  | { kind: 'money'; value: string; currency: string }
-  | { kind: 'measurement'; value: string; unit: string }
-  | { kind: 'geo'; value: unknown }
-  | { kind: 'json'; value: unknown }
-  | { kind: 'blob'; ref: string; content_type?: string; size?: number };
+  | { kind: 'money'; amount: string; currency: string }
+  | { kind: 'measurement'; amount: string; unit: string }
+  | { kind: 'geo'; value: string } // canonical GeoJSON text
+  | { kind: 'json'; value: string } // canonical JSON text
+  | { kind: 'blob'; content_hash: string; size_bytes: number; mime: string };
 
 /** Statement object: entity (edge) or scalar (property). */
 export type StatementObject =
@@ -124,6 +127,8 @@ export interface Entity {
   canonical_entity_id?: number;
   classification_id?: string;
   business_unit_id?: string;
+  /** Owning catalog alias (docs/28) — entities never change catalogs. */
+  catalog?: string;
 }
 
 // --- Entity API DTOs (docs/06 §6) ---

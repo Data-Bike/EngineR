@@ -29,18 +29,41 @@
       />
     </div>
 
-    <!-- Right: locale, profile, notifications -->
+    <!-- Right: catalog, locale, profile, notifications -->
     <div class="flex items-center gap-2">
+      <!-- Mobile search entry (the input itself is md+ only) -->
+      <UButton
+        icon="i-lucide-search"
+        color="neutral"
+        variant="ghost"
+        size="sm"
+        class="md:hidden"
+        :aria-label="t('entity.search')"
+        to="/search"
+      />
+
+      <!-- Catalog selector (docs/28 §6): shown when the principal can read
+           more than one catalog. '' = all accessible catalogs. -->
+      <USelect
+        v-if="hasMultiple"
+        v-model="catalogChoice"
+        :items="catalogOptions"
+        size="sm"
+        icon="i-lucide-layers"
+        class="w-44"
+        :aria-label="t('catalog.selector')"
+      />
+
       <!-- Locale selector -->
       <USelect
-        v-model="currentLocale"
+        :model-value="locale"
         :items="localeOptions"
         size="sm"
         @update:model-value="changeLocale"
       />
 
       <!-- Profile dropdown -->
-      <UDropdownMenu :options="profileItems">
+      <UDropdownMenu :items="profileItems">
         <UButton
           color="neutral"
           variant="ghost"
@@ -56,18 +79,28 @@
 <script setup lang="ts">
 const { t, locale, locales, setLocale } = useI18n();
 const { user, isAuthenticated, logout } = useAuth();
+const { available, selected, hasMultiple, select } = useCatalog();
 const searchQuery = ref('');
+
+// Reka SelectItem rejects empty-string values — '' is the "clear" state.
+// The sentinel stands for the empty selection (all accessible catalogs);
+// catalog aliases must start with a latin letter, so '__all__' cannot
+// collide.
+const ALL_CATALOGS = '__all__';
+const catalogChoice = computed({
+  get: () => selected.value || ALL_CATALOGS,
+  set: (v: string) => select(v === ALL_CATALOGS ? '' : (v ?? '')),
+});
+const catalogOptions = computed(() => [
+  { label: t('catalog.all_catalogs'), value: ALL_CATALOGS },
+  ...available.value.map((c) => ({ label: c.name || c.alias, value: c.alias })),
+]);
 
 const emit = defineEmits<{ 'toggle-sidebar': [] }>();
 
 function toggleSidebar() {
   emit('toggle-sidebar');
 }
-
-const currentLocale = computed({
-  get: () => locale.value,
-  set: (v: string) => v,
-});
 
 const localeOptions = computed(() =>
   (locales.value as Array<{ code: string; name: string; dir?: string }>).map((l) => ({

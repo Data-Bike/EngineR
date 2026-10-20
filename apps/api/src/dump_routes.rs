@@ -22,7 +22,10 @@ use rocket::serde::json::Json;
 use rocket::{delete, get, post, routes};
 use serde_json::{json, Value};
 use std::io::{Read, Write};
+use std::panic::{catch_unwind, AssertUnwindSafe};
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::time::Duration;
 
 const PART_FILES: &[&str] = &[
     // Current single-artifact layout.
@@ -50,10 +53,26 @@ fn dump_root() -> PathBuf {
     std::env::var("ENGINER_DUMP_DIR").map_or_else(|_| PathBuf::from("./dumps"), PathBuf::from)
 }
 
+/// The busy check and the "running"/"restoring" marker write are a
+/// single critical section — without it two concurrent requests can
+/// both observe "nothing busy" and run export/restore in parallel.
+static BUSY_LOCK: Mutex<()> = Mutex::new(());
+
+/// A run marked running/restoring whose status marker (or directory,
+/// when the marker was never written — e.g. the process was killed)
+/// hasn't been touched for a day is treated as crashed rather than
+/// live. Otherwise a killed process would wedge every future dump and
+/// refuse deletion forever. Concurrent exports are harmless anyway —
+/// each reads a consistent snapshot into its own directory.
+const STALE_AFTER: Duration = Duration::from_secs(24 * 3600);
+
 fn valid_dump_id(id: &str) -> bool {
     !id.is_empty()
         && id.len() <= 64
         && !id.contains("..")
+        // The first char must be alphanumeric: a bare "." resolves to
+        // the dump root itself (and DELETE would wipe every dump).
+        && id.chars().next().is_some_and(|c| c.is_ascii_alphanumeric())
         && id
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
@@ -96,18 +115,29 @@ fn describe_dump(dir: &Path) -> Value {
     })
 }
 
+/// Is this run still live? A running/restoring marker that went stale
+/// (marker or dir untouched for `STALE_AFTER`) counts as crashed.
+fn is_active(dir: &Path) -> bool {
+    if !matches!(
+        status_of(dir)["status"].as_str(),
+        Some("running" | "restoring")
+    ) {
+        return false;
+    }
+    let touched = std::fs::metadata(dir.join("status.json"))
+        .or_else(|_| std::fs::metadata(dir))
+        .and_then(|m| m.modified())
+        .ok();
+    !touched.is_some_and(|t| t.elapsed().unwrap_or_default() > STALE_AFTER)
+}
+
 /// Export and restore share the same database — never run concurrently.
 fn any_busy() -> bool {
     std::fs::read_dir(dump_root()).is_ok_and(|rd| {
         rd.flatten()
             .map(|e| e.path())
             .filter(|p| p.is_dir())
-            .any(|p| {
-                matches!(
-                    status_of(&p)["status"].as_str(),
-                    Some("running" | "restoring")
-                )
-            })
+            .any(|p| is_active(&p))
     })
 }
 
@@ -120,20 +150,33 @@ fn write_status(dir: &Path, v: &Value) {
 /// The directory contains something restorable: a single-file dump
 /// (either compression) or at least one legacy part.
 fn has_dump_payload(dir: &Path) -> bool {
-    [
-        "dump.ndjson.xz",
-        "dump.ndjson",
-        "01_schema.ndjson.xz",
-        "01_schema.ndjson",
-    ]
-    .iter()
-    .any(|f| dir.join(f).exists())
+    PART_FILES
+        .iter()
+        .filter(|f| f.ends_with(".ndjson") || f.ends_with(".ndjson.xz"))
+        .any(|f| dir.join(f).exists())
 }
 
 /// First dump line must be a JSON object with a `table` field — cheap
 /// sanity gate so an uploaded arbitrary blob can't reach restore.
 fn validate_dump_file(path: &Path) -> bool {
     enginer_dump::probe_dump(path)
+}
+
+/// Second-precision ids can collide on rapid successive calls —
+/// append `-1`, `-2`, … until the name is free.
+fn unique_dir(prefix: &str) -> Option<(String, PathBuf)> {
+    for i in 0..100 {
+        let id = if i == 0 {
+            prefix.to_string()
+        } else {
+            format!("{prefix}-{}", i - 1)
+        };
+        let dir = dump_root().join(&id);
+        if !dir.exists() {
+            return Some((id, dir));
+        }
+    }
+    None
 }
 
 #[post("/admin/dump")]
@@ -143,26 +186,37 @@ pub fn run_dump(cap: CapabilityGuard) -> Result<Json<ApiEnvelope<Value>>, Status
         tracing::warn!("dump requested but ENGINER_DUMP_DATABASE_URL is unset");
         Status::ServiceUnavailable
     })?;
+    let _guard = BUSY_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     if any_busy() {
         return Err(Status::Conflict);
     }
 
-    let dump_id = chrono::Utc::now().format("dump-%Y%m%dT%H%M%SZ").to_string();
-    let dir = dump_root().join(&dump_id);
+    let base = chrono::Utc::now().format("dump-%Y%m%dT%H%M%SZ").to_string();
+    let Some((dump_id, dir)) = unique_dir(&base) else {
+        return Err(Status::Conflict);
+    };
     std::fs::create_dir_all(&dir).map_err(|_| Status::InternalServerError)?;
+    // Mark busy before unlocking — the thread may outlive the request.
+    write_status(
+        &dir,
+        &json!({"status": "running", "started_at": chrono::Utc::now().to_rfc3339()}),
+    );
+    drop(_guard);
     let log_path = dir.join("export.log");
 
     // In-process export on a dedicated OS thread: the dump crate uses
     // async-std/sqlx which has its own global reactor, so block_on here
     // works independently of Rocket's runtime.
     std::thread::spawn(move || {
-        let result = match async_std::task::block_on(enginer_dump::export(&dsn, &dir)) {
-            Ok(()) => json!({
+        let result = match catch_unwind(AssertUnwindSafe(|| {
+            async_std::task::block_on(enginer_dump::export(&dsn, &dir))
+        })) {
+            Ok(Ok(())) => json!({
                 "status": "done",
                 "exit_code": 0,
                 "finished_at": chrono::Utc::now().to_rfc3339(),
             }),
-            Err(e) => {
+            Ok(Err(e)) => {
                 tracing::warn!("dump export failed: {e}");
                 // Mirror the error into export.log — tracing goes to the
                 // API's own log stream, not the dump directory.
@@ -173,6 +227,18 @@ pub fn run_dump(cap: CapabilityGuard) -> Result<Json<ApiEnvelope<Value>>, Status
                     "status": "failed",
                     "exit_code": Value::Null,
                     "error": e.to_string(),
+                    "finished_at": chrono::Utc::now().to_rfc3339(),
+                })
+            }
+            Err(_) => {
+                // A panicking export must not leave the run stuck in
+                // "running" forever — mark it failed so future dumps
+                // aren't blocked by a zombie marker.
+                tracing::error!("dump export panicked");
+                json!({
+                    "status": "failed",
+                    "exit_code": Value::Null,
+                    "error": "export thread panicked",
                     "finished_at": chrono::Utc::now().to_rfc3339(),
                 })
             }
@@ -231,15 +297,9 @@ pub async fn upload_dump(
     let base = chrono::Utc::now()
         .format("upload-%Y%m%dT%H%M%SZ")
         .to_string();
-    // Second-precision ids can collide on rapid successive uploads.
-    let mut dump_id = base.clone();
-    for i in 0..100 {
-        if !dump_root().join(&dump_id).exists() {
-            break;
-        }
-        dump_id = format!("{base}-{i}");
-    }
-    let dir = dump_root().join(&dump_id);
+    let Some((dump_id, dir)) = unique_dir(&base) else {
+        return Err(Status::Conflict);
+    };
     std::fs::create_dir_all(&dir).map_err(|_| Status::InternalServerError)?;
 
     let tmp = dir.join("upload.part");
@@ -314,19 +374,26 @@ pub fn restore_dump(
     if !dir.is_dir() || !has_dump_payload(&dir) {
         return Err(Status::NotFound);
     }
+    let _guard = BUSY_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     if any_busy() {
         return Err(Status::Conflict);
     }
 
-    write_status(&dir, &json!({"status": "restoring"}));
+    write_status(
+        &dir,
+        &json!({"status": "restoring", "started_at": chrono::Utc::now().to_rfc3339()}),
+    );
+    drop(_guard);
     let log_path = dir.join("restore.log");
     std::thread::spawn(move || {
-        let result = match async_std::task::block_on(enginer_dump::import(&dsn, &dir, 500)) {
-            Ok(()) => json!({
+        let result = match catch_unwind(AssertUnwindSafe(|| {
+            async_std::task::block_on(enginer_dump::import(&dsn, &dir, 500))
+        })) {
+            Ok(Ok(())) => json!({
                 "status": "restored",
                 "finished_at": chrono::Utc::now().to_rfc3339(),
             }),
-            Err(e) => {
+            Ok(Err(e)) => {
                 tracing::warn!("dump restore failed: {e}");
                 if let Ok(mut f) = std::fs::OpenOptions::new().append(true).open(&log_path) {
                     let _ = writeln!(f, "restore failed: {e}");
@@ -334,6 +401,14 @@ pub fn restore_dump(
                 json!({
                     "status": "failed",
                     "error": e.to_string(),
+                    "finished_at": chrono::Utc::now().to_rfc3339(),
+                })
+            }
+            Err(_) => {
+                tracing::error!("dump restore panicked");
+                json!({
+                    "status": "failed",
+                    "error": "restore thread panicked",
                     "finished_at": chrono::Utc::now().to_rfc3339(),
                 })
             }
@@ -360,10 +435,7 @@ pub fn delete_dump(
     if !dir.is_dir() {
         return Err(Status::NotFound);
     }
-    if matches!(
-        status_of(&dir)["status"].as_str(),
-        Some("running" | "restoring")
-    ) {
+    if is_active(&dir) {
         return Err(Status::Conflict);
     }
     std::fs::remove_dir_all(&dir).map_err(|_| Status::InternalServerError)?;
@@ -382,4 +454,127 @@ pub fn routes() -> Vec<rocket::Route> {
         restore_dump,
         delete_dump
     ]
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tmp_dir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "enginer-dump-routes-test-{}-{}",
+            std::process::id(),
+            tag
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn dump_id_validation() {
+        for ok in [
+            "dump-20261020T120000Z",
+            "upload-1",
+            "a",
+            "0",
+            "x.y_z",
+            "dump.tar.gz",
+        ] {
+            assert!(valid_dump_id(ok), "{ok} should be valid");
+        }
+        for bad in [
+            "",
+            ".",  // resolves to the dump root itself
+            "..", // traversal
+            "../x",
+            ".hidden", // dot-prefixed ids are reserved
+            "-lead",
+            "_lead",
+            "a/b",
+            "a\\b",
+            "a b",
+            "x".repeat(65).as_str(),
+            "id?",
+            "id#",
+        ] {
+            assert!(!valid_dump_id(bad), "{bad:?} should be invalid");
+        }
+    }
+
+    #[test]
+    fn dot_id_cannot_escape_root() {
+        // Regression: dump_id "." used to pass validation — DELETE
+        // would then remove the whole dump directory tree.
+        assert!(!valid_dump_id("."));
+    }
+
+    #[test]
+    fn payload_detection() {
+        let dir = tmp_dir("payload");
+        assert!(!has_dump_payload(&dir));
+        std::fs::write(dir.join("status.json"), "{}").unwrap();
+        assert!(!has_dump_payload(&dir), "status.json is not a payload");
+        std::fs::write(dir.join("export.log"), "log").unwrap();
+        assert!(!has_dump_payload(&dir), "logs are not a payload");
+        // Legacy parts count too — not just the primary schema part.
+        let legacy = tmp_dir("payload-legacy");
+        std::fs::write(legacy.join("02_data.ndjson"), "{}\n").unwrap();
+        assert!(
+            has_dump_payload(&legacy),
+            "a lone 02_data part is restorable"
+        );
+        std::fs::write(dir.join("dump.ndjson"), "{}\n").unwrap();
+        assert!(has_dump_payload(&dir));
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&legacy);
+    }
+
+    #[test]
+    fn activity_and_staleness() {
+        let dir = tmp_dir("active");
+        // No marker at all → "running" by default, but the dir is
+        // fresh → active.
+        assert!(is_active(&dir));
+        write_status(&dir, &json!({"status": "done"}));
+        assert!(!is_active(&dir));
+        write_status(&dir, &json!({"status": "running"}));
+        assert!(is_active(&dir));
+        write_status(&dir, &json!({"status": "restoring"}));
+        assert!(is_active(&dir));
+        write_status(&dir, &json!({"status": "failed"}));
+        assert!(!is_active(&dir));
+
+        // A running marker last touched over a day ago is a crashed
+        // run, not a live one — it must not wedge future dumps.
+        write_status(&dir, &json!({"status": "running"}));
+        let old = std::time::SystemTime::now() - STALE_AFTER - Duration::from_secs(60);
+        let f = std::fs::File::options()
+            .write(true)
+            .open(dir.join("status.json"))
+            .unwrap();
+        f.set_modified(old).unwrap();
+        drop(f);
+        assert!(!is_active(&dir), "stale marker should not count as busy");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn unique_dir_suffixes() {
+        // unique_dir operates on the real dump root; point it at a
+        // scratch dir via the env override.
+        let root = tmp_dir("uniqueroot");
+        std::env::set_var("ENGINER_DUMP_DIR", &root);
+        let (id0, _) = unique_dir("dump-x").unwrap();
+        assert_eq!(id0, "dump-x");
+        std::fs::create_dir_all(root.join("dump-x")).unwrap();
+        let (id1, _) = unique_dir("dump-x").unwrap();
+        assert_eq!(id1, "dump-x-0");
+        std::fs::create_dir_all(root.join("dump-x-0")).unwrap();
+        let (id2, _) = unique_dir("dump-x").unwrap();
+        assert_eq!(id2, "dump-x-1");
+        std::env::remove_var("ENGINER_DUMP_DIR");
+        let _ = std::fs::remove_dir_all(&root);
+    }
 }

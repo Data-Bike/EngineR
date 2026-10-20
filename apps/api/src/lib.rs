@@ -17,11 +17,13 @@
 mod audit_pg;
 mod auth_routes;
 pub(crate) mod authn;
+mod catalog_routes;
 mod config;
 mod cors;
 pub(crate) mod dataperm;
 mod dump_routes;
 mod entity_pg;
+mod field_kinds;
 mod files_pg;
 mod health;
 mod schema_admin_routes;
@@ -55,6 +57,7 @@ pub fn rocket_build(state: AppState) -> Rocket<Build> {
         .mount("/api/v1", routes![options_preflight])
         .mount("/api/v1", auth_routes::routes())
         .mount("/api/v1", schema_admin_routes::routes())
+        .mount("/api/v1", catalog_routes::routes())
         .mount("/api/v1", entity_pg::routes())
         .mount("/api/v1", audit_pg::routes())
         .mount("/api/v1", skr_pg::routes())
@@ -129,6 +132,13 @@ impl rocket::fairing::Fairing for AuditFairing {
             "denied"
         };
         let action = format!("{} {}", req.method().as_str(), path);
+        // Entity-scoped requests get `resource_kind=entity` + the real
+        // resource_id so insert_event can tag the event with the entity's
+        // catalog (docs/28 §8) and audit.query can filter by catalog.
+        let entity_pid = path
+            .strip_prefix("/api/v1/entities/")
+            .and_then(|rest| rest.split('/').next())
+            .and_then(|seg| seg.parse::<uuid::Uuid>().ok());
         rocket::tokio::spawn(audit_pg::record_audit_event(
             exec,
             ctx.tenant_id,
@@ -136,17 +146,18 @@ impl rocket::fairing::Fairing for AuditFairing {
             Some(ctx.session_id),
             "http_request",
             action,
-            "http",
-            None,
+            if entity_pid.is_some() {
+                "entity"
+            } else {
+                "http"
+            },
+            entity_pid,
             Some("allow"),
             outcome,
             None,
             serde_json::json!({
                 "status": status.code,
-                "public_id": path
-                    .strip_prefix("/api/v1/entities/")
-                    .filter(|rest| rest.parse::<uuid::Uuid>().is_ok())
-                    .map(str::to_string),
+                "public_id": entity_pid.map(|u| u.to_string()),
             }),
         ));
     }
