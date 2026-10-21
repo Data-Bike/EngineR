@@ -32,8 +32,13 @@
     </div>
 
     <!-- Unsaved changes guard (docs/17 §5) -->
-    <div v-if="hasUnsavedChanges" class="text-sm text-[var(--ui-text-muted)]">
-      *
+    <div
+      v-if="hasUnsavedChanges"
+      class="text-sm text-[var(--ui-text-muted)] flex items-center gap-1"
+      role="status"
+    >
+      <UIcon name="i-lucide-asterisk" class="size-3" aria-hidden="true" />
+      <span>{{ t('entity.unsaved_indicator') }}</span>
     </div>
 
     <!-- Validation errors display -->
@@ -62,10 +67,28 @@
       </UButton>
     </div>
   </form>
+
+  <!-- Unsaved-changes confirm on SPA navigation (async route guard) -->
+  <UModal v-model:open="leaveConfirmOpen" :title="t('entity.unsaved_indicator')">
+    <template #body>
+      <UAlert color="warning" variant="subtle" icon="i-lucide-alert-triangle"
+              :description="t('entity.unsaved_changes')" />
+    </template>
+    <template #footer>
+      <div class="flex justify-end gap-2">
+        <UButton variant="ghost" data-testid="leave-cancel" @click="cancelLeave">
+          {{ t('common.cancel') }}
+        </UButton>
+        <UButton color="warning" data-testid="leave-confirm" @click="confirmLeave">
+          {{ t('common.confirm') }}
+        </UButton>
+      </div>
+    </template>
+  </UModal>
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import type {
   FieldDefinition,
   FieldValidationError,
@@ -94,7 +117,7 @@ const { t } = useI18n();
 // --- State ---
 const values = ref<Record<string, unknown>>({ ...props.initialValues ?? {} });
 const collapsedSections = ref<Set<string>>(new Set());
-const submitted = ref(false);
+const saved = ref(false);
 
 // --- Computed ---
 const visibleSections = computed(() =>
@@ -104,7 +127,7 @@ const visibleSections = computed(() =>
 );
 
 const hasUnsavedChanges = computed(() => {
-  if (submitted.value) return false;
+  if (saved.value) return false;
   if (!props.initialValues) return Object.keys(values.value).length > 0;
   return JSON.stringify(values.value) !== JSON.stringify(props.initialValues);
 });
@@ -137,7 +160,6 @@ function onSubmit() {
     predicate_id: predicateId,
     value,
   }));
-  submitted.value = true;
   emit('submit', {
     type_id: props.view.type_id,
     schema_revision: props.view.schema_revision,
@@ -154,11 +176,50 @@ function onSaveDraft() {
   emit('saveDraft', { ...values.value });
 }
 
-// Warn before navigate away with unsaved changes (docs/17 §5)
-onBeforeRouteLeave(() => {
+defineExpose({ markSaved: () => { saved.value = true; } });
+
+// Warn before navigate away with unsaved changes (docs/17 §5).
+// onBeforeRouteLeave covers SPA navigation; beforeunload is the fallback
+// for full-document unload (refresh, tab close, external link).
+function onBeforeUnload(e: BeforeUnloadEvent) {
   if (hasUnsavedChanges.value) {
-    return window.confirm(t('entity.unsaved_changes'));
+    e.preventDefault();
+    e.returnValue = true;
   }
-  return true;
+}
+
+onMounted(() => window.addEventListener('beforeunload', onBeforeUnload));
+onBeforeUnmount(() => window.removeEventListener('beforeunload', onBeforeUnload));
+
+// Async guard: vue-router accepts a Promise — resolve it from the modal's
+// buttons so navigation blocks until the user decides (no native confirm()).
+const leaveConfirmOpen = ref(false);
+let leaveResolve: ((proceed: boolean) => void) | null = null;
+onBeforeRouteLeave(() => {
+  if (!hasUnsavedChanges.value) {
+    return true;
+  }
+  leaveConfirmOpen.value = true;
+  return new Promise<boolean>((resolve) => {
+    leaveResolve = resolve;
+  });
+});
+function confirmLeave() {
+  leaveConfirmOpen.value = false;
+  leaveResolve?.(true);
+  leaveResolve = null;
+}
+function cancelLeave() {
+  leaveConfirmOpen.value = false;
+  leaveResolve?.(false);
+  leaveResolve = null;
+}
+// Dismissing the modal (ESC / overlay click) must resolve the pending
+// guard as "stay" — otherwise the navigation hangs unresolved.
+watch(leaveConfirmOpen, (open) => {
+  if (!open && leaveResolve) {
+    leaveResolve(false);
+    leaveResolve = null;
+  }
 });
 </script>

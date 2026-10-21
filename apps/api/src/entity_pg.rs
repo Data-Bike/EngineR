@@ -12,6 +12,7 @@ use crate::workspace_routes::{
     RelationPreviewField, RelationRecord, RelationThroughEdge,
 };
 use crate::AppState;
+use crate::ApiError;
 use enginer_db_runtime::{AsyncStdDbExecutor, DbError, Deadline};
 use enginer_domain::{CanonicalScalar, PredicateId, StatementObject, TenantId};
 use enginer_persistence::RlsContext;
@@ -39,16 +40,6 @@ pub(crate) fn http_err(code: u16, msg: &str) -> DbError {
     }
 }
 
-pub(crate) fn to_status(e: &DbError) -> Status {
-    if let DbError::Other { message } = e {
-        if let Some(rest) = message.strip_prefix("HTTP") {
-            if let Some(code) = rest.split(':').next().and_then(|c| c.parse::<u16>().ok()) {
-                return Status::from_code(code).unwrap_or(Status::InternalServerError);
-            }
-        }
-    }
-    Status::InternalServerError
-}
 
 pub(crate) async fn rls_tx<'e>(
     pool: &'e PgPool,
@@ -121,12 +112,58 @@ pub(crate) fn wire_text(v: &Value) -> Option<String> {
         Value::String(s) => Some(s.clone()),
         Value::Number(n) => Some(n.to_string()),
         Value::Bool(b) => Some(b.to_string()),
-        Value::Object(o) => o
-            .get("value")
-            .or_else(|| o.get("value_nfc"))
-            .and_then(wire_text),
+        Value::Object(o) => {
+            // Structured scalar wire shapes (money {amount,currency},
+            // local datetime {datetime,zone}, phone {e164,extension}): their
+            // text form feeds display names, search and `where` evaluation —
+            // falling through to None would silently exclude these kinds.
+            o.get("value")
+                .or_else(|| o.get("value_nfc"))
+                .and_then(wire_text)
+                .or_else(|| {
+                    o.get("amount").and_then(|a| {
+                        let amount = wire_text(a)?;
+                        Some(match o.get("currency").or_else(|| o.get("unit")) {
+                            Some(u) => format!("{amount} {}", wire_text(u)?),
+                            None => amount,
+                        })
+                    })
+                })
+                .or_else(|| o.get("datetime").and_then(wire_text))
+                .or_else(|| o.get("e164").and_then(wire_text))
+        }
         _ => None,
     }
+}
+
+/// Human-readable form of a statement object for the revision diff:
+/// scalars via `wire_text`, entity refs resolved to their public_id.
+async fn object_display(
+    tx: &mut Transaction<'_, Postgres>,
+    tenant: uuid::Uuid,
+    obj: &Value,
+) -> Result<Option<String>, DbError> {
+    if let Some(t) = wire_text(obj) {
+        return Ok(Some(t));
+    }
+    if obj.get("object_kind").and_then(Value::as_str) == Some("entity") {
+        if let Some(eid) = obj.get("entity_id").and_then(Value::as_i64) {
+            let row: Option<(uuid::Uuid,)> = sqlx::query_as(
+                "SELECT public_id FROM core.entity WHERE tenant_id=$1 AND entity_id=$2",
+            )
+            .bind(tenant)
+            .bind(eid)
+            .fetch_optional(&mut **tx)
+            .await
+            .map_err(db_err)?;
+            return Ok(row.map(|(p,)| p.to_string()));
+        }
+    }
+    Ok(if obj.is_null() {
+        None
+    } else {
+        Some(obj.to_string())
+    })
 }
 
 pub(crate) fn display_name_of(
@@ -384,8 +421,10 @@ pub(crate) async fn next_val(
 pub(crate) async fn input_to_object(
     tx: &mut Transaction<'_, Postgres>,
     tenant: uuid::Uuid,
+    perm: &crate::dataperm::DataPerm,
     is_edge: bool,
     input: &Value,
+    expected_range: Option<&str>,
 ) -> Result<StatementObject, DbError> {
     let kind = input.get("kind").and_then(Value::as_str).unwrap_or("text");
     if is_edge
@@ -399,22 +438,130 @@ pub(crate) async fn input_to_object(
             .or_else(|| input.get("value"))
             .and_then(Value::as_str)
             .ok_or_else(|| http_err(422, "edge value requires entity_public_id"))?;
-        let target: Option<(i64,)> = sqlx::query_as(
-            "SELECT entity_id FROM core.entity WHERE tenant_id = $1 AND public_id = $2",
-        )
-        .bind(tenant)
-        .bind(
-            public
-                .parse::<uuid::Uuid>()
-                .map_err(|_| http_err(422, "bad target id"))?,
-        )
-        .fetch_optional(&mut **tx)
-        .await
-        .map_err(db_err)?;
-        let (eid,) = target.ok_or_else(|| http_err(422, "target entity not found"))?;
-        return Ok(StatementObject::Entity(enginer_domain::EntityId(eid)));
+        let target: Option<EntityRowTuple> =
+            sqlx::query_as(&format!("{ENTITY_SELECT} AND e.public_id = $2"))
+                .bind(tenant)
+                .bind(
+                    public
+                        .parse::<uuid::Uuid>()
+                        .map_err(|_| http_err(422, "bad target id"))?,
+                )
+                .fetch_optional(&mut **tx)
+                .await
+                .map_err(db_err)?;
+        // Hidden targets are reported exactly like missing ones — the
+        // same 422, so a denied entity is not an existence oracle.
+        let row = target.ok_or_else(|| http_err(422, "target entity not found"))?;
+        let erow = row_to_entity_row(row);
+        let ckeys = catalog_keys(&erow);
+        let ckey_refs: [&str; 2] = [&ckeys[0], &ckeys[1]];
+        if !perm.can_catalog(&ckey_refs, crate::dataperm::Op::Read)
+            || !entity_visible(perm, &erow)
+        {
+            return Err(http_err(422, "target entity not found"));
+        }
+        // Schema integrity (docs/03: domain/range check against the
+        // command's schema revision): a retired entity or a wrong-typed
+        // target must never be linked.
+        if erow.retired_at.is_some() {
+            return Err(http_err(422, "target entity retired"));
+        }
+        if let Some(range) = expected_range {
+            if !type_ref_matches(&erow, range) {
+                return Err(http_err(422, "edge.range"));
+            }
+        }
+        return Ok(StatementObject::Entity(enginer_domain::EntityId(erow.entity_id)));
     }
     Ok(StatementObject::Scalar(input_to_scalar(input)?))
+}
+
+/// Type reference comparison: schema `domain`/`range` entries may name the
+/// type by stable alias or type_id uuid — both match.
+fn type_ref_matches(erow: &EntityRow, reference: &str) -> bool {
+    erow.type_alias == reference || erow.type_id.to_string() == reference
+}
+
+/// Edge constraints declared by the published schema revision:
+/// `stable_alias -> (domain, range)` type references (docs/03 domain/range
+/// enforcement). Entries without a declared bound are simply absent.
+async fn load_edge_constraints(
+    tx: &mut Transaction<'_, Postgres>,
+    tenant: uuid::Uuid,
+    revision: Option<i64>,
+) -> Result<HashMap<String, (String, String)>, DbError> {
+    let Some(rev) = revision else {
+        return Ok(HashMap::new());
+    };
+    let content: Option<Value> = sqlx::query_scalar(
+        "SELECT content FROM meta.schema_revision
+         WHERE tenant_id=$1 AND revision_id=$2",
+    )
+    .bind(tenant)
+    .bind(rev)
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(db_err)?;
+    let mut out = HashMap::new();
+    if let Some(preds) = content
+        .as_ref()
+        .and_then(|c| c.get("predicates"))
+        .and_then(Value::as_array)
+    {
+        for p in preds {
+            if !p.get("is_edge").and_then(Value::as_bool).unwrap_or(false) {
+                continue;
+            }
+            let Some(alias) = p
+                .get("stable_alias")
+                .or_else(|| p.get("alias"))
+                .and_then(Value::as_str)
+            else {
+                continue;
+            };
+            let domain = p.get("domain").and_then(Value::as_str).unwrap_or_default();
+            let range = p.get("range").and_then(Value::as_str).unwrap_or_default();
+            out.insert(alias.to_string(), (domain.to_string(), range.to_string()));
+        }
+    }
+    Ok(out)
+}
+
+/// Domain check for an edge write: when the schema declares a `domain`
+/// the subject's type must match it (alias or id). Empty = unconstrained.
+fn check_edge_domain(
+    domain: &str,
+    subject_type_id: uuid::Uuid,
+    subject_type_alias: &str,
+) -> Result<(), DbError> {
+    if !domain.is_empty()
+        && domain != subject_type_alias
+        && domain != subject_type_id.to_string()
+    {
+        return Err(http_err(422, "edge.domain"));
+    }
+    Ok(())
+}
+
+/// Scalar payload bounds: a single statement object is a jsonb cell, and
+/// values also feed display names, identity keys and fingerprints — an
+/// unbounded 10k-char string bloats all of them and is never a legitimate
+/// scalar. Generous but finite caps, counted in chars not bytes.
+const MAX_SCALAR_TEXT: usize = 2048;
+const MAX_SCALAR_JSON: usize = 65536;
+
+fn bounded_text(s: String, what: &str) -> Result<String, DbError> {
+    if s.chars().count() > MAX_SCALAR_TEXT {
+        return Err(http_err(422, &format!("{what} exceeds {MAX_SCALAR_TEXT} chars")));
+    }
+    Ok(s)
+}
+
+fn bounded_json(s: String, what: &str) -> Result<String, DbError> {
+    if s.chars().count() > MAX_SCALAR_JSON {
+        return Err(http_err(422, &format!("{what} exceeds {MAX_SCALAR_JSON} chars")));
+    }
+    Ok(s)
 }
 
 /// Convert a wire `{kind, ...}` value into a canonical scalar. Pure — no DB
@@ -634,11 +781,14 @@ pub(crate) fn input_to_scalar(input: &Value) -> Result<CanonicalScalar, DbError>
                 .ok_or_else(|| http_err(422, "bad uuid value"))?,
         },
         "uri" | "url" => CanonicalScalar::Uri {
-            value: input
-                .get("value")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string(),
+            value: bounded_text(
+                input
+                    .get("value")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_string(),
+                "uri value",
+            )?,
         },
         "email" => {
             let (local, domain) = if input.get("local").is_some() || input.get("domain").is_some() {
@@ -686,8 +836,11 @@ pub(crate) fn input_to_scalar(input: &Value) -> Result<CanonicalScalar, DbError>
                 .map(str::to_string),
         },
         "json" | "address" | "contact" => CanonicalScalar::Json {
-            value: serde_json::to_string(&input.get("value").cloned().unwrap_or(Value::Null))
-                .unwrap_or_else(|_| "null".to_string()),
+            value: bounded_json(
+                serde_json::to_string(&input.get("value").cloned().unwrap_or(Value::Null))
+                    .unwrap_or_else(|_| "null".to_string()),
+                "json value",
+            )?,
         },
         "tags" | "multi_value" | "repeating_group" => {
             // Collection kinds always store a JSON array — a bare string is
@@ -705,31 +858,40 @@ pub(crate) fn input_to_scalar(input: &Value) -> Result<CanonicalScalar, DbError>
                 other => Value::Array(vec![other]),
             };
             CanonicalScalar::Json {
-                value: serde_json::to_string(&arr).unwrap_or_else(|_| "[]".to_string()),
+                value: bounded_json(
+                    serde_json::to_string(&arr).unwrap_or_else(|_| "[]".to_string()),
+                    "collection value",
+                )?,
             }
         }
         "enum" | "dictionary" => CanonicalScalar::Text {
-            value_nfc: match input.get("value") {
-                Some(Value::String(s)) => s.clone(),
-                Some(v @ (Value::Number(_) | Value::Bool(_))) => v.to_string(),
-                _ => return Err(http_err(422, "enum value must be a string")),
-            },
+            value_nfc: bounded_text(
+                match input.get("value") {
+                    Some(Value::String(s)) => s.clone(),
+                    Some(v @ (Value::Number(_) | Value::Bool(_))) => v.to_string(),
+                    _ => return Err(http_err(422, "enum value must be a string")),
+                },
+                "enum value",
+            )?,
             language_tag: None,
         },
         "geo" => CanonicalScalar::Geo {
-            value: match input.get("value") {
-                Some(v) if v.is_object() || v.is_array() => {
-                    serde_json::to_string(v).unwrap_or_else(|_| "null".to_string())
-                }
-                // String form must still be JSON — a bare "Moscow" is not
-                // GeoJSON and would corrupt downstream parsers silently.
-                Some(Value::String(s))
-                    if !s.trim().is_empty() && serde_json::from_str::<Value>(s).is_ok() =>
-                {
-                    s.clone()
-                }
-                _ => return Err(http_err(422, "geo value requires GeoJSON")),
-            },
+            value: bounded_json(
+                match input.get("value") {
+                    Some(v) if v.is_object() || v.is_array() => {
+                        serde_json::to_string(v).unwrap_or_else(|_| "null".to_string())
+                    }
+                    // String form must still be JSON — a bare "Moscow" is not
+                    // GeoJSON and would corrupt downstream parsers silently.
+                    Some(Value::String(s))
+                        if !s.trim().is_empty() && serde_json::from_str::<Value>(s).is_ok() =>
+                    {
+                        s.clone()
+                    }
+                    _ => return Err(http_err(422, "geo value requires GeoJSON")),
+                },
+                "geo value",
+            )?,
         },
         "blob" | "file" | "document" => {
             let hash_raw = input
@@ -761,11 +923,15 @@ pub(crate) fn input_to_scalar(input: &Value) -> Result<CanonicalScalar, DbError>
             }
         }
         "localized_text" | "ltext" => CanonicalScalar::Text {
-            value_nfc: input
-                .get("value")
-                .and_then(Value::as_str)
-                .unwrap_or_default()
-                .to_string(),
+            value_nfc: bounded_text(
+                nfc_text(
+                    input
+                        .get("value")
+                        .and_then(Value::as_str)
+                        .unwrap_or_default(),
+                ),
+                "localized text",
+            )?,
             language_tag: input
                 .get("language_tag")
                 .or_else(|| input.get("language"))
@@ -792,18 +958,26 @@ pub(crate) fn input_to_scalar(input: &Value) -> Result<CanonicalScalar, DbError>
         },
         _ => CanonicalScalar::Text {
             // Objects/arrays keep their JSON form rather than collapsing to
-            // an empty string — lenient, but no silent data loss.
-            value_nfc: input
-                .get("value")
-                .map(|v| match v {
-                    Value::String(s) => s.clone(),
-                    Value::Null => String::new(),
-                    other => other.to_string(),
-                })
-                .unwrap_or_default(),
+            // an empty string — lenient, but no silent data loss. Stored
+            // NFC + trimmed so `value_nfc` is what its name claims.
+            value_nfc: bounded_text(
+                nfc_text(&match input.get("value") {
+                    Some(Value::String(s)) => s.clone(),
+                    Some(Value::Null) | None => String::new(),
+                    Some(other) => other.to_string(),
+                }),
+                "text value",
+            )?,
             language_tag: None,
         },
     })
+}
+
+/// Canonical text form used for storage (`value_nfc`) and comparisons:
+/// trim + real NFC so canonically-equivalent inputs produce one value.
+pub(crate) fn nfc_text(s: &str) -> String {
+    use unicode_normalization::UnicodeNormalization;
+    s.trim().nfc().collect()
 }
 
 /// Extract a normalized identity component from a canonical scalar (mirrors
@@ -818,9 +992,14 @@ fn scalar_key_component(s: &CanonicalScalar) -> Option<String> {
         CanonicalScalar::Uri { value } => value.clone(),
         _ => return None,
     };
+    // Identity components are canonical, not display text: NFC + trim so the
+    // same logical value cannot evade dedup through composed/decomposed
+    // unicode or surrounding whitespace (docs/04 §7: "UTF-8 NFC + trim";
+    // casefold belongs to the *search* key, not the identity key).
+    let canonical = nfc_text(&component);
     // A blank component is equivalent to a missing one: hashing "" would make
     // every entity with an empty optional identity field collide.
-    (!component.trim().is_empty()).then_some(component)
+    (!canonical.is_empty()).then_some(canonical)
 }
 
 /// Compute (policy_id, key) pairs for an entity whose scalar objects are
@@ -878,9 +1057,14 @@ async fn recompute_identity_keys(
     .await
     .map_err(db_err)?;
 
+    // ORDER BY makes the per-predicate collapse below deterministic: when a
+    // predicate holds several active scalar rows (multi-valued fields, or the
+    // union left by a merge), the newest statement wins — without ordering
+    // Postgres may return them in any physical order.
     let rows: Vec<(uuid::Uuid, Value)> = sqlx::query_as(
         "SELECT predicate, object FROM core.statement
-         WHERE tenant_id=$1 AND subject=$2 AND status='active' AND object_kind='scalar'",
+         WHERE tenant_id=$1 AND subject=$2 AND status='active' AND object_kind='scalar'
+         ORDER BY statement_id",
     )
     .bind(tenant)
     .bind(entity_id)
@@ -943,13 +1127,19 @@ async fn recompute_identity_keys(
         }
     }
 
-    // Insert or reactivate keys.
+    // Insert or reactivate keys. The DO UPDATE's WHERE is the race guard:
+    // it fires only when the conflict slot is inactive or already ours —
+    // a slot actively owned by another entity yields 0 rows, and that is a
+    // real collision (the earlier SELECT could not see a concurrent
+    // uncommitted insert) that must abort the update, not steal the key.
     for (policy_id, key) in &new_keys {
-        sqlx::query(
+        let res = sqlx::query(
             "INSERT INTO core.identity_key (tenant_id, type_id, policy_id, key, entity_id, status)
              VALUES ($1,$2,$3,$4,$5,0)
              ON CONFLICT (tenant_id, type_id, policy_id, key)
-             DO UPDATE SET status=0, entity_id=$5",
+             DO UPDATE SET status=0, entity_id=$5
+             WHERE core.identity_key.status <> 0
+                OR core.identity_key.entity_id = $5",
         )
         .bind(tenant)
         .bind(type_id)
@@ -959,6 +1149,9 @@ async fn recompute_identity_keys(
         .execute(&mut **tx)
         .await
         .map_err(db_err)?;
+        if res.rows_affected() == 0 {
+            return Err(http_err(409, "identity collision"));
+        }
     }
     Ok(())
 }
@@ -972,6 +1165,7 @@ async fn insert_statement(
     predicate: uuid::Uuid,
     object: &StatementObject,
     valid_from: chrono::DateTime<chrono::Utc>,
+    valid_to: Option<chrono::DateTime<chrono::Utc>>,
     actor: uuid::Uuid,
     revision: i64,
 ) -> Result<(), DbError> {
@@ -983,7 +1177,7 @@ async fn insert_statement(
         object,
         &enginer_domain::ValidPeriod {
             valid_from,
-            valid_to: None,
+            valid_to,
         },
         None,
         None,
@@ -992,8 +1186,8 @@ async fn insert_statement(
     sqlx::query(
         "INSERT INTO core.statement
          (tenant_id, statement_id, subject, catalog_id, predicate, object, object_kind,
-          valid_from, recorded_at, provenance, confidence, status, revision, fingerprint)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,'1.0','active',$11,$12)",
+          valid_from, valid_to, recorded_at, provenance, confidence, status, revision, fingerprint)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'1.0','active',$12,$13)",
     )
     .bind(tenant)
     .bind(stmt_id)
@@ -1003,6 +1197,7 @@ async fn insert_statement(
     .bind(obj_json)
     .bind(if object.is_edge() { "entity" } else { "scalar" })
     .bind(valid_from)
+    .bind(valid_to)
     .bind(valid_from)
     .bind(serde_json::json!({ "kind": "user", "principal_id": actor }))
     .bind(revision)
@@ -1163,30 +1358,24 @@ pub(crate) async fn optional_catalog(
 /// The published schema revision of a catalog (docs/28 §3). When `catalog`
 /// is `None` the first published revision tenant-wide is returned —
 /// kept for legacy call sites that predate catalogs.
+/// Latest published schema revision **of the given catalog**. Callers must
+/// always scope to a catalog — schema streams are catalog-local, and a
+/// tenant-wide pick would silently pin the wrong catalog's revision.
 async fn published_schema_revision(
     tx: &mut Transaction<'_, Postgres>,
     tenant: uuid::Uuid,
-    catalog: Option<i64>,
+    catalog_id: i64,
 ) -> Result<Option<i64>, DbError> {
-    let row: Option<(i64,)> = match catalog {
-        Some(cid) => sqlx::query_as(
-            "SELECT revision_id FROM meta.schema_revision
-                 WHERE tenant_id=$1 AND catalog_id=$2 AND state='published'",
-        )
-        .bind(tenant)
-        .bind(cid)
-        .fetch_optional(&mut **tx)
-        .await
-        .map_err(db_err)?,
-        None => sqlx::query_as(
-            "SELECT revision_id FROM meta.schema_revision
-                 WHERE tenant_id=$1 AND state='published' LIMIT 1",
-        )
-        .bind(tenant)
-        .fetch_optional(&mut **tx)
-        .await
-        .map_err(db_err)?,
-    };
+    let row: Option<(i64,)> = sqlx::query_as(
+        "SELECT revision_id FROM meta.schema_revision
+             WHERE tenant_id=$1 AND catalog_id=$2 AND state='published'
+             ORDER BY revision_id DESC LIMIT 1",
+    )
+    .bind(tenant)
+    .bind(catalog_id)
+    .fetch_optional(&mut **tx)
+    .await
+    .map_err(db_err)?;
     Ok(row.map(|r| r.0))
 }
 
@@ -1303,25 +1492,25 @@ async fn resolve_predicates(
     .map_err(db_err)?;
     let mut map = HashMap::new();
     for (alias, pid, edge) in rows {
+        // Key by predicate_id::text too — a caller passing the raw UUID
+        // resolves to the same metadata row (with the real is_edge flag),
+        // not to a client-supplied kind.
+        map.insert(pid.to_string(), (pid, edge));
         map.insert(alias, (pid, edge));
     }
     Ok(map)
 }
 
-fn exec_of(state: &State<AppState>) -> Result<Arc<AsyncStdDbExecutor>, Status> {
-    state.db_executor.clone().ok_or(Status::ServiceUnavailable)
+fn exec_of(state: &State<AppState>) -> Result<Arc<AsyncStdDbExecutor>, ApiError> {
+    state.db_executor.clone().ok_or_else(|| ApiError::from(Status::ServiceUnavailable))
 }
 
-fn run_err(e: DbError) -> Status {
-    let status = to_status(&e);
-    if status.code >= 500 {
-        tracing::error!(error = %e, "entity_pg db error");
-    }
-    status
+fn run_err(e: DbError) -> ApiError {
+    ApiError::of_db(&e)
 }
 
-fn json_to<T: serde::de::DeserializeOwned>(v: Value) -> Result<T, Status> {
-    serde_json::from_value(v).map_err(|_| Status::InternalServerError)
+fn json_to<T: serde::de::DeserializeOwned>(v: Value) -> Result<T, ApiError> {
+    serde_json::from_value(v).map_err(|_| ApiError::from(Status::InternalServerError))
 }
 
 // ---------------------------------------------------------------------------
@@ -1337,14 +1526,32 @@ pub async fn pg_query_entities(
     state: &State<AppState>,
     r#type: Option<String>,
     search: Option<String>,
-    limit: Option<u32>,
+    limit: Option<String>,
     cursor: Option<String>,
     catalog: Option<String>,
-) -> Result<Json<ApiEnvelope<Vec<EntityRecord>>>, Status> {
+) -> Result<Json<ApiEnvelope<Vec<EntityRecord>>>, ApiError> {
     let exec = exec_of(state)?;
     let ctx = cap.ctx.clone();
-    let limit = limit.unwrap_or(50).clamp(1, 200) as i64;
-    let after: i64 = cursor.and_then(|c| c.parse().ok()).unwrap_or(0);
+    // Strict like `cursor`: out-of-range or malformed limits are a 422,
+    // never a silent clamp to some default page size.
+    let limit: i64 = match limit.as_deref() {
+        None => 50,
+        Some(raw) => raw
+            .parse::<i64>()
+            .ok()
+            .filter(|v| (1..=200).contains(v))
+            .ok_or_else(|| ApiError::coded(Status::UnprocessableEntity, "limit.invalid"))?,
+    };
+    let after: i64 = match cursor.as_deref() {
+        None => 0,
+        // Internal ids are positive — a negative or non-numeric cursor is
+        // rejected loudly rather than silently clamped to the first page.
+        Some(c) => c
+            .parse::<i64>()
+            .ok()
+            .filter(|v| *v >= 0)
+            .ok_or_else(|| ApiError::coded(Status::UnprocessableEntity, "cursor.invalid"))?,
+    };
     let search = search.map(|s| s.trim().to_lowercase());
     let v = exec
         .run(Deadline::in_secs(10), move |pool| async move {
@@ -1359,8 +1566,14 @@ pub async fn pg_query_entities(
             }
             let catalog_id = cat.as_ref().map(|c| c.catalog_id);
             // When searching, load a bounded batch and filter in memory —
-            // display_name and field values live in statement rows.
-            let fetch_limit = if search.is_some() { 2000 } else { limit };
+            // display_name and field values live in statement rows. The
+            // non-search path fetches one row past the page so the keyset
+            // cursor (internal entity_id) can be handed back to the caller.
+            // A full search window means unseen candidates exist beyond it:
+            // the response then carries meta.truncated so callers know the
+            // ranked result set is partial rather than silently wrong.
+            const SEARCH_WINDOW: i64 = 2000;
+            let fetch_limit = if search.is_some() { SEARCH_WINDOW } else { limit + 1 };
             let rows: Vec<EntityRowTuple> = if let Some(t) = r#type.as_deref() {
                 sqlx::query_as(&format!(
                     "{ENTITY_SELECT} AND (td.stable_alias = $2 OR e.type_id::text = $2)
@@ -1390,7 +1603,18 @@ pub async fn pg_query_entities(
                 .await
                 .map_err(db_err)?
             };
-            let rows: Vec<EntityRow> = rows.into_iter().map(row_to_entity_row).collect();
+            let mut rows: Vec<EntityRow> = rows.into_iter().map(row_to_entity_row).collect();
+            // Keyset cursor: non-search fetched limit+1 — the extra row
+            // proves a next page exists; resume after THIS page's last id.
+            // Search scans a 2000-row window; when the window filled there
+            // may be more candidates, so resume after the last fetched id.
+            let mut next_cursor: Option<String> = None;
+            if search.is_none() && rows.len() as i64 > limit {
+                rows.truncate(limit as usize);
+                next_cursor = rows.last().map(|r| r.entity_id.to_string());
+            } else if search.is_some() && rows.len() as i64 >= fetch_limit {
+                next_cursor = rows.last().map(|r| r.entity_id.to_string());
+            }
             let mut records = record_for(&mut tx, ctx.tenant_id, &rows, &perm).await?;
             if let Some(needle) = &search {
                 records.retain(|e| {
@@ -1407,13 +1631,24 @@ pub async fn pg_query_entities(
                 records.sort_by(|a, b| a.display_name.cmp(&b.display_name));
                 records.truncate(limit as usize);
             }
-            ok_json(serde_json::to_value(records).unwrap_or(Value::Null))
+            ok_json(json!({
+                "records": records,
+                "next_cursor": next_cursor,
+                "truncated": search.is_some() && rows.len() as i64 >= SEARCH_WINDOW,
+            }))
         })
         .await
         .map_err(run_err)?;
+    let mut m = meta();
+    if let Some(c) = v["next_cursor"].as_str() {
+        m["next_cursor"] = serde_json::json!(c);
+    }
+    if v["truncated"].as_bool() == Some(true) {
+        m["truncated"] = serde_json::json!(true);
+    }
     Ok(Json(ApiEnvelope {
-        data: json_to(v)?,
-        meta: meta(),
+        data: json_to(v["records"].clone())?,
+        meta: m,
     }))
 }
 
@@ -1425,10 +1660,10 @@ pub async fn pg_get_entity(
     state: &State<AppState>,
     public_id: String,
     catalog: Option<String>,
-) -> Result<Json<ApiEnvelope<EntityRecord>>, Status> {
+) -> Result<Json<ApiEnvelope<EntityRecord>>, ApiError> {
     let exec = exec_of(state)?;
     let ctx = cap.ctx.clone();
-    let pid: uuid::Uuid = public_id.parse().map_err(|_| Status::NotFound)?;
+    let pid: uuid::Uuid = public_id.parse().map_err(|_| ApiError::from(Status::NotFound))?;
     let v = exec
         .run(Deadline::in_secs(10), move |pool| async move {
             let mut tx = rls_tx(&pool, &ctx, "entity.get").await?;
@@ -1479,7 +1714,7 @@ pub async fn pg_create_entity(
     state: &State<AppState>,
     catalog: Option<String>,
     body: Json<Value>,
-) -> Result<Json<ApiEnvelope<Value>>, Status> {
+) -> Result<Json<ApiEnvelope<Value>>, ApiError> {
     let exec = exec_of(state)?;
     let ctx = cap.ctx.clone();
     let body = body.into_inner();
@@ -1541,7 +1776,22 @@ pub async fn pg_create_entity(
             };
             // Status check applies whether the catalog came from ?catalog=
             // or was inferred from the type — no writes into retired spaces.
-            if catalog.status != "active" {
+            // Re-read the status under FOR SHARE: a concurrent catalog retire
+            // takes FOR UPDATE on the same row, so the two serialize — either
+            // retire commits first (we see 'retired') or it waits for this
+            // create and then counts the new entity (retire 409s). Without
+            // the lock both could pass their checks and leave a live entity
+            // inside a retired catalog.
+            let live_status: Option<String> = sqlx::query_scalar(
+                "SELECT status FROM core.catalog
+                 WHERE tenant_id=$1 AND catalog_id=$2 FOR SHARE",
+            )
+            .bind(tenant)
+            .bind(catalog.catalog_id)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(db_err)?;
+            if live_status.as_deref() != Some("active") {
                 return Err(http_err(409, "catalog.retired"));
             }
 
@@ -1563,7 +1813,7 @@ pub async fn pg_create_entity(
             }
 
             let published =
-                published_schema_revision(&mut tx, tenant, Some(catalog.catalog_id)).await?;
+                published_schema_revision(&mut tx, tenant, catalog.catalog_id).await?;
             let requested_rev = body
                 .get("schema_revision")
                 .and_then(Value::as_i64)
@@ -1571,6 +1821,13 @@ pub async fn pg_create_entity(
             if let Some(pub_rev) = published {
                 if requested_rev > 0 && requested_rev > pub_rev {
                     return Err(http_err(422, "schema_revision not published"));
+                }
+                // Pinning an older revision than the published one is also
+                // refused: validation always runs against the current schema,
+                // and silently applying newer rules under an old pin would be
+                // an unannounced semantic change.
+                if requested_rev > 0 && requested_rev < pub_rev {
+                    return Err(http_err(422, "schema_revision stale"));
                 }
             }
 
@@ -1585,6 +1842,16 @@ pub async fn pg_create_entity(
                 .get("identity_mode")
                 .and_then(Value::as_str)
                 .unwrap_or("return_existing");
+            // Reject unknown modes rather than silently treating a typo for
+            // "reject" as "return_existing" — the modes have opposite dedup
+            // semantics, and a silent fallback creates the entity the caller
+            // asked to refuse.
+            if !matches!(
+                identity_mode,
+                "return_existing" | "reject" | "create_candidate"
+            ) {
+                return Err(http_err(422, "identity_mode.invalid"));
+            }
             let statements = match body.get("statements") {
                 Some(Value::Array(a)) => a.clone(),
                 Some(_) => return Err(http_err(422, "statements must be an array")),
@@ -1604,9 +1871,11 @@ pub async fn pg_create_entity(
                 .collect();
             let preds =
                 resolve_predicates(&mut tx, tenant, &aliases, Some(catalog.catalog_id)).await?;
+            let edge_cons = load_edge_constraints(&mut tx, tenant, published).await?;
 
             // Build canonical objects.
             let mut objects: Vec<(uuid::Uuid, StatementObject)> = Vec::new();
+            let mut create_changes: Vec<Value> = Vec::new();
             for stmt in &statements {
                 let alias = stmt
                     .get("predicate_id")
@@ -1618,17 +1887,12 @@ pub async fn pg_create_entity(
                     &input,
                 )
                 .map_err(|e| http_err(422, &e))?;
+                // Unknown alias or UUID → 422. The is_edge flag always
+                // comes from predicate metadata — a client-supplied
+                // `kind` never decides which permission family applies.
                 let (pid, is_edge) = preds
                     .get(alias)
                     .copied()
-                    .or_else(|| {
-                        alias.parse::<uuid::Uuid>().ok().map(|u| {
-                            (
-                                u,
-                                input.get("kind").and_then(Value::as_str) == Some("entity"),
-                            )
-                        })
-                    })
                     .ok_or_else(|| http_err(422, "unknown predicate"))?;
                 // Edge statements need relation-create on the predicate type;
                 // scalars need field-create on the object type (1.2/1.4).
@@ -1645,7 +1909,22 @@ pub async fn pg_create_entity(
                 if !allowed {
                     return Err(http_err(403, "no write access to field"));
                 }
-                let obj = input_to_object(&mut tx, tenant, is_edge, &input).await?;
+                // Schema domain/range enforcement for edges (docs/03).
+                let mut expected_range: Option<&str> = None;
+                if is_edge {
+                    if let Some((domain, range)) = edge_cons.get(alias) {
+                        check_edge_domain(domain, type_id, &type_alias)?;
+                        if !range.is_empty() {
+                            expected_range = Some(range.as_str());
+                        }
+                    }
+                }
+                let obj =
+                    input_to_object(&mut tx, tenant, &perm, is_edge, &input, expected_range)
+                        .await?;
+                let obj_json = serde_json::to_value(&obj).map_err(db_err)?;
+                let disp = object_display(&mut tx, tenant, &obj_json).await?;
+                create_changes.push(json!({ "predicate_id": alias, "new_value": disp }));
                 objects.push((pid, obj));
             }
 
@@ -1824,13 +2103,14 @@ pub async fn pg_create_entity(
                     *pid,
                     obj,
                     now,
+                    None,
                     actor,
                     1,
                 )
                 .await?;
             }
             for (policy_id, key) in &keys {
-                sqlx::query(
+                let inserted = sqlx::query(
                     "INSERT INTO core.identity_key (tenant_id, type_id, policy_id, key, entity_id, status)
                      VALUES ($1,$2,$3,$4,$5,0) ON CONFLICT DO NOTHING",
                 )
@@ -1842,6 +2122,75 @@ pub async fn pg_create_entity(
                 .execute(&mut *tx)
                 .await
                 .map_err(db_err)?;
+                if inserted.rows_affected() == 0 {
+                    // Lost a concurrent-create race (the winner committed while
+                    // we blocked on its uncommitted key row) or the slot holds
+                    // an inactive key. `DO NOTHING` must not become a silent
+                    // duplicate — resolve the slot's owner and re-apply the
+                    // identity contract instead of pretending we created it.
+                    let slot: Option<(i64, uuid::Uuid, i64, i16, Option<chrono::DateTime<chrono::Utc>>)> =
+                        sqlx::query_as(
+                            "SELECT k.entity_id, e.public_id, e.head_revision, k.status, e.retired_at
+                             FROM core.identity_key k
+                             JOIN core.entity e
+                               ON e.tenant_id=k.tenant_id AND e.entity_id=k.entity_id
+                             WHERE k.tenant_id=$1 AND k.type_id=$2 AND k.policy_id=$3 AND k.key=$4",
+                        )
+                        .bind(tenant)
+                        .bind(type_id)
+                        .bind(policy_id)
+                        .bind(key)
+                        .fetch_optional(&mut *tx)
+                        .await
+                        .map_err(db_err)?;
+                    match slot {
+                        Some((owner_id, public, rev, 0, None)) => {
+                            // Live owner — a real identity collision surfaced
+                            // after the entity row was already inserted.
+                            // Aborting rolls the new entity back, which is the
+                            // only honest outcome for `reject`; for
+                            // `return_existing` deduplicate to the owner.
+                            if identity_mode == "reject" || identity_mode == "create_candidate" {
+                                return Err(http_err(409, "identity collision"));
+                            }
+                            let rows: Vec<EntityRowTuple> = sqlx::query_as(
+                                &format!("{ENTITY_SELECT} AND e.entity_id = $2"),
+                            )
+                            .bind(tenant)
+                            .bind(owner_id)
+                            .fetch_all(&mut *tx)
+                            .await
+                            .map_err(db_err)?;
+                            let visible = rows
+                                .into_iter()
+                                .map(row_to_entity_row)
+                                .next()
+                                .is_some_and(|r| entity_visible(&perm, &r));
+                            return ok_json(json!({
+                                "public_id": if visible { Value::from(public.to_string()) } else { Value::Null },
+                                "entity_id": if visible { Value::from(owner_id) } else { Value::Null },
+                                "revision": if visible { Value::from(rev) } else { Value::Null },
+                                "outcome": "deduplicated",
+                            }));
+                        }
+                        _ => {
+                            // Stale/retired key row — reclaim the slot for the
+                            // new entity rather than leaking the collision.
+                            sqlx::query(
+                                "UPDATE core.identity_key SET entity_id=$5, status=0
+                                 WHERE tenant_id=$1 AND type_id=$2 AND policy_id=$3 AND key=$4",
+                            )
+                            .bind(tenant)
+                            .bind(type_id)
+                            .bind(policy_id)
+                            .bind(key)
+                            .bind(entity_id)
+                            .execute(&mut *tx)
+                            .await
+                            .map_err(db_err)?;
+                        }
+                    }
+                }
             }
             sqlx::query(
                 "INSERT INTO core.entity_revision
@@ -1852,7 +2201,7 @@ pub async fn pg_create_entity(
             .bind(entity_id)
             .bind(published)
             .bind(actor)
-            .bind(serde_json::json!({"op":"create","changes":objects.iter().map(|(p,_)| p.to_string()).collect::<Vec<_>>()}).to_string())
+            .bind(serde_json::json!({"op":"create","changes":create_changes}).to_string())
             .execute(&mut *tx)
             .await
             .map_err(db_err)?;
@@ -1890,11 +2239,25 @@ pub async fn pg_update_entity(
     state: &State<AppState>,
     public_id: String,
     catalog: Option<String>,
+    if_match: crate::schema_admin_routes::IfMatch,
     body: Json<Value>,
-) -> Result<Json<ApiEnvelope<Value>>, Status> {
+) -> Result<Json<ApiEnvelope<Value>>, ApiError> {
     let exec = exec_of(state)?;
     let ctx = cap.ctx.clone();
-    let pid: uuid::Uuid = public_id.parse().map_err(|_| Status::NotFound)?;
+    let pid: uuid::Uuid = public_id.parse().map_err(|_| ApiError::from(Status::NotFound))?;
+    // `If-Match: <rev>` is the header form of the body `revision` lock —
+    // silently ignoring it disarms optimistic concurrency for clients that
+    // rely on the documented header (docs/06 §13).
+    let header_rev = match if_match.value() {
+        None => None,
+        Some(v) if v.trim() == "*" => None,
+        Some(v) => Some(
+            v.trim()
+                .trim_matches('"')
+                .parse::<i64>()
+                .map_err(|_| ApiError::of_db(&http_err(422, "if_match.invalid")))?,
+        ),
+    };
     let body = body.into_inner();
     let v = exec
         .run(Deadline::in_secs(15), move |pool| async move {
@@ -1902,13 +2265,18 @@ pub async fn pg_update_entity(
             let tenant = ctx.tenant_id;
             let actor = ctx.principal_id;
             let perm = perm_for(&mut tx, &ctx).await?;
-            let row: Option<EntityRowTuple> =
-                sqlx::query_as(&format!("{ENTITY_SELECT} AND e.public_id = $2"))
-                    .bind(tenant)
-                    .bind(pid)
-                    .fetch_optional(&mut *tx)
-                    .await
-                    .map_err(db_err)?;
+            // Lock the entity row for the whole transaction: two
+            // concurrent updates must serialize, otherwise both read the
+            // same `prev` statement and each inserts a fresh active row —
+            // duplicate active statements on one predicate.
+            let row: Option<EntityRowTuple> = sqlx::query_as(&format!(
+                "{ENTITY_SELECT} AND e.public_id = $2 FOR UPDATE OF e"
+            ))
+            .bind(tenant)
+            .bind(pid)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(db_err)?;
             let erow = row_to_entity_row(row.ok_or_else(|| http_err(404, "entity not found"))?);
             let entity_id = erow.entity_id;
             let head_rev = erow.head_revision;
@@ -1941,7 +2309,25 @@ pub async fn pg_update_entity(
             if retired.is_some() {
                 return Err(http_err(409, "entity retired"));
             }
-            let expected_rev = body.get("revision").and_then(Value::as_i64);
+            // `revision` is the optimistic-lock expectation. A *present but
+            // malformed* value (string, float, bool) must not degrade to
+            // "no expectation" — that silently disarms the lock the caller
+            // believed it set.
+            let expected_rev = match body.get("revision") {
+                None | Some(Value::Null) => None,
+                Some(v) => Some(
+                    v.as_i64()
+                        .ok_or_else(|| http_err(422, "revision must be an integer"))?,
+                ),
+            };
+            // If-Match and body revision express the same lock — a
+            // disagreement is caller confusion, fail loudly.
+            let expected_rev = match (expected_rev, header_rev) {
+                (Some(a), Some(b)) if a != b => {
+                    return Err(http_err(422, "revision conflicts with If-Match"));
+                }
+                (a, b) => a.or(b),
+            };
             if let Some(expected) = expected_rev {
                 if expected != head_rev {
                     return Err(http_err(409, "stale revision"));
@@ -1958,13 +2344,14 @@ pub async fn pg_update_entity(
                 Some(_) => return Err(http_err(422, "fields must be an object or array")),
                 None => Vec::new(),
             };
+            let published =
+                published_schema_revision(&mut tx, tenant, erow.catalog_id).await?;
             let field_map = {
-                let published =
-                    published_schema_revision(&mut tx, tenant, Some(erow.catalog_id)).await?;
                 let type_def =
                     load_type_def(&mut tx, tenant, published, &erow.type_alias, type_id).await?;
                 crate::field_kinds::field_map_of(type_def.as_ref())
             };
+            let edge_cons = load_edge_constraints(&mut tx, tenant, published).await?;
             let aliases: Vec<String> = fields
                 .iter()
                 .filter_map(|s| {
@@ -1976,7 +2363,7 @@ pub async fn pg_update_entity(
             let preds =
                 resolve_predicates(&mut tx, tenant, &aliases, Some(erow.catalog_id)).await?;
             let now = chrono::Utc::now();
-            let mut changed: Vec<String> = Vec::new();
+            let mut changed: Vec<Value> = Vec::new();
             for stmt in &fields {
                 let alias = stmt
                     .get("predicate_id")
@@ -2003,8 +2390,67 @@ pub async fn pg_update_entity(
                 if !allowed {
                     return Err(http_err(403, "no update access to field"));
                 }
-                let obj = input_to_object(&mut tx, tenant, is_edge, &input).await?;
-                let obj_json = serde_json::to_value(&obj).map_err(db_err)?;
+                // Schema domain/range enforcement for edges (docs/03).
+                let mut expected_range: Option<&str> = None;
+                if is_edge {
+                    if let Some((domain, range)) = edge_cons.get(alias) {
+                        check_edge_domain(domain, type_id, &erow.type_alias)?;
+                        if !range.is_empty() {
+                            expected_range = Some(range.as_str());
+                        }
+                    }
+                }
+                // Explicit `null` clears the field: supersede every active
+                // statement on the predicate and insert nothing — without a
+                // clear semantic there is no way to remove a value at all.
+                let clearing = input.is_null();
+                let obj = if clearing {
+                    None
+                } else {
+                    Some(
+                        input_to_object(&mut tx, tenant, &perm, is_edge, &input, expected_range)
+                            .await?,
+                    )
+                };
+                let obj_json = obj
+                    .as_ref()
+                    .map(serde_json::to_value)
+                    .transpose()
+                    .map_err(db_err)?;
+                // Capture the outgoing value(s) for the revision diff
+                // before superseding — a multi-valued field supersedes
+                // ALL active rows, so the diff must remember all of them.
+                let prev: Vec<(Value,)> = sqlx::query_as(
+                    "SELECT object FROM core.statement
+                     WHERE tenant_id=$1 AND subject=$2 AND predicate=$3 AND status='active'
+                     ORDER BY statement_id",
+                )
+                .bind(tenant)
+                .bind(entity_id)
+                .bind(pred)
+                .fetch_all(&mut *tx)
+                .await
+                .map_err(db_err)?;
+                // Same-value writes are a no-op: identical single statement
+                // → skip supersede+insert so a repeated PUT produces neither
+                // a revision bump nor an outbox event.
+                if !clearing
+                    && prev.len() == 1
+                    && prev[0].0 == obj_json.clone().unwrap_or(Value::Null)
+                {
+                    continue;
+                }
+                let mut old_disps: Vec<String> = Vec::new();
+                for (o,) in prev {
+                    if let Some(d) = object_display(&mut tx, tenant, &o).await? {
+                        old_disps.push(d);
+                    }
+                }
+                let old_disp: Option<Value> = match old_disps.len() {
+                    0 => None,
+                    1 => old_disps.into_iter().next().map(Value::String),
+                    _ => Some(Value::Array(old_disps.into_iter().map(Value::String).collect())),
+                };
                 // Supersede any active statements on this predicate.
                 sqlx::query(
                     "UPDATE core.statement SET status='superseded'
@@ -2016,21 +2462,33 @@ pub async fn pg_update_entity(
                 .execute(&mut *tx)
                 .await
                 .map_err(db_err)?;
-                let sid = next_val(&mut tx, "core.statement_id_seq").await?;
-                insert_statement(
-                    &mut tx,
-                    tenant,
-                    sid,
-                    entity_id,
-                    erow.catalog_id,
-                    pred,
-                    &obj,
-                    now,
-                    actor,
-                    1,
-                )
-                .await?;
-                changed.push(format!("{alias}:{obj_json}"));
+                let new_disp = match &obj {
+                    Some(obj) => {
+                        let sid = next_val(&mut tx, "core.statement_id_seq").await?;
+                        insert_statement(
+                            &mut tx,
+                            tenant,
+                            sid,
+                            entity_id,
+                            erow.catalog_id,
+                            pred,
+                            obj,
+                            now,
+                            None,
+                            actor,
+                            1,
+                        )
+                        .await?;
+                        object_display(&mut tx, tenant, &obj_json.clone().unwrap_or(Value::Null))
+                            .await?
+                    }
+                    None => None,
+                };
+                changed.push(json!({
+                    "predicate_id": alias,
+                    "old_value": old_disp,
+                    "new_value": new_disp,
+                }));
             }
             if changed.is_empty() {
                 return ok_json(json!({ "public_id": pid, "revision": head_rev }));
@@ -2042,7 +2500,7 @@ pub async fn pg_update_entity(
                 entity_id,
                 actor,
                 &serde_json::json!({"op":"update","changes":changed}).to_string(),
-                None,
+                published,
                 expected_rev,
             )
             .await?;
@@ -2081,10 +2539,10 @@ pub async fn pg_retire_entity(
     state: &State<AppState>,
     public_id: String,
     body: Json<Value>,
-) -> Result<Json<ApiEnvelope<Value>>, Status> {
+) -> Result<Json<ApiEnvelope<Value>>, ApiError> {
     let exec = exec_of(state)?;
     let ctx = cap.ctx.clone();
-    let pid: uuid::Uuid = public_id.parse().map_err(|_| Status::NotFound)?;
+    let pid: uuid::Uuid = public_id.parse().map_err(|_| ApiError::from(Status::NotFound))?;
     let reason = body
         .get("reason")
         .and_then(Value::as_str)
@@ -2122,6 +2580,32 @@ pub async fn pg_retire_entity(
                 return Err(http_err(403, "no delete access"));
             }
             if retired.is_some() {
+                return Err(http_err(409, "already retired"));
+            }
+            // Serialize retire against parallel retires/merges: without the
+            // row lock two concurrent retires both pass the `retired` check
+            // below and emit a second retire revision + domain event.
+            sqlx::query(
+                "SELECT entity_id FROM core.entity
+                 WHERE tenant_id=$1 AND entity_id=$2 FOR UPDATE",
+            )
+            .bind(tenant)
+            .bind(entity_id)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(db_err)?;
+            // Re-check under the lock — a competitor may have retired while
+            // we were blocked on it.
+            let now_retired: Option<chrono::DateTime<chrono::Utc>> = sqlx::query_scalar(
+                "SELECT retired_at FROM core.entity
+                 WHERE tenant_id=$1 AND entity_id=$2",
+            )
+            .bind(tenant)
+            .bind(entity_id)
+            .fetch_one(&mut *tx)
+            .await
+            .map_err(db_err)?;
+            if now_retired.is_some() {
                 return Err(http_err(409, "already retired"));
             }
             let rev = bump_revision(
@@ -2189,15 +2673,15 @@ pub async fn pg_merge_entity(
     state: &State<AppState>,
     public_id: String,
     body: Json<Value>,
-) -> Result<Json<ApiEnvelope<Value>>, Status> {
+) -> Result<Json<ApiEnvelope<Value>>, ApiError> {
     let exec = exec_of(state)?;
     let ctx = cap.ctx.clone();
-    let canonical: uuid::Uuid = public_id.parse().map_err(|_| Status::NotFound)?;
+    let canonical: uuid::Uuid = public_id.parse().map_err(|_| ApiError::from(Status::NotFound))?;
     let loser: uuid::Uuid = body
         .get("loser_public_id")
         .and_then(Value::as_str)
         .and_then(|s| s.parse().ok())
-        .ok_or(Status::UnprocessableEntity)?;
+        .ok_or_else(|| ApiError::from(Status::UnprocessableEntity))?;
     let reason = body
         .get("reason")
         .and_then(Value::as_str)
@@ -2233,14 +2717,22 @@ pub async fn pg_merge_entity(
             let (los_id, los_ret) = (los_row.entity_id, los_row.retired_at);
             // Both catalogs must be writable — merging requires the same
             // catalog anyway. Read-denial is a 404 (no existence leak);
-            // write-denial a real 403.
-            for row in [&can_row, &los_row] {
+            // write-denial a real 403. Retiring the loser is a delete —
+            // mirror pg_retire_entity's catalog+type Delete gate on it,
+            // while the canonical side only needs Update.
+            for (row, op) in [
+                (&can_row, crate::dataperm::Op::Update),
+                (&los_row, crate::dataperm::Op::Delete),
+            ] {
                 let ckeys = catalog_keys(row);
+                let tkeys = type_keys(row);
                 let ckey_refs: [&str; 2] = [&ckeys[0], &ckeys[1]];
                 if !perm.can_catalog(&ckey_refs, crate::dataperm::Op::Read) {
                     return Err(http_err(404, "entity not found"));
                 }
-                if !perm.can_catalog(&ckey_refs, crate::dataperm::Op::Update) {
+                if !perm.can_catalog(&ckey_refs, op)
+                    || !perm.can_type(&[&tkeys[0], &tkeys[1]], &ckey_refs, op)
+                {
                     return Err(http_err(403, "no access to catalog"));
                 }
             }
@@ -2249,21 +2741,95 @@ pub async fn pg_merge_entity(
             if can_row.catalog_id != los_row.catalog_id {
                 return Err(http_err(422, "cannot merge across catalogs"));
             }
+            // Same-type invariant: merging a wh_zone into a wh_warehouse would
+            // re-point zone statements (validated against the zone domain at
+            // write time) onto a warehouse subject — retroactive domain
+            // corruption. Merge is a duplicate-resolution op; same type only.
+            if can_row.type_id != los_row.type_id {
+                return Err(http_err(422, "cannot merge different types"));
+            }
             if can_id == los_id {
                 return Err(http_err(422, "cannot merge entity into itself"));
             }
+            // Lock both entity rows (ordered by entity_id to avoid deadlock
+            // with a mirrored merge) and re-read retirement state under the
+            // locks: two parallel merges of the same loser would otherwise
+            // both pass the checks below and emit two merge events.
+            let (first, second) = if can_id < los_id {
+                (can_id, los_id)
+            } else {
+                (los_id, can_id)
+            };
+            let locked: Vec<(i64, Option<chrono::DateTime<chrono::Utc>>)> = sqlx::query_as(
+                "SELECT entity_id, retired_at FROM core.entity
+                 WHERE tenant_id=$1 AND entity_id IN ($2, $3)
+                 ORDER BY CASE WHEN entity_id=$2 THEN 0 ELSE 1 END
+                 FOR UPDATE",
+            )
+            .bind(tenant)
+            .bind(first)
+            .bind(second)
+            .fetch_all(&mut *tx)
+            .await
+            .map_err(db_err)?;
+            let locked_ret = |id: i64| {
+                locked
+                    .iter()
+                    .find(|(eid, _)| *eid == id)
+                    .and_then(|(_, r)| *r)
+            };
+            let can_ret = locked_ret(can_id).or(can_ret);
+            let los_ret = locked_ret(los_id).or(los_ret);
             if can_ret.is_some() {
                 return Err(http_err(409, "canonical is retired"));
             }
             if los_ret.is_some() {
+                // Repeat merge is a no-op (docs/04: повтор merge не создаёт
+                // событие) but only when the loser was retired *into this*
+                // canonical. A loser retired any other way never had its
+                // statements re-pointed — claiming merge success would be a
+                // silent divergence, so refuse loudly.
+                let loser_canon: Option<i64> = sqlx::query_scalar(
+                    "SELECT canonical_entity_id FROM core.entity
+                     WHERE tenant_id=$1 AND entity_id=$2",
+                )
+                .bind(tenant)
+                .bind(los_id)
+                .fetch_one(&mut *tx)
+                .await
+                .map_err(db_err)?;
+                if loser_canon != Some(can_id) {
+                    return Err(http_err(409, "loser is retired"));
+                }
+                // Report the canonical's real revision — returning 0 would
+                // poison any client's optimistic-lock state.
                 return ok_json(json!({
                     "canonical_public_id": canonical,
                     "loser_public_id": loser,
-                    "canonical_revision": 0,
+                    "canonical_revision": can_row.head_revision,
                     "idempotent": true,
                 }));
             }
-            // Re-point loser statements to canonical.
+            // Scalar values the canonical already owns stay canonical: the
+            // loser's competing value is superseded (kept in history) rather
+            // than re-pointed — otherwise the merge leaves several ACTIVE
+            // statements on one single-valued predicate, and the identity
+            // key / display name would collapse to an arbitrary winner.
+            sqlx::query(
+                "UPDATE core.statement SET status='superseded'
+                 WHERE tenant_id=$1 AND subject=$2 AND status='active' AND object_kind='scalar'
+                   AND predicate IN (
+                       SELECT predicate FROM core.statement
+                       WHERE tenant_id=$1 AND subject=$3 AND status='active' AND object_kind='scalar')",
+            )
+            .bind(tenant)
+            .bind(los_id)
+            .bind(can_id)
+            .execute(&mut *tx)
+            .await
+            .map_err(db_err)?;
+            // Re-point loser statements to canonical (edges + scalar fields
+            // the canonical does not have).
             sqlx::query(
                 "UPDATE core.statement SET subject=$3
                  WHERE tenant_id=$1 AND subject=$2",
@@ -2308,6 +2874,25 @@ pub async fn pg_merge_entity(
             .execute(&mut *tx)
             .await
             .map_err(db_err)?;
+            // The loser gets a real revision row for its retire-by-merge —
+            // otherwise its history silently ends at the last edit and the
+            // merge is invisible from the loser's timeline.
+            sqlx::query(
+                "INSERT INTO core.entity_revision
+                 (tenant_id, entity_id, revision, actor, command)
+                 SELECT tenant_id, entity_id, head_revision, $3, $4
+                 FROM core.entity WHERE tenant_id=$1 AND entity_id=$2",
+            )
+            .bind(tenant)
+            .bind(los_id)
+            .bind(ctx.principal_id)
+            .bind(
+                &serde_json::json!({"op":"merge","role":"loser","canonical":canonical.to_string(),"reason":reason})
+                    .to_string(),
+            )
+            .execute(&mut *tx)
+            .await
+            .map_err(db_err)?;
             sqlx::query(
                 "INSERT INTO core.entity_alias (tenant_id, alias_kind, alias_value, canonical_entity_id, reason)
                  VALUES ($1,'public_id',$2,$3,$4) ON CONFLICT DO NOTHING",
@@ -2329,6 +2914,12 @@ pub async fn pg_merge_entity(
             .execute(&mut *tx)
             .await
             .map_err(db_err)?;
+            // Re-derive the canonical's keys from the merged fact set now —
+            // loser's keys stay reachable for dedup (they moved to canonical),
+            // and deferring recompute to the next update would let that
+            // update retire loser's keys as "not derivable", silently
+            // resurrecting the duplicate the merge eliminated.
+            recompute_identity_keys(&mut tx, tenant, can_id, can_row.type_id).await?;
             outbox_event(
                 &mut tx,
                 tenant,
@@ -2825,19 +3416,19 @@ pub async fn pg_get_relations(
     public_id: String,
     direction: Option<String>,
     as_of: Option<String>,
-) -> Result<Json<ApiEnvelope<Vec<RelationRecord>>>, Status> {
+) -> Result<Json<ApiEnvelope<Vec<RelationRecord>>>, ApiError> {
     let as_of = as_of
-        .map(|s| parse_as_of(&s).ok_or(Status::UnprocessableEntity))
+        .map(|s| parse_as_of(&s).ok_or_else(|| ApiError::from(Status::UnprocessableEntity)))
         .transpose()?;
     if let Some(d) = direction.as_deref() {
         if !matches!(d, "outgoing" | "incoming" | "both") {
-            return Err(Status::UnprocessableEntity);
+            return Err(ApiError::from(Status::UnprocessableEntity));
         }
     }
     let direction = direction.filter(|d| d != "both");
     let exec = exec_of(state)?;
     let ctx = cap.ctx.clone();
-    let pid: uuid::Uuid = public_id.parse().map_err(|_| Status::NotFound)?;
+    let pid: uuid::Uuid = public_id.parse().map_err(|_| ApiError::from(Status::NotFound))?;
     let v = exec
         .run(Deadline::in_secs(10), move |pool| async move {
             let mut tx = rls_tx(&pool, &ctx, "entity.relations").await?;
@@ -2945,11 +3536,11 @@ pub async fn pg_create_relation(
     state: &State<AppState>,
     public_id: String,
     body: String,
-) -> Result<Json<ApiEnvelope<Value>>, Status> {
+) -> Result<Json<ApiEnvelope<Value>>, ApiError> {
     let exec = exec_of(state)?;
     let ctx = cap.ctx.clone();
-    let parsed: Value = serde_json::from_str(&body).map_err(|_| Status::BadRequest)?;
-    let pid: uuid::Uuid = public_id.parse().map_err(|_| Status::NotFound)?;
+    let parsed: Value = serde_json::from_str(&body).map_err(|_| ApiError::from(Status::BadRequest))?;
+    let pid: uuid::Uuid = public_id.parse().map_err(|_| ApiError::from(Status::NotFound))?;
     let v = exec
         .run(Deadline::in_secs(10), move |pool| async move {
             let mut tx = rls_tx(&pool, &ctx, "entity.relation.create").await?;
@@ -3029,6 +3620,20 @@ pub async fn pg_create_relation(
             if trow.retired_at.is_some() {
                 return Err(http_err(409, "target retired"));
             }
+            // Schema domain/range enforcement (docs/03): the published
+            // revision declares which subject/target types the edge may
+            // connect — unchecked writes corrupt the graph.
+            {
+                let published =
+                    published_schema_revision(&mut tx, tenant, srow.catalog_id).await?;
+                let edge_cons = load_edge_constraints(&mut tx, tenant, published).await?;
+                if let Some((domain, range)) = edge_cons.get(alias) {
+                    check_edge_domain(domain, srow.type_id, &srow.type_alias)?;
+                    if !range.is_empty() && !type_ref_matches(&trow, range) {
+                        return Err(http_err(422, "edge.range"));
+                    }
+                }
+            }
             let dup: Option<(i64,)> = sqlx::query_as(
                 "SELECT statement_id FROM core.statement
                  WHERE tenant_id=$1 AND subject=$2 AND predicate=$3
@@ -3045,6 +3650,23 @@ pub async fn pg_create_relation(
             if dup.is_some() {
                 return Err(http_err(409, "relation exists"));
             }
+            // Temporal qualifiers: the statement model carries valid_from/to,
+            // silently dropping them made "effective 2020..2024" edges eternal.
+            let parse_ts = |key: &str| -> Result<Option<chrono::DateTime<chrono::Utc>>, DbError> {
+                match parsed.get(key).and_then(Value::as_str) {
+                    None => Ok(None),
+                    Some(s) => chrono::DateTime::parse_from_rfc3339(s)
+                        .map(|t| Some(t.with_timezone(&chrono::Utc)))
+                        .map_err(|_| http_err(422, &format!("{key}.invalid"))),
+                }
+            };
+            let valid_from = parse_ts("valid_from")?.unwrap_or_else(chrono::Utc::now);
+            let valid_to = parse_ts("valid_to")?;
+            if let Some(vt) = valid_to {
+                if vt <= valid_from {
+                    return Err(http_err(422, "valid_to.before_from"));
+                }
+            }
             let sid = next_val(&mut tx, "core.statement_id_seq").await?;
             insert_statement(
                 &mut tx,
@@ -3054,7 +3676,8 @@ pub async fn pg_create_relation(
                 srow.catalog_id,
                 pred,
                 &StatementObject::Entity(enginer_domain::EntityId(tid)),
-                chrono::Utc::now(),
+                valid_from,
+                valid_to,
                 ctx.principal_id,
                 1,
             )
@@ -3087,11 +3710,11 @@ pub async fn pg_delete_relation(
     state: &State<AppState>,
     public_id: String,
     relation_id: String,
-) -> Result<Json<ApiEnvelope<Value>>, Status> {
+) -> Result<Json<ApiEnvelope<Value>>, ApiError> {
     let exec = exec_of(state)?;
     let ctx = cap.ctx.clone();
-    let pid: uuid::Uuid = public_id.parse().map_err(|_| Status::NotFound)?;
-    let sid: i64 = relation_id.parse().map_err(|_| Status::NotFound)?;
+    let pid: uuid::Uuid = public_id.parse().map_err(|_| ApiError::from(Status::NotFound))?;
+    let sid: i64 = relation_id.parse().map_err(|_| ApiError::from(Status::NotFound))?;
     let v = exec
         .run(Deadline::in_secs(10), move |pool| async move {
             let mut tx = rls_tx(&pool, &ctx, "entity.relation.delete").await?;
@@ -3168,15 +3791,80 @@ pub async fn pg_delete_relation(
 
 // --- History ---
 
+/// One `changes[]` entry → a history diff row. Handles three writer
+/// shapes: structured `{predicate_id, old_value, new_value}` objects,
+/// legacy `"alias:{json}"` strings, and plain predicate ids.
+fn history_change(c: &Value) -> HistoryChangeRecord {
+    if let Some(s) = c.as_str() {
+        if let Some((alias, raw)) = s.split_once(':') {
+            let new_value = serde_json::from_str::<Value>(raw)
+                .ok()
+                .map(|v| wire_text(&v).unwrap_or_else(|| v.to_string()));
+            return HistoryChangeRecord {
+                predicate_id: alias.to_string(),
+                alias: alias.to_string(),
+                old_value: None,
+                new_value,
+            };
+        }
+        return HistoryChangeRecord {
+            predicate_id: s.to_string(),
+            alias: s.to_string(),
+            old_value: None,
+            new_value: None,
+        };
+    }
+    let predicate_id = c
+        .get("predicate_id")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .unwrap_or_default();
+    HistoryChangeRecord {
+        alias: c
+            .get("alias")
+            .and_then(Value::as_str)
+            .map(str::to_string)
+            .filter(|a| !a.is_empty())
+            .unwrap_or_else(|| predicate_id.clone()),
+        predicate_id,
+        // old_value may be an array (a multi-valued field remembers every
+        // superseded row — each element is a JSON-encoded statement object).
+        // Flatten to a readable list instead of dropping it to null.
+        old_value: c.get("old_value").and_then(|v| match v {
+            Value::String(s) => Some(s.clone()),
+            Value::Array(arr) => Some(
+                arr.iter()
+                    .map(|el| {
+                        el.as_str()
+                            .map(|s| {
+                                serde_json::from_str::<Value>(s)
+                                    .ok()
+                                    .map(|v| wire_text(&v).unwrap_or_else(|| v.to_string()))
+                                    .unwrap_or_else(|| s.to_string())
+                            })
+                            .unwrap_or_else(|| el.to_string())
+                    })
+                    .collect::<Vec<_>>()
+                    .join(", "),
+            ),
+            _ => None,
+        }),
+        new_value: c
+            .get("new_value")
+            .and_then(Value::as_str)
+            .map(str::to_string),
+    }
+}
+
 #[get("/entities/<public_id>/history")]
 pub async fn pg_get_entity_history(
     cap: CapabilityGuard,
     state: &State<AppState>,
     public_id: String,
-) -> Result<Json<ApiEnvelope<Vec<HistoryEntryRecord>>>, Status> {
+) -> Result<Json<ApiEnvelope<Vec<HistoryEntryRecord>>>, ApiError> {
     let exec = exec_of(state)?;
     let ctx = cap.ctx.clone();
-    let pid: uuid::Uuid = public_id.parse().map_err(|_| Status::NotFound)?;
+    let pid: uuid::Uuid = public_id.parse().map_err(|_| ApiError::from(Status::NotFound))?;
     let v = exec
         .run(Deadline::in_secs(10), move |pool| async move {
             let mut tx = rls_tx(&pool, &ctx, "entity.history").await?;
@@ -3198,6 +3886,41 @@ pub async fn pg_get_entity_history(
                 return Err(http_err(404, "entity not found"));
             }
             let eid = erow.entity_id;
+            // Diff values are field reads too: a field denied for Op::Read
+            // disappears from the diff, and a masked field keeps its mask in
+            // history exactly like on the entity view.
+            let tkeys = type_keys(&erow);
+            let tk_refs: [&str; 2] = [&tkeys[0], &tkeys[1]];
+            let ckeys = catalog_keys(&erow);
+            let ck_refs: [&str; 2] = [&ckeys[0], &ckeys[1]];
+            let mask_text = |mask: &str, v: Option<String>| -> Option<String> {
+                match (mask, v) {
+                    ("null-mask", _) => None,
+                    ("partial-mask", Some(s)) => Some(crate::dataperm::partial_mask(&s)),
+                    ("tokenize" | "token", Some(s)) => {
+                        Some(crate::dataperm::tokenize(ctx.tenant_id, &s))
+                    }
+                    (_, v) => v,
+                }
+            };
+            let scrub = |changes: Vec<HistoryChangeRecord>| -> Vec<HistoryChangeRecord> {
+                changes
+                    .into_iter()
+                    .filter(|c| perm.can_field(&tk_refs, &ck_refs, &c.alias, crate::dataperm::Op::Read))
+                    .map(|mut c| {
+                        if let Some(mask) = perm.mask_for(&tk_refs, &ck_refs, &c.alias) {
+                            if mask == "omit" {
+                                c.old_value = None;
+                                c.new_value = None;
+                            } else {
+                                c.old_value = mask_text(mask, c.old_value.take());
+                                c.new_value = mask_text(mask, c.new_value.take());
+                            }
+                        }
+                        c
+                    })
+                    .collect()
+            };
             let rows: Vec<(
                 i64,
                 Option<uuid::Uuid>,
@@ -3228,34 +3951,21 @@ pub async fn pg_get_entity_history(
                     let changes: Vec<HistoryChangeRecord> = parsed
                         .get("changes")
                         .and_then(Value::as_array)
-                        .map(|arr| {
-                            arr.iter()
-                                .map(|c| HistoryChangeRecord {
-                                    predicate_id: c
-                                        .as_str()
-                                        .map(str::to_string)
-                                        .or_else(|| {
-                                            c.get("predicate_id")
-                                                .and_then(Value::as_str)
-                                                .map(str::to_string)
-                                        })
-                                        .unwrap_or_default(),
-                                    alias: c
-                                        .get("alias")
-                                        .and_then(Value::as_str)
-                                        .map(str::to_string)
-                                        .or_else(|| c.as_str().map(str::to_string))
-                                        .unwrap_or_default(),
-                                    old_value: c
-                                        .get("old_value")
+                        .map(|arr| arr.iter().map(history_change).collect())
+                        .or_else(|| {
+                            // `relation.add` commands carry predicate/target
+                            // at top level instead of a changes array.
+                            parsed.get("predicate").and_then(Value::as_str).map(|p| {
+                                vec![HistoryChangeRecord {
+                                    predicate_id: p.to_string(),
+                                    alias: p.to_string(),
+                                    old_value: None,
+                                    new_value: parsed
+                                        .get("target")
                                         .and_then(Value::as_str)
                                         .map(str::to_string),
-                                    new_value: c
-                                        .get("new_value")
-                                        .and_then(Value::as_str)
-                                        .map(str::to_string),
-                                })
-                                .collect()
+                                }]
+                            })
                         })
                         .unwrap_or_default();
                     HistoryEntryRecord {
@@ -3267,7 +3977,7 @@ pub async fn pg_get_entity_history(
                             .get("reason")
                             .and_then(Value::as_str)
                             .map(str::to_string),
-                        changes,
+                        changes: scrub(changes),
                     }
                 })
                 .collect();
@@ -3289,15 +3999,20 @@ pub async fn pg_get_entity_graph(
     state: &State<AppState>,
     public_id: String,
     body: String,
-) -> Result<Json<ApiEnvelope<GraphDataRecord>>, Status> {
+) -> Result<Json<ApiEnvelope<GraphDataRecord>>, ApiError> {
     let exec = exec_of(state)?;
     let ctx = cap.ctx.clone();
     let req = serde_json::from_str::<Value>(&body).unwrap_or_default();
-    let max_depth = req
-        .get("max_depth")
-        .and_then(Value::as_u64)
-        .unwrap_or(1)
-        .clamp(1, 5) as usize;
+    // max_depth is spec-bounded to 1..5 — out-of-range values are rejected
+    // loudly instead of being silently clamped.
+    let max_depth = match req.get("max_depth") {
+        None | Some(Value::Null) => 1usize,
+        Some(v) => v
+            .as_u64()
+            .filter(|d| (1..=5).contains(d))
+            .map(|d| d as usize)
+            .ok_or_else(|| ApiError::coded(Status::UnprocessableEntity, "max_depth.invalid"))?,
+    };
     let direction = req
         .get("direction")
         .and_then(Value::as_str)
@@ -3311,9 +4026,9 @@ pub async fn pg_get_entity_graph(
     let as_of = req
         .get("as_of")
         .and_then(Value::as_str)
-        .map(|s| parse_as_of(s).ok_or(Status::UnprocessableEntity))
+        .map(|s| parse_as_of(s).ok_or_else(|| ApiError::from(Status::UnprocessableEntity)))
         .transpose()?;
-    let pid: uuid::Uuid = public_id.parse().map_err(|_| Status::NotFound)?;
+    let pid: uuid::Uuid = public_id.parse().map_err(|_| ApiError::from(Status::NotFound))?;
     let v = exec
         .run(Deadline::in_secs(15), move |pool| async move {
             let mut tx = rls_tx(&pool, &ctx, "entity.graph").await?;
@@ -3605,9 +4320,60 @@ fn cmp_values(actual: &str, expected: &Value) -> std::cmp::Ordering {
     normalize_cmp(actual).cmp(&normalize_cmp(&exp))
 }
 
+/// Validate a `where` AST before evaluation. `eval_where` is intentionally
+/// permissive at the leaf level (a missing field value is `None`), so a
+/// *malformed* node — unknown op, unresolvable `field`, non-object leaf —
+/// must be rejected here or it silently degrades to a substring/match-all
+/// filter and the caller gets a broader result set than requested.
+fn validate_where(node: &Value) -> Result<(), &'static str> {
+    if let Some(arr) = node.get("and").or_else(|| node.get("or")) {
+        let arr = arr
+            .as_array()
+            .ok_or("'and'/'or' must be an array")?;
+        if arr.is_empty() {
+            return Err("'and'/'or' must not be empty");
+        }
+        for c in arr {
+            validate_where(c)?;
+        }
+        return Ok(());
+    }
+    if let Some(inner) = node.get("not") {
+        if inner.is_null() {
+            return Err("'not' requires a sub-expression");
+        }
+        return validate_where(inner);
+    }
+    let comp = node.get("comparison").unwrap_or(node);
+    if !comp.is_object() {
+        return Err("where leaf must be an object");
+    }
+    comp.get("field")
+        .and_then(where_field_name)
+        .filter(|f| !f.trim().is_empty())
+        .ok_or("where comparison requires a resolvable 'field'")?;
+    const OPS: &[&str] = &[
+        "eq", "ne", "not_eq", "contains", "prefix", "suffix", "gt", "gte", "lt", "lte",
+        "exists", "not_exists", "in",
+    ];
+    if let Some(op) = comp.get("op") {
+        let op = op.as_str().ok_or("'op' must be a string")?;
+        if !OPS.contains(&op) {
+            return Err("unknown 'op' in where comparison");
+        }
+    }
+    if comp.get("op").and_then(Value::as_str) == Some("in")
+        && !comp.get("value").is_some_and(Value::is_array)
+    {
+        return Err("'in' requires an array 'value'");
+    }
+    Ok(())
+}
+
 /// Evaluate a `where` AST node (`and`/`or`/`not`/`comparison`) against an
-/// entity record. Unknown or empty nodes match everything (fail open for
-/// filtering is unsafe for dedup — the caller validates known shapes).
+/// entity record. Nodes are assumed pre-validated by `validate_where`; a
+/// field that resolves to no text yields `None` (not a match for positive
+/// ops, a match for negative ones).
 fn eval_where(
     node: &Value,
     entity: &EntityRecord,
@@ -3673,7 +4439,7 @@ pub async fn pg_query_entities_post(
     state: &State<AppState>,
     catalog: Option<String>,
     body: String,
-) -> Result<Json<ApiEnvelope<QueryResponseRecord>>, Status> {
+) -> Result<Json<ApiEnvelope<QueryResponseRecord>>, ApiError> {
     let exec = exec_of(state)?;
     let ctx = cap.ctx.clone();
     let parsed = serde_json::from_str::<Value>(&body).unwrap_or_default();
@@ -3703,18 +4469,21 @@ pub async fn pg_query_entities_post(
                 .and_then(Value::as_str)
                 .map(str::to_lowercase)
                 .unwrap_or_default();
-            let page_size = query
-                .get("page")
-                .and_then(|p| p.get("size"))
-                .and_then(Value::as_u64)
-                .unwrap_or(50)
-                .clamp(1, 500) as usize;
-            let offset = query
-                .get("page")
-                .and_then(|p| p.get("after"))
-                .and_then(Value::as_str)
-                .and_then(|c| c.parse::<usize>().ok())
-                .unwrap_or_default();
+            let page_size = match query.get("page").and_then(|p| p.get("size")) {
+                None => 50usize,
+                Some(v) => v
+                    .as_u64()
+                    .filter(|n| (1..=500).contains(n))
+                    .ok_or_else(|| http_err(422, "page.size.invalid"))?
+                    as usize,
+            };
+            let offset = match query.get("page").and_then(|p| p.get("after")) {
+                None => 0,
+                Some(v) => v
+                    .as_str()
+                    .and_then(|c| c.parse::<usize>().ok())
+                    .ok_or_else(|| http_err(422, "cursor.invalid"))?,
+            };
 
             // Catalog scope: query param wins, then the query object's own
             // `catalog` field; absent means "all catalogs I may read".
@@ -3812,6 +4581,11 @@ pub async fn pg_query_entities_post(
             };
 
             let where_node = query.get("where").cloned();
+            if let Some(w) = &where_node {
+                if let Err(msg) = validate_where(w) {
+                    return Err(http_err(422, &format!("where.invalid: {msg}")));
+                }
+            }
             let mut matching: Vec<&EntityRecord> = records
                 .iter()
                 .filter(|e| {
@@ -4131,6 +4905,26 @@ mod input_scalar_tests {
     }
 
     #[test]
+    fn scalar_payload_bounds() {
+        // Text scalars are bounded: a 10k-char value bloats jsonb cells,
+        // display names, identity keys and fingerprints.
+        let huge = "x".repeat(super::MAX_SCALAR_TEXT + 1);
+        assert!(input_to_scalar(&json!({"kind":"text","value":huge})).is_err());
+        assert!(input_to_scalar(&json!({"kind":"enum","value":huge})).is_err());
+        assert!(input_to_scalar(&json!({"kind":"uri","value":huge})).is_err());
+        assert!(input_to_scalar(&json!({"kind":"localized_text","value":huge})).is_err());
+        // At the boundary it still parses.
+        let ok = "x".repeat(super::MAX_SCALAR_TEXT);
+        assert!(input_to_scalar(&json!({"kind":"text","value":ok})).is_ok());
+        // JSON kinds get the larger but still finite cap.
+        let huge_json = "x".repeat(super::MAX_SCALAR_JSON + 1);
+        assert!(input_to_scalar(&json!({"kind":"geo","value":{"type":"Point","coordinates":[huge_json,0]}})).is_err());
+        let big_ok = "x".repeat(super::MAX_SCALAR_TEXT + 1);
+        // >2048 is fine for a JSON-kind payload (it's below the json cap).
+        assert!(input_to_scalar(&json!({"kind":"tags","value":[big_ok]})).is_ok());
+    }
+
+    #[test]
     fn object_to_wire_new_variants() {
         let s = StatementObject::Scalar(CanonicalScalar::LocalDateTime {
             value: chrono::NaiveDate::from_ymd_opt(2026, 10, 20)
@@ -4153,6 +4947,43 @@ mod input_scalar_tests {
             currency: "RUB".to_string(),
         });
         assert_eq!(object_to_wire(&s)["currency"], "RUB");
+    }
+
+    fn erow(alias: &str, type_id: &str) -> EntityRow {
+        EntityRow {
+            entity_id: 1,
+            public_id: uuid::Uuid::nil(),
+            type_id: type_id.parse().unwrap(),
+            type_alias: alias.to_string(),
+            entity_class: 0,
+            head_revision: 1,
+            created_at: chrono::Utc::now(),
+            retired_at: None,
+            catalog_id: 1,
+            catalog_pid: uuid::Uuid::nil(),
+            catalog_alias: "wh".to_string(),
+        }
+    }
+
+    #[test]
+    fn type_ref_matches_alias_and_uuid() {
+        let tid = uuid::Uuid::now_v7().to_string();
+        let e = erow("wh_warehouse", &tid);
+        assert!(type_ref_matches(&e, "wh_warehouse"));
+        assert!(type_ref_matches(&e, &tid));
+        assert!(!type_ref_matches(&e, "wh_zone"));
+        assert!(!type_ref_matches(&e, ""));
+    }
+
+    #[test]
+    fn check_edge_domain_rejects_wrong_subject() {
+        let tid = uuid::Uuid::now_v7();
+        // Matching alias and matching uuid pass; anything else is a 422.
+        assert!(check_edge_domain("wh_zone", tid, "wh_zone").is_ok());
+        assert!(check_edge_domain(&tid.to_string(), tid, "wh_zone").is_ok());
+        assert!(check_edge_domain("", tid, "wh_zone").is_ok());
+        let e = check_edge_domain("wh_warehouse", tid, "wh_zone").unwrap_err();
+        assert!(e.to_string().contains("edge.domain"));
     }
 
     #[allow(dead_code)]

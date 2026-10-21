@@ -216,7 +216,7 @@ const props = defineProps<{
   maxDepth?: number;
 }>();
 
-const { t, locale } = useI18n();
+const { t, te, locale } = useI18n();
 const toast = useToast();
 const api = useApi();
 
@@ -827,7 +827,7 @@ async function expandNode(nodeId: string) {
     visited.value = new Set([...visited.value].filter((id) => id !== nodeId));
     toast.add({
       title: t('common.error'),
-      description: e instanceof Error ? e.message : String(e),
+      description: displayError(e, t, te),
       color: 'error',
     });
   }
@@ -882,7 +882,7 @@ async function reload() {
     }
     rebuildSim(1, false);
   } catch (e: unknown) {
-    toast.add({ title: t('common.error'), description: e instanceof Error ? e.message : String(e), color: 'error' });
+    toast.add({ title: t('common.error'), description: displayError(e, t, te), color: 'error' });
   }
 }
 

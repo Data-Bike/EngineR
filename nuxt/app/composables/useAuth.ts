@@ -81,7 +81,8 @@ export const useAuthStore = defineStore('auth', {
           this.user = response.data;
         } catch (e: unknown) {
           this.user = null;
-          this.error = e instanceof Error ? e.message : String(e);
+          const i18n = useNuxtApp().$i18n;
+          this.error = displayError(e, i18n.t.bind(i18n), i18n.te.bind(i18n));
         } finally {
           this.loading = false;
           contextInFlight = null;

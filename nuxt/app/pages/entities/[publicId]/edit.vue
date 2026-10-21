@@ -20,6 +20,7 @@
       <UButton variant="outline" @click="load">{{ t('common.retry') }}</UButton>
     </div>
     <EntityFormRenderer
+      ref="formRef"
       v-else-if="entity && view"
       :view="view"
       :initial-values="entity.fields ?? {}"
@@ -34,22 +35,25 @@
 
 <script setup lang="ts">
 import { capability } from '~/middleware/capability';
+import { useBreadcrumbLabels } from '~/composables/useBreadcrumbLabels';
 import type {
   Entity,
   FieldValidationError,
   FormSubmission,
+  RawStatementValue,
   ViewDefinition,
 } from '@enginer/api-client';
 
 definePageMeta({ middleware: ['auth', capability('entity.edit')] });
 
-const { t } = useI18n();
+const { t, te } = useI18n();
 const route = useRoute();
 const api = useApi();
 // Entity-scoped calls resolve the entity by id — the catalog selector is a
 // listing filter, not a security scope. Schema lookups use the entity's own
 // catalog so an alias shared between catalogs resolves to the right type.
 const toast = useToast();
+const { setBreadcrumbLabel } = useBreadcrumbLabels();
 
 const publicId = computed(() => route.params.publicId as string);
 const entity = ref<Entity | null>(null);
@@ -58,6 +62,7 @@ const loading = ref(false);
 const submitting = ref(false);
 const error = ref<string | null>(null);
 const validationErrors = ref<Record<string, FieldValidationError>>({});
+const formRef = ref<{ markSaved: () => void } | null>(null);
 
 async function load() {
   loading.value = true;
@@ -65,6 +70,10 @@ async function load() {
   try {
     const entityResponse = await api.entities.get(publicId.value);
     entity.value = entityResponse.data;
+    setBreadcrumbLabel(
+      publicId.value,
+      entityResponse.data.display_name ?? publicId.value,
+    );
     const viewResponse = await api.schemas.getTypeView(
       entityResponse.data.type_id,
       'form',
@@ -72,7 +81,7 @@ async function load() {
     );
     view.value = viewResponse.data as ViewDefinition;
   } catch (cause: unknown) {
-    error.value = cause instanceof Error ? cause.message : t('entity.error');
+    error.value = displayError(cause, t, te);
   } finally {
     loading.value = false;
   }
@@ -90,10 +99,11 @@ async function save(submission: FormSubmission) {
       // silently store dates/money/geo as text scalars.
       fields: submission.fields.map((field) => ({
         predicate_id: field.predicate_id,
-        value: field.value ?? '',
+        value: (field.value ?? '') as RawStatementValue,
       })),
     });
     entity.value = response.data;
+    formRef.value?.markSaved();
     toast.add({ title: t('common.save'), color: 'success' });
     await navigateTo(`/entities/${publicId.value}`);
   } catch (cause: unknown) {
@@ -103,7 +113,7 @@ async function save(submission: FormSubmission) {
     } else {
       toast.add({
         title: t('common.error'),
-        description: cause instanceof Error ? cause.message : String(cause),
+        description: displayError(cause, t, te),
         color: 'error',
       });
     }

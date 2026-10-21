@@ -49,6 +49,8 @@ function mountPage(opts: {
     select: vi.fn(),
   });
   (globalThis as any).navigateTo = vi.fn();
+  (globalThis as any).displayError = (e: unknown) =>
+    e instanceof Error ? e.message : String(e);
   const wrapper = mount(SearchPage, {
     global: { stubs: { UCard, UBadge, UButton, UInput, NuxtLink } },
   });

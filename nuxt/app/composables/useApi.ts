@@ -21,6 +21,11 @@ export function useApi(): EnginerClient {
     timezone,
     csrfToken: authStore.user?.csrf_token ?? (config.public.apiCsrfToken as string) ?? '',
     onRefresh: async () => {
+      // The session is gone: clear the local profile *before* navigating,
+      // otherwise /login mounts while isAuthenticated is still true and
+      // renders the default layout (sidebar + stale profile chip).
+      authStore.user = null;
+      authStore.error = null;
       const route = useRoute();
       await navigateTo({ path: '/login', query: { redirect: route.fullPath } });
     },

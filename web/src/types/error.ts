@@ -103,6 +103,8 @@ export interface ApiError {
   parameters?: Record<string, unknown>;
   request_id: string;
   message?: string;
+  /** Specific server detail beyond the generic per-status text. */
+  detail?: string;
 }
 
 /** Typed error thrown by the API client. */
@@ -112,6 +114,7 @@ export class ApiClientError extends Error {
   readonly statusCode: number;
   readonly parameters?: Record<string, unknown>;
   readonly messageKey: string;
+  readonly detail?: string;
 
   constructor(error: ApiError, statusCode: number) {
     super(error.message ?? error.message_key);
@@ -121,5 +124,6 @@ export class ApiClientError extends Error {
     this.statusCode = statusCode;
     this.parameters = error.parameters;
     this.messageKey = error.message_key;
+    this.detail = error.detail;
   }
 }

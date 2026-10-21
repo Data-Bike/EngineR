@@ -43,6 +43,11 @@
           </div>
         </UCard>
       </NuxtLink>
+      <div v-if="nextCursor" class="flex justify-center pt-2">
+        <UButton variant="outline" :loading="loadingMore" @click="loadMore">
+          {{ t('entity.load_more') }}
+        </UButton>
+      </div>
     </div>
   </div>
 </template>
@@ -53,7 +58,7 @@ import { capability } from '~/middleware/capability';
 
 definePageMeta({ middleware: ['auth', capability('entity.read')] });
 
-const { t } = useI18n();
+const { t, te } = useI18n();
 const route = useRoute();
 const toast = useToast();
 const api = useApi();
@@ -71,7 +76,9 @@ const q = computed(() => (route.query.q as string) ?? '');
 const input = ref(q.value);
 const results = ref<SearchRow[]>([]);
 const loading = ref(false);
+const loadingMore = ref(false);
 const error = ref<string | null>(null);
+const nextCursor = ref<string | null>(null);
 
 function applySearch() {
   navigateTo({ path: '/search', query: input.value.trim() ? { q: input.value.trim() } : {} });
@@ -88,11 +95,33 @@ async function runSearch() {
       catalog: catalogParams().catalog || undefined,
     });
     results.value = res.data as unknown as SearchRow[];
+    nextCursor.value = (res.meta as { next_cursor?: string } | undefined)?.next_cursor ?? null;
   } catch (e: unknown) {
-    error.value = e instanceof Error ? e.message : t('entity.error');
+    error.value = displayError(e, t, te);
     toast.add({ title: t('common.error'), description: error.value, color: 'error' });
   } finally {
     loading.value = false;
+  }
+}
+
+async function loadMore() {
+  if (!nextCursor.value) return;
+  loadingMore.value = true;
+  error.value = null;
+  try {
+    const res = await api.entities.list({
+      search: q.value.trim(),
+      limit: 50,
+      cursor: nextCursor.value,
+      catalog: catalogParams().catalog || undefined,
+    });
+    results.value.push(...(res.data as unknown as SearchRow[]));
+    nextCursor.value = (res.meta as { next_cursor?: string } | undefined)?.next_cursor ?? null;
+  } catch (e: unknown) {
+    error.value = displayError(e, t, te);
+    toast.add({ title: t('common.error'), description: error.value, color: 'error' });
+  } finally {
+    loadingMore.value = false;
   }
 }
 

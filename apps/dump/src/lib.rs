@@ -44,7 +44,7 @@
 //! tenants and to disable FK triggers during import.
 
 use std::collections::BTreeMap;
-use std::io::{BufRead, BufReader, BufWriter, Write};
+use std::io::{BufRead, BufReader, BufWriter, Read, Write};
 use std::path::Path;
 
 use futures::StreamExt;
@@ -77,6 +77,25 @@ const SCHEMAS: &[&str] = &[
     "audit",
     "integration",
     "report",
+];
+
+/// Authentication secrets that never travel in a dump — excluded on BOTH
+/// export and restore:
+/// - `sec.session` rows hold live `session_id`+`csrf_token` pairs — a
+///   dump file would be a ready-made hijack kit, and replayed sessions
+///   would mint live credentials on restore.
+/// - `sec.principal_credential`/`sec.api_token` hold password/token
+///   hashes — offline-crackable in a shared artifact, and a hostile
+///   uploaded dump could inject backdoor credentials bound to any
+///   principal in any tenant (the restore DSN is BYPASSRLS).
+/// A restored environment re-issues logins and service tokens
+/// administratively; group/policy tables still restore because they are
+/// data, not secrets, and a `security.manage` principal could already
+/// mutate them through the API.
+const SECRET_TABLES: &[&str] = &[
+    "sec.session",
+    "sec.principal_credential",
+    "sec.api_token",
 ];
 
 type DynError = Box<dyn std::error::Error + Send + Sync>;
@@ -226,6 +245,10 @@ pub async fn export(dsn: &str, dir: &Path) -> Result<(), DynError> {
     let mut total = 0u64;
     for (schema, table) in &tables {
         let fq = format!("{schema}.{table}");
+        if SECRET_TABLES.contains(&fq.as_str()) {
+            log_line(&mut log, &format!("skipped secret table {fq}"));
+            continue;
+        }
         let n = export_table(&mut conn, &mut w, schema, table).await?;
         table_rows.insert(fq.clone(), n);
         total += n;
@@ -353,6 +376,13 @@ impl Importer<'_> {
                 let Some((schema, seq)) = name.split_once('.') else {
                     continue;
                 };
+                // Only replay sequences that live in EngineR schemas —
+                // a hostile dump must not setval catalog/internal
+                // sequences (pg_*, information_schema, public).
+                if !SCHEMAS.contains(&schema) {
+                    tracing::warn!(sequence = name, "sequence outside dump schemas — skipped");
+                    continue;
+                }
                 // Effective next value is last_value+1 when is_called.
                 // Only move the sequence forward, never back — a merge
                 // restore into a live db must not reissue existing ids.
@@ -384,6 +414,24 @@ impl Importer<'_> {
         let (schema, name) = table
             .split_once('.')
             .ok_or_else(|| format!("bad table key {table}"))?;
+        // Schema allowlist: the restore DSN is superuser/BYPASSRLS, so an
+        // upload that names pg_catalog/public/_sqlx_migrations would
+        // become arbitrary DB writes under a `security.manage` grant.
+        // Only the EngineR schemas may receive rows.
+        if !SCHEMAS.contains(&schema) {
+            return Err(format!(
+                "table {table}: schema {schema} is outside the dump schemas {SCHEMAS:?}"
+            )
+            .into());
+        }
+        // Authentication secrets are never restored from a file — an
+        // uploaded dump could otherwise forge credentials, API tokens
+        // or live sessions for any principal of any tenant.
+        if SECRET_TABLES.contains(&table.as_str()) {
+            tracing::warn!(table, "secret table rows skipped on restore");
+            self.buf.clear();
+            return Ok(());
+        }
         // A single jsonb array parameter — one round-trip per batch.
         // Column mapping is derived from the table's composite type, so
         // dumps keep working when migrations add columns.
@@ -421,12 +469,18 @@ async fn import_file(dir: &Path, imp: &mut Importer<'_>, name: &str) -> Result<u
     let file = std::fs::File::open(&path)?;
     let mut n = 0u64;
     // read::XzDecoder implements Read, not BufRead — buffer on top so the
-    // decompressor is fed large chunks instead of per-line reads.
-    let mut reader: Box<dyn BufRead> = if xz {
-        Box::new(BufReader::with_capacity(1 << 20, XzDecoder::new(file)))
+    // decompressor is fed large chunks instead of per-line reads. The
+    // `take` caps *decompressed* bytes at 8 GiB: a small `.xz` bomb that
+    // would otherwise expand without bound stops with a parse error on
+    // the truncated tail line.
+    const MAX_DECOMPRESSED: u64 = 8 << 30;
+    let inner: Box<dyn std::io::Read> = if xz {
+        Box::new(XzDecoder::new(file))
     } else {
-        Box::new(BufReader::with_capacity(1 << 20, file))
+        Box::new(file)
     };
+    let mut reader: Box<dyn BufRead> =
+        Box::new(BufReader::with_capacity(1 << 20, inner.take(MAX_DECOMPRESSED)));
     let mut line = String::new();
     loop {
         line.clear();

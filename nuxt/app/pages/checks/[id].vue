@@ -2,7 +2,7 @@
   <div class="p-4 sm:p-6 space-y-6 max-w-5xl">
     <div class="flex items-center justify-between gap-3">
       <div>
-        <h1 class="text-2xl font-bold">{{ t('nav.checks') }}</h1>
+        <h1 class="text-2xl font-bold">{{ checkTitle }}</h1>
         <p class="font-mono text-sm text-[var(--ui-text-muted)]">{{ checkId }}</p>
       </div>
       <UButton to="/checks" variant="outline" icon="i-lucide-arrow-left">
@@ -28,11 +28,11 @@
           </div>
           <div>
             <dt class="text-[var(--ui-text-muted)]">{{ t('checks.col.kind') }}</dt>
-            <dd>{{ t(`checks.kind.${check.kind}`) }}</dd>
+            <dd>{{ enumLabel(t, te, 'checks.kind', check.kind) }}</dd>
           </div>
           <div>
             <dt class="text-[var(--ui-text-muted)]">{{ t('checks.col.status') }}</dt>
-            <dd>{{ t(`checks.status.${check.status}`) }}</dd>
+            <dd>{{ enumLabel(t, te, 'checks.status', check.status) }}</dd>
           </div>
           <div>
             <dt class="text-[var(--ui-text-muted)]">{{ t('entity.checks.started') }}</dt>
@@ -66,7 +66,7 @@ import type { CheckResponse } from '@enginer/api-client';
 
 definePageMeta({ middleware: ['auth', capability('check.view')] });
 
-const { t } = useI18n();
+const { t, te } = useI18n();
 const route = useRoute();
 const api = useApi();
 const checkId = computed(() => String(route.params.id ?? ''));
@@ -74,6 +74,19 @@ const check = ref<CheckResponse | null>(null);
 const evidence = ref<Array<Record<string, unknown>>>([]);
 const loading = ref(false);
 const error = ref<string | null>(null);
+
+// Page title + breadcrumb label: "kind — target" instead of the raw uuid.
+const checkTitle = computed(() =>
+  check.value
+    ? `${enumLabel(t, te, 'checks.kind', check.value.kind)} — ${check.value.target_display_name || checkId.value}`
+    : t('nav.checks'),
+);
+const { setBreadcrumbLabel } = useBreadcrumbLabels();
+watch(
+  () => check.value?.target_display_name,
+  () => setBreadcrumbLabel(checkId.value, check.value ? checkTitle.value : null),
+);
+onUnmounted(() => setBreadcrumbLabel(checkId.value, null));
 
 function formatDate(value: string): string {
   return new Date(value).toLocaleString();
@@ -90,7 +103,7 @@ async function fetchCheck() {
     check.value = checkResponse.data;
     evidence.value = evidenceResponse.data.evidence ?? [];
   } catch (cause: unknown) {
-    error.value = cause instanceof Error ? cause.message : String(cause);
+    error.value = displayError(cause, t, te);
   } finally {
     loading.value = false;
   }

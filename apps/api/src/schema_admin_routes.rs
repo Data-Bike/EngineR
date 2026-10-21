@@ -48,6 +48,8 @@ struct ErrorBody {
     message_key: String,
     request_id: String,
     message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    detail: Option<String>,
 }
 
 #[derive(Debug)]
@@ -69,12 +71,16 @@ impl ApiFailure {
 
 impl<'r> Responder<'r, 'static> for ApiFailure {
     fn respond_to(self, request: &'r Request<'_>) -> rocket::response::Result<'static> {
+        let detail = (self.message.trim() != crate::ApiError::default_message(self.status)
+            && !self.message.trim().is_empty())
+        .then(|| self.message.clone());
         let body = ErrorEnvelope {
             error: ErrorBody {
                 code: self.code.to_string(),
                 message_key: format!("errors.{}", self.code),
                 request_id: uuid::Uuid::now_v7().to_string(),
                 message: self.message,
+                detail,
             },
         };
         let mut response = Json(body).respond_to(request)?;
@@ -120,6 +126,12 @@ impl<'r, T: Serialize> Responder<'r, 'static> for Etagged<T> {
 
 #[derive(Debug)]
 pub struct IfMatch(Option<String>);
+
+impl IfMatch {
+    pub fn value(&self) -> Option<&str> {
+        self.0.as_deref()
+    }
+}
 
 #[rocket::async_trait]
 impl<'r> FromRequest<'r> for IfMatch {
@@ -219,6 +231,10 @@ pub struct SchemaRevisionRecord {
     pub impact: Option<ImpactReport>,
     pub publish_reason: Option<String>,
     pub retire_reason: Option<String>,
+    /// Owning catalog alias — surfaced so clients can distinguish same-named
+    /// revision streams across catalogs (docs/28 §3).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub catalog: Option<String>,
 }
 
 impl SchemaRevisionRecord {
@@ -357,9 +373,10 @@ async fn load_records(
     tenant: uuid::Uuid,
     catalog: Option<i64>,
 ) -> Result<Vec<SchemaRevisionRecord>, DbError> {
-    let rows: Vec<(serde_json::Value,)> = sqlx::query_as(
-        "SELECT content FROM meta.schema_revision
-         WHERE tenant_id=$1 AND ($2::bigint IS NULL OR catalog_id=$2)",
+    let rows: Vec<(serde_json::Value, Option<String>)> = sqlx::query_as(
+        "SELECT r.content, c.alias FROM meta.schema_revision r
+         LEFT JOIN core.catalog c ON c.tenant_id=r.tenant_id AND c.catalog_id=r.catalog_id
+         WHERE r.tenant_id=$1 AND ($2::bigint IS NULL OR r.catalog_id=$2)",
     )
     .bind(tenant)
     .bind(catalog)
@@ -370,7 +387,18 @@ async fn load_records(
     })?;
     Ok(rows
         .into_iter()
-        .filter_map(|(content,)| serde_json::from_value::<SchemaRevisionRecord>(content).ok())
+        .filter_map(|(content, alias)| {
+            serde_json::from_value::<SchemaRevisionRecord>(content)
+                .ok()
+                .map(|mut record| {
+                    // The row's catalog is authoritative; the copy injected
+                    // into content at write time is the fallback.
+                    if record.catalog.is_none() {
+                        record.catalog = alias;
+                    }
+                    record
+                })
+        })
         .collect())
 }
 
@@ -935,6 +963,7 @@ fn seed_revision() -> SchemaRevisionRecord {
         impact: None,
         publish_reason: Some("Initial SKR Core publication".to_string()),
         retire_reason: None,
+        catalog: None,
     };
     record.refresh_derived();
     record.content_hash = Some(content_hash(&record));
@@ -1047,6 +1076,25 @@ fn validate_record(record: &SchemaRevisionRecord) -> ValidationReport {
         }
     }
 
+    let type_aliases: HashSet<&str> = record
+        .types
+        .iter()
+        .filter_map(|t| {
+            t.get("type_id")
+                .or_else(|| t.get("stable_alias"))
+                .and_then(Value::as_str)
+        })
+        .collect();
+    let predicate_aliases: HashSet<&str> = record
+        .predicates
+        .iter()
+        .filter_map(|p| {
+            p.get("stable_alias")
+                .or_else(|| p.get("predicate_id"))
+                .and_then(Value::as_str)
+        })
+        .collect();
+
     // Field kinds declared on types must be known (docs/03 §7, docs/16 §6).
     for (t_index, type_def) in record.types.iter().enumerate() {
         let Some(fields) = type_def
@@ -1088,19 +1136,103 @@ fn validate_record(record: &SchemaRevisionRecord) -> ValidationReport {
                     path: Some(path.clone()),
                 });
             }
-            if kind == "entity_reference"
-                && field
+            if kind == "entity_reference" {
+                let target = field
                     .get("target_type_id")
                     .or_else(|| field.get("range"))
-                    .and_then(Value::as_str)
-                    .is_none()
-            {
+                    .and_then(Value::as_str);
+                match target {
+                    None => findings.push(ValidationFinding {
+                        severity: "warning".to_string(),
+                        code: "field.target_type.recommended".to_string(),
+                        message: "Для entity_reference рекомендуется `target_type_id`".to_string(),
+                        path: Some(path),
+                    }),
+                    Some(t) if !type_aliases.contains(t) => findings.push(ValidationFinding {
+                        severity: "error".to_string(),
+                        code: "field.target_type.unknown".to_string(),
+                        message: format!("entity_reference указывает на неизвестный тип `{t}`"),
+                        path: Some(path),
+                    }),
+                    _ => {}
+                }
+            }
+        }
+    }
+
+    // Referential integrity (docs/28 §4, mirror of bundle::validate_references):
+    // type fields must name a declared predicate; edge predicates must point
+    // domain/range at declared types.
+    for (t_index, type_def) in record.types.iter().enumerate() {
+        let fields = type_def
+            .get("fields")
+            .or_else(|| type_def.get("predicates"))
+            .and_then(Value::as_array);
+        let Some(fields) = fields else { continue };
+        for (f_index, field) in fields.iter().enumerate() {
+            let Some(alias) = field
+                .get("alias")
+                .or_else(|| field.get("predicate_id"))
+                .or_else(|| field.get("predicate"))
+                .and_then(Value::as_str)
+            else {
+                continue;
+            };
+            if !predicate_aliases.contains(alias) {
+                findings.push(ValidationFinding {
+                    severity: "error".to_string(),
+                    code: "field.predicate.unknown".to_string(),
+                    message: format!("Поле ссылается на необъявленный предикат `{alias}`"),
+                    path: Some(format!("types[{t_index}].fields[{f_index}].alias")),
+                });
+            }
+        }
+    }
+    let group_ids: HashSet<&str> = record
+        .relation_groups
+        .iter()
+        .filter_map(|g| g.get("id").and_then(Value::as_str))
+        .collect();
+    for (p_index, predicate) in record.predicates.iter().enumerate() {
+        let is_edge = predicate
+            .get("is_edge")
+            .and_then(Value::as_bool)
+            .unwrap_or(false)
+            || predicate.get("domain").is_some()
+            || predicate.get("range").is_some();
+        let p_alias = alias_of(predicate).unwrap_or("?");
+        // `group` must resolve to a declared relation_group id, otherwise the
+        // relation lands in an unnamed bucket in the UI.
+        if let Some(group) = predicate.get("group").and_then(Value::as_str) {
+            if !group.is_empty() && !group_ids.contains(group) {
                 findings.push(ValidationFinding {
                     severity: "warning".to_string(),
-                    code: "field.target_type.recommended".to_string(),
-                    message: "Для entity_reference рекомендуется `target_type_id`".to_string(),
-                    path: Some(path),
+                    code: "edge.group.unknown".to_string(),
+                    message: format!(
+                        "Предикат `{p_alias}` ссылается на необъявленную группу `{group}`"
+                    ),
+                    path: Some(format!("predicates[{p_index}].group")),
                 });
+            }
+        }
+        if !is_edge {
+            continue;
+        }
+        for (key, code) in [("domain", "edge.domain.unknown"), ("range", "edge.range.unknown")] {
+            match predicate.get(key).and_then(Value::as_str) {
+                Some(t) if !type_aliases.contains(t) => findings.push(ValidationFinding {
+                    severity: "error".to_string(),
+                    code: code.to_string(),
+                    message: format!("Ребро `{p_alias}` ссылается на неизвестный тип `{t}` ({key})"),
+                    path: Some(format!("predicates[{p_index}].{key}")),
+                }),
+                None => findings.push(ValidationFinding {
+                    severity: "error".to_string(),
+                    code: format!("edge.{key}.required"),
+                    message: format!("У ребра `{p_alias}` не задан {key}"),
+                    path: Some(format!("predicates[{p_index}].{key}")),
+                }),
+                _ => {}
             }
         }
     }
@@ -1308,9 +1440,10 @@ pub async fn list_drafts(
             // the catalog gate applies per record, not only to `?catalog`.
             let perm =
                 crate::dataperm::DataPerm::load(&mut tx, ctx.tenant_id, ctx.principal_id).await?;
-            let rows: Vec<(i64, serde_json::Value)> = sqlx::query_as(
-                "SELECT catalog_id, content FROM meta.schema_revision
-                 WHERE tenant_id=$1 AND ($2::bigint IS NULL OR catalog_id=$2)",
+            let rows: Vec<(i64, serde_json::Value, Option<String>)> = sqlx::query_as(
+                "SELECT r.catalog_id, r.content, c.alias FROM meta.schema_revision r
+                 LEFT JOIN core.catalog c ON c.tenant_id=r.tenant_id AND c.catalog_id=r.catalog_id
+                 WHERE r.tenant_id=$1 AND ($2::bigint IS NULL OR r.catalog_id=$2)",
             )
             .bind(ctx.tenant_id)
             .bind(cat.map(|c| c.catalog_id))
@@ -1320,13 +1453,16 @@ pub async fn list_drafts(
                 message: e.to_string(),
             })?;
             let mut drafts: Vec<SchemaRevisionRecord> = Vec::new();
-            for (cid, content) in rows {
+            for (cid, content, alias) in rows {
                 let ckeys = catalog_key_list(&mut tx, ctx.tenant_id, cid).await?;
                 let ckey_refs: Vec<&str> = ckeys.iter().map(String::as_str).collect();
                 if !perm.can_catalog(&ckey_refs, crate::dataperm::Op::Read) {
                     continue;
                 }
-                if let Ok(record) = serde_json::from_value::<SchemaRevisionRecord>(content) {
+                if let Ok(mut record) = serde_json::from_value::<SchemaRevisionRecord>(content) {
+                    if record.catalog.is_none() {
+                        record.catalog = alias;
+                    }
                     if is_draft(&record) {
                         drafts.push(record);
                     }
@@ -1559,6 +1695,7 @@ pub async fn create_draft(
                 impact: None,
                 publish_reason: None,
                 retire_reason: None,
+                catalog: Some(cat.alias.clone()),
             };
             record.refresh_derived();
             save_record(&mut tx, ctx.tenant_id, cat.catalog_id, ctx.principal_id, &record)
@@ -1910,9 +2047,10 @@ pub async fn list_revisions(
             // Per-record catalog gate — same rule as list_drafts.
             let perm =
                 crate::dataperm::DataPerm::load(&mut tx, ctx.tenant_id, ctx.principal_id).await?;
-            let rows: Vec<(i64, serde_json::Value)> = sqlx::query_as(
-                "SELECT catalog_id, content FROM meta.schema_revision
-                 WHERE tenant_id=$1 AND ($2::bigint IS NULL OR catalog_id=$2)",
+            let rows: Vec<(i64, serde_json::Value, Option<String>)> = sqlx::query_as(
+                "SELECT r.catalog_id, r.content, c.alias FROM meta.schema_revision r
+                 LEFT JOIN core.catalog c ON c.tenant_id=r.tenant_id AND c.catalog_id=r.catalog_id
+                 WHERE r.tenant_id=$1 AND ($2::bigint IS NULL OR r.catalog_id=$2)",
             )
             .bind(ctx.tenant_id)
             .bind(cat.map(|c| c.catalog_id))
@@ -1922,13 +2060,18 @@ pub async fn list_revisions(
                 message: e.to_string(),
             })?;
             let mut revisions: Vec<SchemaRevisionRecord> = Vec::new();
-            for (cid, content) in rows {
+            for (cid, content, alias) in rows {
                 let ckeys = catalog_key_list(&mut tx, ctx.tenant_id, cid).await?;
                 let ckey_refs: Vec<&str> = ckeys.iter().map(String::as_str).collect();
                 if !perm.can_catalog(&ckey_refs, crate::dataperm::Op::Read) {
                     continue;
                 }
-                if let Ok(record) = serde_json::from_value::<SchemaRevisionRecord>(content) {
+                if let Ok(mut record) = serde_json::from_value::<SchemaRevisionRecord>(content) {
+                    // Pre-catalog rows carry the stream only as a column —
+                    // hydrate so clients can tell revisions apart per catalog.
+                    if record.catalog.is_none() {
+                        record.catalog = alias;
+                    }
                     if !is_draft(&record) {
                         revisions.push(record);
                     }
@@ -2123,9 +2266,10 @@ async fn published_records(
     tenant: uuid::Uuid,
     catalog: Option<i64>,
 ) -> Result<Vec<(i64, SchemaRevisionRecord)>, DbError> {
-    let rows: Vec<(i64, serde_json::Value)> = sqlx::query_as(
-        "SELECT catalog_id, content FROM meta.schema_revision
-         WHERE tenant_id=$1 AND ($2::bigint IS NULL OR catalog_id=$2)",
+    let rows: Vec<(i64, serde_json::Value, Option<String>)> = sqlx::query_as(
+        "SELECT r.catalog_id, r.content, c.alias FROM meta.schema_revision r
+         LEFT JOIN core.catalog c ON c.tenant_id=r.tenant_id AND c.catalog_id=r.catalog_id
+         WHERE r.tenant_id=$1 AND ($2::bigint IS NULL OR r.catalog_id=$2)",
     )
     .bind(tenant)
     .bind(catalog)
@@ -2136,10 +2280,18 @@ async fn published_records(
     })?;
     Ok(rows
         .into_iter()
-        .filter_map(|(cid, content)| {
+        .filter_map(|(cid, content, alias)| {
             serde_json::from_value::<SchemaRevisionRecord>(content)
                 .ok()
-                .map(|r| (cid, r))
+                .map(|mut record| {
+                    // Rows written before the catalog field existed have it
+                    // only as a column — hydrate so list responses can
+                    // distinguish streams.
+                    if record.catalog.is_none() {
+                        record.catalog = alias;
+                    }
+                    (cid, record)
+                })
         })
         .filter(|(_, r)| r.status == "published")
         .collect())
@@ -2464,11 +2616,39 @@ pub async fn get_schema_type(
                 if !perm.can_type(&tkeys, &ckey_refs, crate::dataperm::Op::Read) {
                     return Err(sf_err(Status::NotFound, "not_found", "Тип не найден"));
                 }
+                let tid: Option<(uuid::Uuid,)> = sqlx::query_as(
+                    "SELECT type_id FROM meta.type_definition
+                     WHERE tenant_id=$1 AND stable_alias=$2 AND catalog_id=$3",
+                )
+                .bind(ctx.tenant_id)
+                .bind(alias)
+                .bind(cid)
+                .fetch_optional(&mut *tx)
+                .await
+                .map_err(|e| DbError::Other {
+                    message: e.to_string(),
+                })?;
+                let entity_count = if let Some((u,)) = tid {
+                    sqlx::query_as::<_, (i64,)>(
+                        "SELECT count(*) FROM core.entity
+                         WHERE tenant_id=$1 AND type_id=$2 AND retired_at IS NULL",
+                    )
+                    .bind(ctx.tenant_id)
+                    .bind(u)
+                    .fetch_one(&mut *tx)
+                    .await
+                    .map_err(|e| DbError::Other {
+                        message: e.to_string(),
+                    })?
+                    .0 as usize
+                } else {
+                    0
+                };
                 let rev = record.revision_id.parse().unwrap_or(0);
                 return Ok(type_record_value(
                     entry,
                     rev,
-                    0,
+                    entity_count,
                     ckeys.get(1).map(String::as_str),
                 ));
             }
@@ -2615,7 +2795,7 @@ pub async fn list_predicates(
                             let catalog_alias = catalog_alias.clone();
                             json!({
                                 "catalog": catalog_alias,
-                        "predicate_id": p.get("predicate_id").and_then(Value::as_str).unwrap_or_default(),
+                        "predicate_id": p.get("predicate_id").or_else(|| p.get("stable_alias")).or_else(|| p.get("alias")).and_then(Value::as_str).unwrap_or_default(),
                         "alias": alias_of(p).unwrap_or_default(),
                         "display_name": p.get("label").or_else(||p.get("display_name")).and_then(Value::as_str).unwrap_or_default(),
                         "label": p.get("label").and_then(Value::as_str).unwrap_or_default(),
@@ -2701,6 +2881,82 @@ mod tests {
             .findings
             .iter()
             .any(|finding| finding.code == "alias.duplicate"));
+    }
+
+    #[test]
+    fn validation_detects_dangling_field_predicate() {
+        let mut record = draft_with_change();
+        record.types[0]["fields"] = json!([{"alias": "no_such_predicate", "kind": "text"}]);
+        let report = validate_record(&record);
+        assert!(!report.valid);
+        assert!(report
+            .findings
+            .iter()
+            .any(|f| f.code == "field.predicate.unknown" && f.severity == "error"));
+    }
+
+    #[test]
+    fn validation_detects_dangling_edge_range_and_missing_domain() {
+        let mut record = draft_with_change();
+        record.predicates.push(json!({
+            "stable_alias": "bad_edge",
+            "is_edge": true,
+            "domain": "ghost_type",
+            "range": "another_ghost"
+        }));
+        record.predicates.push(json!({
+            "stable_alias": "halved_edge",
+            "is_edge": true
+        }));
+        let report = validate_record(&record);
+        assert!(!report.valid);
+        let codes: Vec<&str> = report.findings.iter().map(|f| f.code.as_str()).collect();
+        assert!(codes.contains(&"edge.domain.unknown"));
+        assert!(codes.contains(&"edge.range.unknown"));
+        assert!(codes.contains(&"edge.domain.required"));
+        assert!(codes.contains(&"edge.range.required"));
+    }
+
+    #[test]
+    fn validation_detects_dangling_field_target_type() {
+        let mut record = draft_with_change();
+        let pred_alias = record.predicates[0]
+            .get("stable_alias")
+            .and_then(Value::as_str)
+            .unwrap()
+            .to_string();
+        record.types[0]["fields"] = json!([
+            {"alias": pred_alias, "kind": "entity_reference", "target_type_id": "ghost"}
+        ]);
+        let report = validate_record(&record);
+        assert!(!report.valid);
+        assert!(report
+            .findings
+            .iter()
+            .any(|f| f.code == "field.target_type.unknown" && f.severity == "error"));
+    }
+
+    #[test]
+    fn validation_warns_on_unknown_relation_group() {
+        let mut record = draft_with_change();
+        record.predicates.push(json!({
+            "stable_alias": "grouped_edge",
+            "is_edge": true,
+            "domain": record.types[0]
+                .get("stable_alias")
+                .and_then(Value::as_str)
+                .unwrap_or("person"),
+            "range": record.types[0]
+                .get("stable_alias")
+                .and_then(Value::as_str)
+                .unwrap_or("person"),
+            "group": "no_such_group"
+        }));
+        let report = validate_record(&record);
+        assert!(report
+            .findings
+            .iter()
+            .any(|f| f.code == "edge.group.unknown" && f.severity == "warning"));
     }
 
     #[test]

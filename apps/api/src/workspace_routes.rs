@@ -243,7 +243,8 @@ fn required_capabilities(method: &str, path: &str) -> Vec<&'static str> {
         ("POST", ["", "api", "v1", "entities", "query"]) => one("query.advanced"),
 
         // Entity assessments / risk factors
-        ("POST", ["", "api", "v1", "entities", _, "assessment"]) => one("assessment.view"),
+        // Triggering an assessment is a write — entity.edit like tasks/docs.
+        ("POST", ["", "api", "v1", "entities", _, "assessment"]) => one("entity.edit"),
         ("GET", ["", "api", "v1", "entities", _, "assessment"]) => one("assessment.view"),
         ("POST", ["", "api", "v1", "entities", _, "factors", _, "resolve"]) => one("risk.resolve"),
         ("GET", ["", "api", "v1", "entities", _, "factors", ..]) => one("risk.view"),
@@ -256,6 +257,10 @@ fn required_capabilities(method: &str, path: &str) -> Vec<&'static str> {
         // Entity documents and staged file uploads
         ("GET", ["", "api", "v1", "entities", _, "documents", ..]) => one("entity.read"),
         (_, ["", "api", "v1", "entities", _, "documents", ..]) => one("entity.edit"),
+        // File reads: document blobs need entity.read (visibility is
+        // rechecked per-row by gate_file_access); report artifacts
+        // additionally require report.export inside the gate.
+        ("GET", ["", "api", "v1", "files", ..]) => vec!["entity.read", "report.export"],
         (_, ["", "api", "v1", "files", ..]) => one("entity.edit"),
 
         // Entity relations
@@ -557,4 +562,71 @@ pub(crate) fn build_type_view(schema_type: &SchemaTypeRecord, view_type: &str) -
 }
 fn default_entity_class() -> String {
     "domain".to_string()
+}
+
+#[cfg(test)]
+mod required_capability_tests {
+    use super::required_capabilities as caps;
+
+    #[test]
+    fn file_reads_accept_entity_read_or_report_export() {
+        assert_eq!(
+            caps("GET", "/api/v1/files/abc"),
+            vec!["entity.read", "report.export"]
+        );
+        assert_eq!(
+            caps("GET", "/api/v1/files/abc/download"),
+            vec!["entity.read", "report.export"]
+        );
+    }
+
+    #[test]
+    fn file_mutations_need_entity_edit() {
+        assert_eq!(caps("DELETE", "/api/v1/files/abc"), vec!["entity.edit"]);
+        assert_eq!(
+            caps("POST", "/api/v1/files/upload/init"),
+            vec!["entity.edit"]
+        );
+    }
+
+    #[test]
+    fn entity_scoped_checks_need_entity_read() {
+        assert_eq!(
+            caps("GET", "/api/v1/entities/x/checks"),
+            vec!["entity.read"]
+        );
+    }
+
+    #[test]
+    fn check_catalog_reads_need_check_view() {
+        assert_eq!(caps("GET", "/api/v1/checks"), vec!["check.view"]);
+    }
+
+    #[test]
+    fn assessment_create_is_a_write() {
+        assert_eq!(
+            caps("POST", "/api/v1/entities/x/assessment"),
+            vec!["entity.edit"]
+        );
+        assert_eq!(
+            caps("GET", "/api/v1/entities/x/assessment"),
+            vec!["assessment.view"]
+        );
+    }
+
+    #[test]
+    fn users_manage_is_umbrella() {
+        assert_eq!(
+            caps("GET", "/api/v1/users/x"),
+            vec!["user.read", "users.manage"]
+        );
+    }
+
+    #[test]
+    fn catalog_manage_accepts_security_umbrella() {
+        assert_eq!(
+            caps("POST", "/api/v1/catalogs"),
+            vec!["catalog.manage", "security.manage"]
+        );
+    }
 }

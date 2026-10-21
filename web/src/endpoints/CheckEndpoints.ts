@@ -31,7 +31,13 @@ export class CheckEndpoints {
   }
 
   /** GET /checks — list all checks (optional filters). */
-  async listChecks(query?: { target_entity_id?: string; status?: string }): Promise<ParsedResponse<CheckResponse[]>> {
+  async listChecks(query?: {
+    target_entity_id?: string;
+    status?: string;
+    kind?: string;
+    limit?: number;
+    cursor?: string;
+  }): Promise<ParsedResponse<CheckResponse[]>> {
     return this.client.get<CheckResponse[]>('/checks', query ? { query } : undefined);
   }
 
@@ -51,13 +57,8 @@ export class CheckEndpoints {
   }
 
   /** GET /assessments — list all risk assessments. */
-  async listAssessments(): Promise<ParsedResponse<unknown[]>> {
-    return this.client.get<unknown[]>('/assessments');
-  }
-
-  /** POST /assessments — trigger a risk assessment. */
-  async createAssessment(body: unknown): Promise<ParsedResponse<unknown>> {
-    return this.client.post<unknown>('/assessments', body);
+  async listAssessments(query?: { status?: string; limit?: number; cursor?: string }): Promise<ParsedResponse<unknown[]>> {
+    return this.client.get<unknown[]>('/assessments', query ? { query } : undefined);
   }
 
   // --- Assessment ---

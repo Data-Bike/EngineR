@@ -156,7 +156,12 @@ impl McpState {
                     status: Some(status.as_u16()),
                 }
             }
-            Err(e) => ToolOutcome::err(format!("api call failed: {e}")),
+            // reqwest errors embed the internal URL — never leak the
+            // service hostname to MCP callers; log it server-side instead.
+            Err(e) => {
+                tracing::warn!(error = %e, "upstream api call failed");
+                ToolOutcome::err("api call failed: upstream request error".to_string())
+            }
         }
     }
 }
@@ -364,30 +369,33 @@ pub async fn handle_rpc(state: &McpState, token: &str, ctx: &Value, msg: &Value)
                         .collect()
                 })
                 .unwrap_or_default();
-            if let Some(cap) = tool.capability {
-                let ok = caps.iter().any(|c| c == cap)
-                    || (cap.starts_with("user.") && caps.iter().any(|c| c == "users.manage"))
-                    // `security.manage` umbrellas catalog administration —
-                    // same umbrella the API's capability map applies.
-                    || (cap == "catalog.manage" && caps.iter().any(|c| c == "security.manage"));
-                if !ok {
-                    return if is_notification {
-                        None
-                    } else {
-                        Some(rpc_error(
-                            &id,
-                            -32602,
-                            &format!("capability '{cap}' not granted to this token"),
-                        ))
-                    };
-                }
+            // Any-of semantics mirroring the API guard — same umbrella rules
+            // as `tools/list` (tools::cap_granted) so both sides agree.
+            if !tool.capabilities.is_empty()
+                && !tool
+                    .capabilities
+                    .iter()
+                    .any(|cap| tools::cap_granted(&caps, cap))
+            {
+                let cap = tool.capabilities[0];
+                return if is_notification {
+                    None
+                } else {
+                    Some(rpc_error(
+                        &id,
+                        -32602,
+                        &format!("capability '{cap}' not granted to this token"),
+                    ))
+                };
             }
-            let out = state.call_tool(token, tool, &args).await;
-            // A notification form of tools/call is still executed (the
-            // side effect is requested) but must not produce a reply.
+            // A notification-form tools/call must NOT execute: JSON-RPC
+            // notifications carry no request semantics, and running the side
+            // effect fire-and-forget would drop the result/error where the
+            // caller can never see it — a silent, unattributable mutation.
             if is_notification {
                 return None;
             }
+            let out = state.call_tool(token, tool, &args).await;
             let text = serde_json::to_string_pretty(&out.payload)
                 .unwrap_or_else(|_| out.payload.to_string());
             Some(rpc_result(

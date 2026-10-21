@@ -69,6 +69,9 @@
           </tr>
         </tbody>
       </table></div>
+      <div v-if="nextCursor" class="flex justify-center pt-3">
+        <UButton variant="outline" :loading="loadingMore" @click="loadMore">{{ t('entity.load_more') }}</UButton>
+      </div>
     </UCard>
   </div>
 </template>
@@ -80,10 +83,11 @@ import { useI18n } from 'vue-i18n';
 import StatCard from '~/components/common/StatCard.vue';
 import RiskLevelBadge from '~/components/entity/RiskLevelBadge.vue';
 import type { RiskLevel } from '@enginer/api-client';
+import { nextCursorOf } from '~/utils/pagination';
 
 definePageMeta({ middleware: ['auth', capability('risk.view')] });
 
-const { t } = useI18n();
+const { t, te } = useI18n();
 const toast = useToast();
 const api = useApi();
 
@@ -151,15 +155,37 @@ function resetFilters() {
   fetchAssessments();
 }
 
+const nextCursor = ref<string | null>(null);
+const loadingMore = ref(false);
+
+function listQuery(cursor?: string) {
+  return { status: filters.status === 'all' ? undefined : filters.status, cursor };
+}
+
 async function fetchAssessments() {
   loading.value = true;
   try {
-    const res = await api.checks.listAssessments();
+    const res = await api.checks.listAssessments(listQuery());
     assessments.value = res.data as AssessmentRow[];
+    nextCursor.value = nextCursorOf(res.meta);
   } catch (err) {
-    toast.add({ title: t('common.error'), description: err instanceof Error ? err.message : String(err), color: 'error' });
+    toast.add({ title: t('common.error'), description: displayError(err, t, te), color: 'error' });
   } finally {
     loading.value = false;
+  }
+}
+
+async function loadMore() {
+  if (!nextCursor.value) return;
+  loadingMore.value = true;
+  try {
+    const res = await api.checks.listAssessments(listQuery(nextCursor.value));
+    assessments.value.push(...(res.data as AssessmentRow[]));
+    nextCursor.value = nextCursorOf(res.meta);
+  } catch (err) {
+    toast.add({ title: t('common.error'), description: displayError(err, t, te), color: 'error' });
+  } finally {
+    loadingMore.value = false;
   }
 }
 

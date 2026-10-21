@@ -84,14 +84,25 @@
             v-for="row in rows"
             :key="row.public_id"
             class="border-b border-[var(--ui-border)] hover:bg-[var(--ui-bg-muted)] cursor-pointer"
+            tabindex="0"
             @click="openEntity(row.public_id)"
+            @keydown.enter="openEntity(row.public_id)"
           >
             <td
-              v-for="col in columns"
+              v-for="(col, colIdx) in columns"
               :key="col.alias"
-              class="py-2 px-3"
+              class="py-2 px-3 max-w-48 truncate"
+              :title="formatValue(row[col.alias], col.alias)"
             >
-              {{ formatValue(row[col.alias]) }}
+              <NuxtLink
+                v-if="colIdx === 0"
+                :to="`/entities/${row.public_id}`"
+                class="text-[var(--ui-primary)] hover:underline"
+                @click.stop
+              >
+                {{ formatValue(row[col.alias], col.alias) }}
+              </NuxtLink>
+              <template v-else>{{ formatValue(row[col.alias], col.alias) }}</template>
             </td>
           </tr>
         </tbody>
@@ -212,7 +223,7 @@ async function doSearch() {
     rows.value = res.data.rows || [];
     cursor.value = res.data.cursor;
   } catch (e: unknown) {
-    error.value = e instanceof Error ? e.message : t('entity.error');
+    error.value = displayError(e, t, te);
     toast.add({ title: t('common.error'), description: error.value!, color: 'error' });
   } finally {
     loading.value = false;
@@ -233,7 +244,7 @@ async function loadMore() {
     rows.value.push(...(res.data.rows || []));
     cursor.value = res.data.cursor;
   } catch (e: unknown) {
-    error.value = e instanceof Error ? e.message : t('entity.error');
+    error.value = displayError(e, t, te);
     toast.add({ title: t('common.error'), description: error.value!, color: 'error' });
   } finally {
     loadingMore.value = false;
@@ -244,9 +255,16 @@ function openEntity(publicId: string) {
   navigateTo(`/entities/${publicId}`);
 }
 
-function formatValue(v: unknown): string {
+function formatValue(v: unknown, alias?: string): string {
   if (v === null || v === undefined) return '';
-  if (typeof v === 'string') return v;
+  if (alias === 'status' && typeof v === 'string' && te(`entity.status.${v}`)) {
+    return t(`entity.status.${v}`);
+  }
+  if (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(v)) {
+    const d = new Date(v);
+    if (!Number.isNaN(d.getTime())) return d.toLocaleString();
+  }
+  if (typeof v === 'object') return JSON.stringify(v);
   return String(v);
 }
 

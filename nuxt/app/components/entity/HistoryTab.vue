@@ -41,7 +41,7 @@
                 </UBadge>
               </p>
               <p class="text-sm text-[var(--ui-text-muted)]">
-                {{ rev.timestamp }} · {{ rev.actor }}
+                {{ formatDateTime(rev.timestamp) }} · {{ rev.actor }}
               </p>
             </div>
             <div class="flex items-center gap-2">
@@ -122,7 +122,7 @@ const props = defineProps<{
   currentRevision: number;
 }>();
 
-const { t } = useI18n();
+const { t, te } = useI18n();
 const toast = useToast();
 const api = useApi();
 
@@ -181,7 +181,7 @@ async function fetchHistory() {
     const res = await api.entities.getHistory(props.entityId);
     revisions.value = (res.data ?? []) as RevisionEntry[];
   } catch (e: unknown) {
-    toast.add({ title: t('common.error'), description: e instanceof Error ? e.message : String(e), color: 'error' });
+    toast.add({ title: t('common.error'), description: displayError(e, t, te), color: 'error' });
     revisions.value = [];
   }
 }

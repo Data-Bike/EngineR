@@ -144,8 +144,11 @@ export interface CreateEntityBody {
 /** A statement input in the create body. */
 export interface StatementInput {
   predicate_id: string;
-  value: StatementValueInput;
+  value: StatementValueInput | RawStatementValue;
 }
+
+/** A raw form value — the server coerces it by the declared field kind. */
+export type RawStatementValue = string | number | boolean | null | { [key: string]: unknown } | unknown[];
 
 /** The value side of a statement input (docs/06 §6). */
 export type StatementValueInput =

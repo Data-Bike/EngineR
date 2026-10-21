@@ -45,6 +45,7 @@ async fn main() -> Result<(), rocket::Error> {
         });
 
     let state = AppState::new(config, db_executor, security_client);
+    enginer_api::sweep_orphaned_dump_runs();
     let _ = rocket_build(state).ignite().await?.launch().await?;
     Ok(())
 }

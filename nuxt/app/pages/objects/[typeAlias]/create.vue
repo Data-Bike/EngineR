@@ -22,10 +22,27 @@
       <UButton variant="outline" @click="fetchView">{{ t('common.retry') }}</UButton>
     </div>
 
-    <!-- Form -->
+    <!-- Submit error — inline, the form state survives (422/409 failures
+         without a per-field error map used to replace the whole form). -->
+    <UAlert
+      v-if="submitError && view"
+      color="error"
+      variant="soft"
+      icon="i-lucide-alert-triangle"
+      :title="t('common.error')"
+      :description="submitError"
+      :close-button="{ icon: 'i-lucide-x', color: 'gray', variant: 'link' }"
+      @close="submitError = null"
+    />
+
+    <!-- Form — own v-if, not chained to the submit-error alert above:
+         the alert must coexist with the form instead of replacing it. -->
     <EntityFormRenderer
-      v-else-if="view"
+      ref="formRef"
+      v-if="!loadingView && !viewError && view"
+      :key="draftKey"
       :view="view"
+      :initial-values="draftValues"
       :validation-errors="validationErrors"
       :submitting="submitting"
       :allow-draft="true"
@@ -55,13 +72,14 @@ import type {
   FormSubmission,
   FieldValidationError,
   QueryBody,
+  RawStatementValue,
 } from '@enginer/api-client';
 
 definePageMeta({
   middleware: ['auth', capability('entity.create')],
 });
 
-const { t } = useI18n();
+const { t, te } = useI18n();
 const route = useRoute();
 const toast = useToast();
 const api = useApi();
@@ -78,8 +96,10 @@ const typeAlias = computed(() => route.params.typeAlias as string);
 const view = ref<ViewDefinition | null>(null);
 const loadingView = ref(false);
 const viewError = ref<string | null>(null);
+const submitError = ref<string | null>(null);
 const submitting = ref(false);
 const validationErrors = ref<Record<string, FieldValidationError>>({});
+const formRef = ref<{ markSaved: () => void } | null>(null);
 
 // Duplicate suggestion state (docs/17 §5)
 const showDuplicate = ref(false);
@@ -103,7 +123,7 @@ async function fetchView() {
     const res = await api.schemas.getTypeView(typeAlias.value, 'form', scopedCatalogParams());
     view.value = res.data as ViewDefinition;
   } catch (e: unknown) {
-    viewError.value = e instanceof Error ? e.message : t('entity.error');
+    viewError.value = displayError(e, t, te);
     toast.add({ title: t('common.error'), description: viewError.value!, color: 'error' });
   } finally {
     loadingView.value = false;
@@ -113,6 +133,7 @@ async function fetchView() {
 async function onSubmit(body: FormSubmission) {
   submitting.value = true;
   validationErrors.value = {};
+  submitError.value = null;
   try {
     // Step 1: check for duplicates before commit (docs/17 §5)
     const dupCheck = await checkDuplicates(body);
@@ -131,7 +152,7 @@ async function onSubmit(body: FormSubmission) {
     if (err.validation_errors) {
       validationErrors.value = err.validation_errors;
     } else {
-      viewError.value = e instanceof Error ? e.message : t('entity.error');
+      submitError.value = displayError(e, t, te);
     }
   } finally {
     submitting.value = false;
@@ -218,7 +239,7 @@ async function createEntity(body: FormSubmission) {
   // dates/money/geo/entity references as plain text scalars.
   const statements = body.fields.map((f) => ({
     predicate_id: f.predicate_id,
-    value: f.value ?? '',
+    value: (f.value ?? '') as RawStatementValue,
   }));
   const res = await api.entities.create({
     type_id: body.type_id,
@@ -226,12 +247,16 @@ async function createEntity(body: FormSubmission) {
     identity_mode: body.identity_mode,
     statements,
   }, scopedCatalogParams());
+  if (import.meta.client) {
+    localStorage.removeItem(draftStorageKey());
+  }
   toast.add({
     title: res.data.outcome === 'deduplicated'
       ? t('entity.duplicate.open_existing')
       : t('entity.create_success'),
     color: res.data.outcome === 'deduplicated' ? 'warning' : 'success',
   });
+  formRef.value?.markSaved();
   // Navigate to the created entity card
   await navigateTo(`/entities/${res.data.public_id}`);
 }
@@ -254,7 +279,7 @@ async function createDistinct() {
       if (err.validation_errors) {
         validationErrors.value = err.validation_errors;
       } else {
-        viewError.value = e instanceof Error ? e.message : t('entity.error');
+        submitError.value = displayError(e, t, te);
       }
     } finally {
       submitting.value = false;
@@ -262,10 +287,37 @@ async function createDistinct() {
   }
 }
 
+// Draft persistence (docs/17 §5): saved to localStorage under a per-type
+// key, restored into the form on next visit, cleared on successful create.
+const draftValues = ref<Record<string, unknown> | undefined>(undefined);
+const draftLoaded = ref(false);
+const draftKey = computed(() => `${typeAlias.value}:${draftLoaded.value}`);
+
+function draftStorageKey() {
+  return `entity_draft_${typeAlias.value}`;
+}
+
+function loadDraft() {
+  if (!import.meta.client) return;
+  const raw = localStorage.getItem(draftStorageKey());
+  if (!raw) return;
+  try {
+    const parsed = JSON.parse(raw) as Record<string, unknown>;
+    if (parsed && typeof parsed === 'object' && Object.keys(parsed).length > 0) {
+      draftValues.value = parsed;
+      draftLoaded.value = true;
+      toast.add({ title: t('entity.draft_restored'), color: 'info' });
+    }
+  } catch {
+    localStorage.removeItem(draftStorageKey());
+  }
+}
+
 function onSaveDraft(values: Record<string, unknown>) {
-  // Save draft to localStorage for now (docs/17 §5: save draft option)
   if (import.meta.client) {
-    localStorage.setItem(`entity_draft_${typeAlias.value}`, JSON.stringify(values));
+    localStorage.setItem(draftStorageKey(), JSON.stringify(values));
+    draftValues.value = { ...values };
+    toast.add({ title: t('entity.draft_saved'), color: 'success' });
   }
 }
 
@@ -273,7 +325,10 @@ function goBack() {
   navigateTo(`/objects/${typeAlias.value}`);
 }
 
-onMounted(fetchView);
+onMounted(() => {
+  loadDraft();
+  fetchView();
+});
 // Header catalog switch: keep the pinned ?catalog= in sync when present
 // (the form view then refetches via the pin watcher below), otherwise
 // reload the form scoped to the new selection.

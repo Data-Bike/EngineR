@@ -10,7 +10,7 @@
         color="neutral"
         variant="ghost"
         size="sm"
-        :aria-label="t('nav.objects')"
+        :aria-label="t('nav.toggle_sidebar')"
         @click="toggleSidebar"
       />
       <NuxtLink to="/" class="text-lg font-bold text-[var(--ui-text)]">
@@ -30,7 +30,7 @@
     </div>
 
     <!-- Right: catalog, locale, profile, notifications -->
-    <div class="flex items-center gap-2">
+    <div class="flex items-center gap-2 flex-wrap justify-end">
       <!-- Mobile search entry (the input itself is md+ only) -->
       <UButton
         icon="i-lucide-search"
@@ -50,7 +50,7 @@
         :items="catalogOptions"
         size="sm"
         icon="i-lucide-layers"
-        class="w-44"
+        class="w-28 sm:w-44"
         :aria-label="t('catalog.selector')"
       />
 
@@ -70,6 +70,7 @@
           size="sm"
           icon="i-lucide-user"
           :label="user?.display_name ?? t('auth.login')"
+          class="max-w-32 sm:max-w-48 truncate"
         />
       </UDropdownMenu>
     </div>
@@ -110,14 +111,8 @@ const localeOptions = computed(() =>
 );
 
 async function changeLocale(code: string) {
+  // <html lang>/<html dir> are synced by plugins/html-locale.client.ts.
   await setLocale(code as 'ru' | 'en' | 'ar' | 'he' | 'fr' | 'de' | 'es' | 'zh');
-  // Set <html dir> for RTL support (docs/16 §12, docs/19)
-  const dir = (locales.value as Array<{ code: string; dir?: string }>).find(
-    (l) => l.code === code,
-  )?.dir ?? 'ltr';
-  if (import.meta.client) {
-    document.documentElement.dir = dir;
-  }
 }
 
 function doSearch() {

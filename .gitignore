@@ -12,3 +12,7 @@ __pycache__/
 docs/testing/warehouse/.wh_*.json
 docs/testing/warehouse/.tools.json
 docs/testing/warehouse/.published_rev.json
+
+# QA artifacts
+docs/testing/warehouse/qa_shots*/
+docs/testing/warehouse/.wh_tokens.json

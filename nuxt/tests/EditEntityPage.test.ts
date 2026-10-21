@@ -8,11 +8,13 @@ const UButton = {
   template: '<button @click="$emit(\'click\')"><slot /></button>',
 };
 
+const markSaved = vi.fn();
 // Emits a submit with structured field values to prove the page forwards
 // raw values — the server, not the UI, applies the declared field kind.
 const EntityFormRenderer = {
   props: ['view', 'initialValues', 'submitting'],
   emits: ['submit', 'cancel'],
+  methods: { markSaved },
   template: `
     <button class="submit" @click="$emit('submit', {
       fields: [
@@ -79,6 +81,7 @@ describe('EntityEditPage', () => {
         { predicate_id: 'name', value: 'Склад №1' },
       ],
     });
+    expect(markSaved).toHaveBeenCalled();
     expect((globalThis as any).navigateTo).toHaveBeenCalledWith('/entities/p1');
   });
 });

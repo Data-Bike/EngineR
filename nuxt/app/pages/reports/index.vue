@@ -6,7 +6,7 @@
         <h1 class="text-2xl font-bold">{{ t('nav.reports') }}</h1>
         <p class="text-[var(--ui-text-muted)] mt-1">{{ t('entity.reports.subtitle') }}</p>
       </div>
-      <UButton icon="i-lucide-file-plus" @click="showGenerate = true">
+      <UButton v-if="canRun" icon="i-lucide-file-plus" @click="showGenerate = true">
         {{ t('entity.reports.generate') }}
       </UButton>
     </div>
@@ -42,13 +42,13 @@
         <table class="w-full text-sm">
           <thead>
             <tr class="border-b border-[var(--ui-border)] text-left">
-              <th class="py-2 px-3 font-medium text-[var(--ui-text-muted)]">Title</th>
-              <th class="py-2 px-3 font-medium text-[var(--ui-text-muted)]">Entity</th>
-              <th class="py-2 px-3 font-medium text-[var(--ui-text-muted)]">Format</th>
-              <th class="py-2 px-3 font-medium text-[var(--ui-text-muted)]">Status</th>
-              <th class="py-2 px-3 font-medium text-[var(--ui-text-muted)]">Generated</th>
-              <th class="py-2 px-3 font-medium text-[var(--ui-text-muted)]">Size</th>
-              <th class="py-2 px-3 font-medium text-[var(--ui-text-muted)]">Actions</th>
+              <th class="py-2 px-3 font-medium text-[var(--ui-text-muted)]">{{ t('entity.reports.title') }}</th>
+              <th class="py-2 px-3 font-medium text-[var(--ui-text-muted)]">{{ t('entity.reports.entity') }}</th>
+              <th class="py-2 px-3 font-medium text-[var(--ui-text-muted)]">{{ t('entity.reports.format') }}</th>
+              <th class="py-2 px-3 font-medium text-[var(--ui-text-muted)]">{{ t('entity.reports.status_label') }}</th>
+              <th class="py-2 px-3 font-medium text-[var(--ui-text-muted)]">{{ t('entity.reports.generated') }}</th>
+              <th class="py-2 px-3 font-medium text-[var(--ui-text-muted)]">{{ t('entity.reports.size') }}</th>
+              <th class="py-2 px-3 font-medium text-[var(--ui-text-muted)]">{{ t('entity.actions') }}</th>
             </tr>
           </thead>
           <tbody>
@@ -59,12 +59,12 @@
                 <span v-else class="text-[var(--ui-text-muted)]">—</span>
               </td>
               <td class="py-2 px-3"><UBadge variant="subtle" size="sm">{{ String(report.format ?? '').toUpperCase() }}</UBadge></td>
-              <td class="py-2 px-3"><UBadge variant="subtle" size="sm">{{ t(`entity.reports.status.${report.status}`, report.status) }}</UBadge></td>
-              <td class="py-2 px-3">{{ report.generated_at ?? '—' }}</td>
+              <td class="py-2 px-3"><UBadge variant="subtle" size="sm">{{ enumLabel(t, te, 'entity.reports.status', String(report.status ?? '')) }}</UBadge></td>
+              <td class="py-2 px-3">{{ formatDateTime(report.generated_at as string | null) }}</td>
               <td class="py-2 px-3">{{ report.size_bytes ? formatFileSize(report.size_bytes as number) : '—' }}</td>
               <td class="py-2 px-3">
                 <UButton
-                  v-if="report.status === 'ready' && report.download_url && !isExpired(report)"
+                  v-if="report.status === 'ready' && report.download_url && !isExpired(report) && canExport"
                   size="xs"
                   variant="outline"
                   icon="i-lucide-download"
@@ -123,9 +123,14 @@ definePageMeta({
   middleware: ['auth', capability('report.view')],
 });
 
-const { t } = useI18n();
+const { t, te } = useI18n();
 const toast = useToast();
 const api = useApi();
+const auth = useAuthStore();
+// Download gated by report.export server-side (files_pg gate) — hide the
+// action entirely when the capability is absent (UX hint only).
+const canExport = computed(() => auth.hasCapability('report.export'));
+const canRun = computed(() => auth.hasCapability('report.run'));
 
 const reports = ref<ReportInstance[]>([]);
 const loading = ref(false);
@@ -140,9 +145,9 @@ const generatingCount = computed(() => reports.value.filter((r) => r.status === 
 const expiredCount = computed(() => reports.value.filter((r) => isExpired(r)).length);
 
 const templateOptions = computed(() => [
-  { label: t('entity.reports.template.standard'), value: 'standard' },
-  { label: t('entity.reports.template.due_diligence'), value: 'due_diligence' },
-  { label: t('entity.reports.template.compliance'), value: 'compliance' },
+  { label: t('entity.reports.template_standard'), value: 'standard' },
+  { label: t('entity.reports.template_due_diligence'), value: 'due_diligence' },
+  { label: t('entity.reports.template_compliance'), value: 'compliance' },
 ]);
 
 const formatOptions = computed(() => [
@@ -179,7 +184,7 @@ async function fetchReports() {
   } catch (err) {
     toast.add({
       title: t('common.error'),
-      description: err instanceof Error ? err.message : String(err),
+      description: displayError(err, t, te),
       color: 'error',
     });
   } finally {
@@ -202,7 +207,7 @@ async function generateReport() {
   } catch (err) {
     toast.add({
       title: t('common.error'),
-      description: err instanceof Error ? err.message : String(err),
+      description: displayError(err, t, te),
       color: 'error',
     });
   } finally {

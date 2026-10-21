@@ -12,9 +12,10 @@
 //! `security.manage`). On top of that every object-level access goes
 //! through `DataPerm::can_catalog` (deny-by-default, docs/28 §4).
 
-use crate::entity_pg::{db_err, http_err, perm_for, resolve_catalog, rls_tx, to_status};
+use crate::entity_pg::{db_err, http_err, perm_for, resolve_catalog, rls_tx};
 use crate::workspace_routes::{meta, ApiEnvelope, CapabilityGuard};
 use crate::AppState;
+use crate::ApiError;
 use enginer_db_runtime::{AsyncStdDbExecutor, DbError, Deadline};
 use rocket::http::Status;
 use rocket::serde::json::Json;
@@ -24,8 +25,8 @@ use serde_json::{json, Value};
 use sqlx::{Postgres, Transaction};
 use std::sync::Arc;
 
-fn pg(state: &State<AppState>) -> Result<Arc<AsyncStdDbExecutor>, Status> {
-    state.db_executor.clone().ok_or(Status::ServiceUnavailable)
+fn pg(state: &State<AppState>) -> Result<Arc<AsyncStdDbExecutor>, ApiError> {
+    state.db_executor.clone().ok_or_else(|| ApiError::from(Status::ServiceUnavailable))
 }
 
 /// Same alias contract as the DDL check `catalog_alias_chk`
@@ -110,7 +111,7 @@ async fn catalog_counts(
 pub async fn list_catalogs(
     cap: CapabilityGuard,
     state: &State<AppState>,
-) -> Result<Json<ApiEnvelope<Value>>, Status> {
+) -> Result<Json<ApiEnvelope<Value>>, ApiError> {
     let exec = pg(state)?;
     let ctx = cap.ctx.clone();
     let v = exec
@@ -139,7 +140,7 @@ pub async fn list_catalogs(
             Ok(Value::Array(out))
         })
         .await
-        .map_err(|e| to_status(&e))?;
+        .map_err(|e| ApiError::of_db(&e))?;
     Ok(Json(ApiEnvelope {
         data: v,
         meta: meta(),
@@ -151,7 +152,7 @@ pub async fn get_catalog(
     cap: CapabilityGuard,
     state: &State<AppState>,
     reference: &str,
-) -> Result<Json<ApiEnvelope<Value>>, Status> {
+) -> Result<Json<ApiEnvelope<Value>>, ApiError> {
     let exec = pg(state)?;
     let ctx = cap.ctx.clone();
     let reference = reference.to_string();
@@ -184,7 +185,7 @@ pub async fn get_catalog(
             Ok(catalog_json(&row, entities, types))
         })
         .await
-        .map_err(|e| to_status(&e))?;
+        .map_err(|e| ApiError::of_db(&e))?;
     Ok(Json(ApiEnvelope {
         data: v,
         meta: meta(),
@@ -206,7 +207,7 @@ pub async fn create_catalog(
     cap: CapabilityGuard,
     state: &State<AppState>,
     body: Json<CreateCatalogBody>,
-) -> Result<Json<ApiEnvelope<Value>>, Status> {
+) -> Result<Json<ApiEnvelope<Value>>, ApiError> {
     let exec = pg(state)?;
     let ctx = cap.ctx.clone();
     let body = body.into_inner();
@@ -251,7 +252,7 @@ pub async fn create_catalog(
             Ok(catalog_json(&row, 0, 0))
         })
         .await
-        .map_err(|e| to_status(&e))?;
+        .map_err(|e| ApiError::of_db(&e))?;
     Ok(Json(ApiEnvelope {
         data: v,
         meta: meta(),
@@ -283,6 +284,14 @@ async fn update_catalog_row(
     if !perm.can_catalog(&key_refs, crate::dataperm::Op::Update) {
         return Err(http_err(404, "catalog not found"));
     }
+    // Retire is semantically a delete (op_of maps it so) — require the
+    // delete grant on top of update, or `data.catalog.update`-only
+    // principals could destroy a catalog.
+    if body.status.as_deref() == Some("retired")
+        && !perm.can_catalog(&key_refs, crate::dataperm::Op::Delete)
+    {
+        return Err(http_err(403, "catalog delete access required"));
+    }
     // `sys`/`general` are seeded infrastructure: metadata may change but
     // their lifecycle is fixed — retiring them would orphan the platform.
     if matches!(cat.alias.as_str(), "sys" | "general") && body.status.as_deref() == Some("retired")
@@ -294,6 +303,19 @@ async fn update_catalog_row(
             return Err(http_err(422, "catalog.status_invalid"));
         }
         if status == "retired" {
+            // FOR UPDATE serializes against concurrent entity creates —
+            // they hold FOR SHARE on this row for their whole transaction,
+            // so a create either finished before we lock (counted below)
+            // or blocks on us and then sees status='retired'.
+            sqlx::query(
+                "SELECT catalog_id FROM core.catalog
+                 WHERE tenant_id=$1 AND catalog_id=$2 FOR UPDATE",
+            )
+            .bind(ctx.tenant_id)
+            .bind(cat.catalog_id)
+            .fetch_one(&mut **tx)
+            .await
+            .map_err(db_err)?;
             let (live,): (i64,) = sqlx::query_as(
                 "SELECT count(*) FROM core.entity
                  WHERE tenant_id=$1 AND catalog_id=$2 AND retired_at IS NULL",
@@ -344,7 +366,7 @@ pub async fn update_catalog(
     state: &State<AppState>,
     reference: &str,
     body: Json<UpdateCatalogBody>,
-) -> Result<Json<ApiEnvelope<Value>>, Status> {
+) -> Result<Json<ApiEnvelope<Value>>, ApiError> {
     let exec = pg(state)?;
     let ctx = cap.ctx.clone();
     let reference = reference.to_string();
@@ -358,7 +380,7 @@ pub async fn update_catalog(
             Ok(catalog_json(&row, entities, types))
         })
         .await
-        .map_err(|e| to_status(&e))?;
+        .map_err(|e| ApiError::of_db(&e))?;
     Ok(Json(ApiEnvelope {
         data: v,
         meta: meta(),
@@ -370,7 +392,7 @@ pub async fn retire_catalog(
     cap: CapabilityGuard,
     state: &State<AppState>,
     reference: &str,
-) -> Result<Json<ApiEnvelope<Value>>, Status> {
+) -> Result<Json<ApiEnvelope<Value>>, ApiError> {
     let exec = pg(state)?;
     let ctx = cap.ctx.clone();
     let reference = reference.to_string();
@@ -389,7 +411,7 @@ pub async fn retire_catalog(
             Ok(catalog_json(&row, entities, types))
         })
         .await
-        .map_err(|e| to_status(&e))?;
+        .map_err(|e| ApiError::of_db(&e))?;
     Ok(Json(ApiEnvelope {
         data: v,
         meta: meta(),

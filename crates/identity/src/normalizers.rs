@@ -8,6 +8,7 @@
 //! Idempotent: `normalize(normalize(x)) == normalize(x)`.
 
 use thiserror::Error;
+use unicode_normalization::UnicodeNormalization;
 
 /// Normalization error.
 #[derive(Debug, Clone, PartialEq, Eq, Error, serde::Serialize, serde::Deserialize)]
@@ -55,20 +56,14 @@ pub const PHONE_NORMALIZER_VERSION: &str = "phone-e164-1";
 pub const EMAIL_NORMALIZER_VERSION: &str = "email-idna-1";
 
 /// Normalize free text to NFC + trim. Case is preserved (docs/04 §7).
+///
+/// Real NFC via `unicode-normalization`: canonically equivalent inputs
+/// (composed U+00C9 vs decomposed U+0065+U+0301) collapse to one canonical
+/// string, so identity keys and dedup cannot be evaded by encoding choice.
 pub fn normalize_text(raw: &str) -> Result<NormalizedText, NormalizationError> {
-    // NFC normalization. `unicode-normalization` would be ideal; to keep the
-    // dependency surface minimal for Phase 0+1 we rely on the fact that Rust
-    // strings are WTF-8/UTF-8 and apply a conservative trim. Full NFC requires
-    // the `unicode-normalization` crate; a TODO is wired in `AGENTS.md`.
-    let trimmed = raw.trim();
-    if !trimmed
-        .chars()
-        .all(|c| c.is_whitespace() || !c.is_control() || c == '\t')
-    {
-        // allow tab/whitespace, reject other control chars
-    }
+    let nfc: String = raw.trim().nfc().collect();
     Ok(NormalizedText {
-        value_nfc: trimmed.to_string(),
+        value_nfc: nfc,
         normalizer_version: TEXT_NORMALIZER_VERSION.to_string(),
     })
 }

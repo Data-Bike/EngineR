@@ -12,6 +12,11 @@ const UBadge = {
   props: ['variant', 'size'],
   template: '<span class="u-badge"><slot /></span>',
 };
+const NuxtLink = {
+  name: 'NuxtLink',
+  props: ['to'],
+  template: '<a><slot /></a>',
+};
 
 const TYPES = [
   { id: 'person', name: 'person', display_name: 'Person', status: 'active', catalog: 'general', entity_count: 3 },
@@ -34,7 +39,7 @@ function mountPage(opts: { catalog?: string; types?: unknown[] } = {}) {
   (globalThis as any).useRoute = () => ({ params: {}, query: {} });
   (globalThis as any).navigateTo = vi.fn();
   const wrapper = mount(ObjectsIndex, {
-    global: { stubs: { UCard, UIcon, UBadge } },
+    global: { stubs: { UCard, UIcon, UBadge, NuxtLink } },
   });
   return { wrapper, listTypes, selected };
 }
@@ -56,13 +61,12 @@ describe('ObjectsIndex', () => {
     expect(text).toContain('person · qa_t');
   });
 
-  it('navigates with the row catalog pinned in the route query', async () => {
+  it('links each card with the row catalog pinned in the route query', async () => {
     const { wrapper } = mountPage();
     await flushPromises();
-    const cards = wrapper.findAllComponents(UCard);
-    expect(cards).toHaveLength(2);
-    await cards[1].trigger('click');
-    expect((globalThis as any).navigateTo).toHaveBeenCalledWith({
+    const links = wrapper.findAllComponents({ name: 'NuxtLink' });
+    expect(links).toHaveLength(2);
+    expect(links[1].props('to')).toEqual({
       path: '/objects/person',
       query: { catalog: 'qa_t' },
     });

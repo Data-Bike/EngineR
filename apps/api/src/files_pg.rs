@@ -5,9 +5,10 @@
 //! persist per-chunk in `core.upload_chunk` so they survive restarts.
 
 use crate::authn::AuthContext;
-use crate::entity_pg::{checked_entity, db_err, http_err, rls_tx, to_status, ENTITY_SELECT};
+use crate::entity_pg::{checked_entity, db_err, http_err, perm_for, rls_tx, ENTITY_SELECT};
 use crate::workspace_routes::{meta, ApiEnvelope, CapabilityGuard};
 use crate::AppState;
+use crate::ApiError;
 use blake2::Blake2b512;
 use enginer_db_runtime::{AsyncStdDbExecutor, DbError, Deadline};
 use rocket::data::Data;
@@ -22,8 +23,8 @@ use sqlx::postgres::{PgPool, PgRow};
 use sqlx::{Postgres, Row, Transaction};
 use std::sync::Arc;
 
-fn pg(state: &State<AppState>) -> Result<Arc<AsyncStdDbExecutor>, Status> {
-    state.db_executor.clone().ok_or(Status::ServiceUnavailable)
+fn pg(state: &State<AppState>) -> Result<Arc<AsyncStdDbExecutor>, ApiError> {
+    state.db_executor.clone().ok_or_else(|| ApiError::from(Status::ServiceUnavailable))
 }
 
 async fn tx<'e>(pool: &'e PgPool, ctx: &AuthContext) -> Result<Transaction<'e, Postgres>, DbError> {
@@ -107,10 +108,10 @@ pub async fn upload_init(
     cap: CapabilityGuard,
     state: &State<AppState>,
     body: Json<UploadInitInput>,
-) -> Result<Json<ApiEnvelope<Value>>, Status> {
+) -> Result<Json<ApiEnvelope<Value>>, ApiError> {
     let mut body = body.into_inner();
     let hash_algorithm = canonical_hash_algorithm(&body.hash_algorithm)
-        .ok_or(Status::UnprocessableEntity)?
+        .ok_or_else(|| ApiError::from(Status::UnprocessableEntity))?
         .to_string();
     body.expected_hash.make_ascii_lowercase();
     let expected_hash_len = if hash_algorithm == "sha256" { 64 } else { 128 };
@@ -125,9 +126,19 @@ pub async fn upload_init(
             .bytes()
             .all(|byte| byte.is_ascii_hexdigit())
     {
-        return Err(Status::UnprocessableEntity);
+        return Err(ApiError::from(Status::UnprocessableEntity));
     }
-    let total_chunks = body.expected_size.div_ceil(body.chunk_size) as i32;
+    // Chunk PUTs are capped at 25 MiB — a larger declared chunk_size creates
+    // a session that can never complete. total_chunks is bounded so init
+    // cannot create a million-row amplification surface.
+    if body.chunk_size > 25 * 1024 * 1024 {
+        return Err(ApiError::from(Status::UnprocessableEntity));
+    }
+    let total_chunks64 = body.expected_size.div_ceil(body.chunk_size);
+    if total_chunks64 > 4096 {
+        return Err(ApiError::from(Status::UnprocessableEntity));
+    }
+    let total_chunks = total_chunks64 as i32;
     let exec = pg(state)?;
     let ctx = cap.ctx.clone();
     let v = exec
@@ -164,7 +175,7 @@ pub async fn upload_init(
             Ok(upload_json(&r))
         })
         .await
-        .map_err(|e| to_status(&e))?;
+        .map_err(|e| ApiError::of_db(&e))?;
     Ok(Json(ApiEnvelope {
         data: v,
         meta: meta(),
@@ -178,17 +189,17 @@ pub async fn upload_chunk(
     upload_id: String,
     index: usize,
     data: Data<'_>,
-) -> Result<Json<ApiEnvelope<Value>>, Status> {
+) -> Result<Json<ApiEnvelope<Value>>, ApiError> {
     let bytes = data
         .open(25.mebibytes())
         .into_bytes()
         .await
-        .map_err(|_| Status::BadRequest)?;
+        .map_err(|_| ApiError::from(Status::BadRequest))?;
     if !bytes.is_complete() {
-        return Err(Status::PayloadTooLarge);
+        return Err(ApiError::from(Status::PayloadTooLarge));
     }
     let bytes = bytes.into_inner();
-    let uid: uuid::Uuid = upload_id.parse().map_err(|_| Status::NotFound)?;
+    let uid: uuid::Uuid = upload_id.parse().map_err(|_| ApiError::from(Status::NotFound))?;
     let exec = pg(state)?;
     let ctx = cap.ctx.clone();
     let v = exec
@@ -208,10 +219,14 @@ pub async fn upload_chunk(
             let total: i32 = session.try_get("total_chunks").unwrap_or_default();
             let chunk_size: i64 = session.try_get("chunk_size").unwrap_or_default();
             let expected_size: i64 = session.try_get("expected_size").unwrap_or_default();
-            if matches!(status.as_str(), "completed" | "aborted") || index as i32 >= total {
+            // usize→i32 truncation would wrap huge indices to small/negative
+            // values; convert first, then range-check.
+            let index32 = i32::try_from(index)
+                .map_err(|_| http_err(409, "upload is complete or index out of range"))?;
+            if matches!(status.as_str(), "completed" | "aborted") || index32 >= total {
                 return Err(http_err(409, "upload is complete or index out of range"));
             }
-            let expected_chunk_size = if index as i32 + 1 == total {
+            let expected_chunk_size = if index32 + 1 == total {
                 (expected_size - chunk_size * index as i64) as usize
             } else {
                 chunk_size as usize
@@ -226,7 +241,7 @@ pub async fn upload_chunk(
             )
             .bind(ctx.tenant_id)
             .bind(uid)
-            .bind(index as i32)
+            .bind(index32)
             .fetch_optional(&mut *t)
             .await
             .map_err(db_err)?;
@@ -244,7 +259,7 @@ pub async fn upload_chunk(
                 )
                 .bind(ctx.tenant_id)
                 .bind(uid)
-                .bind(index as i32)
+                .bind(index32)
                 .bind(&bytes)
                 .execute(&mut *t)
                 .await
@@ -282,7 +297,7 @@ pub async fn upload_chunk(
             Ok(upload_json(&r))
         })
         .await
-        .map_err(|e| to_status(&e))?;
+        .map_err(|e| ApiError::of_db(&e))?;
     Ok(Json(ApiEnvelope {
         data: v,
         meta: meta(),
@@ -301,9 +316,9 @@ pub async fn upload_complete(
     state: &State<AppState>,
     upload_id: String,
     body: Json<UploadCompleteInput>,
-) -> Result<Json<ApiEnvelope<Value>>, Status> {
+) -> Result<Json<ApiEnvelope<Value>>, ApiError> {
     let body = body.into_inner();
-    let uid: uuid::Uuid = upload_id.parse().map_err(|_| Status::NotFound)?;
+    let uid: uuid::Uuid = upload_id.parse().map_err(|_| ApiError::from(Status::NotFound))?;
     let exec = pg(state)?;
     let ctx = cap.ctx.clone();
     let v = exec
@@ -403,7 +418,7 @@ pub async fn upload_complete(
             Ok(upload_json(&r))
         })
         .await
-        .map_err(|e| to_status(&e))?;
+        .map_err(|e| ApiError::of_db(&e))?;
     Ok(Json(ApiEnvelope {
         data: v,
         meta: meta(),
@@ -416,8 +431,8 @@ pub async fn upload_abort(
     state: &State<AppState>,
     upload_id: String,
     _body: String,
-) -> Result<Json<ApiEnvelope<Value>>, Status> {
-    let uid: uuid::Uuid = upload_id.parse().map_err(|_| Status::NotFound)?;
+) -> Result<Json<ApiEnvelope<Value>>, ApiError> {
+    let uid: uuid::Uuid = upload_id.parse().map_err(|_| ApiError::from(Status::NotFound))?;
     let exec = pg(state)?;
     let ctx = cap.ctx.clone();
     let v = exec
@@ -456,7 +471,7 @@ pub async fn upload_abort(
             Ok(upload_json(&r))
         })
         .await
-        .map_err(|e| to_status(&e))?;
+        .map_err(|e| ApiError::of_db(&e))?;
     Ok(Json(ApiEnvelope {
         data: v,
         meta: meta(),
@@ -468,8 +483,8 @@ pub async fn get_upload_status(
     cap: CapabilityGuard,
     state: &State<AppState>,
     upload_id: String,
-) -> Result<Json<ApiEnvelope<Value>>, Status> {
-    let uid: uuid::Uuid = upload_id.parse().map_err(|_| Status::NotFound)?;
+) -> Result<Json<ApiEnvelope<Value>>, ApiError> {
+    let uid: uuid::Uuid = upload_id.parse().map_err(|_| ApiError::from(Status::NotFound))?;
     let exec = pg(state)?;
     let ctx = cap.ctx.clone();
     let v = exec
@@ -486,7 +501,7 @@ pub async fn get_upload_status(
             Ok(upload_json(&r))
         })
         .await
-        .map_err(|e| to_status(&e))?;
+        .map_err(|e| ApiError::of_db(&e))?;
     Ok(Json(ApiEnvelope {
         data: v,
         meta: meta(),
@@ -502,6 +517,20 @@ pub async fn get_upload_status(
 /// reachable only when that entity passes `checked_entity(op)`. Files
 /// referenced only by `core.report_instance` rely on the route capability;
 /// unattached uploads are limited to their uploader.
+/// True when the principal may download report artifacts — `report.export`
+/// resolved through capability rules (allow minus deny) with special roles
+/// applied via DataPerm.
+async fn report_export_ok(
+    t: &mut Transaction<'_, Postgres>,
+    ctx: &AuthContext,
+) -> Result<bool, DbError> {
+    let perm = perm_for(t, ctx).await?;
+    if let Some(b) = perm.can_capability("report.export") {
+        return Ok(b);
+    }
+    crate::authn::capability_granted_tx(t, ctx, "report.export").await
+}
+
 async fn gate_file_access(
     t: &mut Transaction<'_, Postgres>,
     ctx: &AuthContext,
@@ -540,6 +569,11 @@ async fn gate_file_access(
     .map_err(db_err)?
     .flatten();
     if let Some(pid) = report_entity {
+        // A rendered report file is an export artifact: it needs BOTH the
+        // report.export capability and visibility of the embedded entity.
+        if !report_export_ok(t, ctx).await? {
+            return Ok(false);
+        }
         let pid: uuid::Uuid = match pid.parse() {
             Ok(p) => p,
             // Unparseable linkage — deny rather than leak the blob.
@@ -557,7 +591,8 @@ async fn gate_file_access(
     .await
     .map_err(db_err)?;
     if referenced {
-        return Ok(true);
+        // Report artifact without an entity linkage — still an export.
+        return Ok(report_export_ok(t, ctx).await?);
     }
     let owner: Option<uuid::Uuid> = sqlx::query_scalar(
         "SELECT created_by FROM core.file_object WHERE tenant_id=$1 AND file_id=$2",
@@ -576,8 +611,8 @@ pub async fn get_file(
     cap: CapabilityGuard,
     state: &State<AppState>,
     object_id: String,
-) -> Result<Json<ApiEnvelope<Value>>, Status> {
-    let fid: uuid::Uuid = object_id.parse().map_err(|_| Status::NotFound)?;
+) -> Result<Json<ApiEnvelope<Value>>, ApiError> {
+    let fid: uuid::Uuid = object_id.parse().map_err(|_| ApiError::from(Status::NotFound))?;
     let exec = pg(state)?;
     let ctx = cap.ctx.clone();
     let v = exec
@@ -597,7 +632,7 @@ pub async fn get_file(
             Ok(file_json(&r))
         })
         .await
-        .map_err(|e| to_status(&e))?;
+        .map_err(|e| ApiError::of_db(&e))?;
     Ok(Json(ApiEnvelope {
         data: v,
         meta: meta(),
@@ -608,7 +643,7 @@ async fn fetch_blob(
     exec: Arc<AsyncStdDbExecutor>,
     ctx: AuthContext,
     file_id: uuid::Uuid,
-) -> Result<Value, Status> {
+) -> Result<Value, ApiError> {
     exec.run(Deadline::in_secs(30), move |pool| async move {
         let mut t = tx(&pool, &ctx).await?;
         let row: Option<(String, Option<Vec<u8>>)> = sqlx::query_as(
@@ -628,15 +663,45 @@ async fn fetch_blob(
         Ok(json!({ "content_type": ct, "bytes_hex": hex::encode(bytes) }))
     })
     .await
-    .map_err(|e| to_status(&e))
+    .map_err(|e| ApiError::of_db(&e))
 }
 
-fn blob_response(v: &Value) -> Result<(ContentType, Arc<[u8]>), Status> {
+/// Blob bytes served for download. User-supplied content must never
+/// render inline on the API origin: a stored HTML/SVG file would execute
+/// under the victim's session cookie (stored XSS → session hijack).
+/// `Content-Disposition: attachment` forces a download;
+/// `X-Content-Type-Options: nosniff` stops MIME confusion on top.
+pub struct BlobDownload {
+    content_type: ContentType,
+    bytes: Arc<[u8]>,
+}
+
+impl<'r> rocket::response::Responder<'r, 'static> for BlobDownload {
+    fn respond_to(self, _: &'r rocket::Request<'_>) -> rocket::response::Result<'static> {
+        rocket::response::Response::build()
+            .header(self.content_type)
+            .header(rocket::http::Header::new(
+                "Content-Disposition",
+                "attachment",
+            ))
+            .header(rocket::http::Header::new(
+                "X-Content-Type-Options",
+                "nosniff",
+            ))
+            .sized_body(self.bytes.len(), std::io::Cursor::new(self.bytes))
+            .ok()
+    }
+}
+
+fn blob_response(v: &Value) -> Result<BlobDownload, ApiError> {
     let hex_str = v["bytes_hex"].as_str().unwrap_or_default();
-    let bytes = hex::decode(hex_str).map_err(|_| Status::InternalServerError)?;
+    let bytes = hex::decode(hex_str).map_err(|_| ApiError::from(Status::InternalServerError))?;
     let ct = ContentType::parse_flexible(v["content_type"].as_str().unwrap_or_default())
         .unwrap_or(ContentType::Binary);
-    Ok((ct, Arc::from(bytes)))
+    Ok(BlobDownload {
+        content_type: ct,
+        bytes: Arc::from(bytes),
+    })
 }
 
 #[get("/files/<object_id>/download", rank = 2)]
@@ -644,8 +709,8 @@ pub async fn download_file(
     cap: CapabilityGuard,
     state: &State<AppState>,
     object_id: String,
-) -> Result<(ContentType, Arc<[u8]>), Status> {
-    let fid: uuid::Uuid = object_id.parse().map_err(|_| Status::NotFound)?;
+) -> Result<BlobDownload, ApiError> {
+    let fid: uuid::Uuid = object_id.parse().map_err(|_| ApiError::from(Status::NotFound))?;
     let v = fetch_blob(pg(state)?, cap.ctx.clone(), fid).await?;
     blob_response(&v)
 }
@@ -655,8 +720,8 @@ pub async fn delete_file(
     cap: CapabilityGuard,
     state: &State<AppState>,
     object_id: String,
-) -> Result<Json<ApiEnvelope<Value>>, Status> {
-    let fid: uuid::Uuid = object_id.parse().map_err(|_| Status::NotFound)?;
+) -> Result<Json<ApiEnvelope<Value>>, ApiError> {
+    let fid: uuid::Uuid = object_id.parse().map_err(|_| ApiError::from(Status::NotFound))?;
     let exec = pg(state)?;
     let ctx = cap.ctx.clone();
     exec.run(Deadline::in_secs(10), move |pool| async move {
@@ -664,6 +729,21 @@ pub async fn delete_file(
         if !gate_file_access(&mut t, &ctx, fid, crate::dataperm::Op::Update).await? {
             return Err(http_err(404, "file not found"));
         }
+        // Detach entity-document links first — a plain file delete would
+        // leave document rows pointing at a missing blob. Report instances
+        // keep their history row but lose the artifact reference.
+        sqlx::query("DELETE FROM core.entity_document WHERE tenant_id=$1 AND file_id=$2")
+            .bind(ctx.tenant_id)
+            .bind(fid)
+            .execute(&mut *t)
+            .await
+            .map_err(db_err)?;
+        sqlx::query("UPDATE core.report_instance SET file_id=NULL WHERE tenant_id=$1 AND file_id=$2")
+            .bind(ctx.tenant_id)
+            .bind(fid)
+            .execute(&mut *t)
+            .await
+            .map_err(db_err)?;
         let changed = sqlx::query("DELETE FROM core.file_object WHERE tenant_id=$1 AND file_id=$2")
             .bind(ctx.tenant_id)
             .bind(fid)
@@ -678,7 +758,7 @@ pub async fn delete_file(
         Ok(Value::Null)
     })
     .await
-    .map_err(|e| to_status(&e))?;
+    .map_err(|e| ApiError::of_db(&e))?;
     Ok(Json(ApiEnvelope {
         data: json!({ "deleted": true }),
         meta: meta(),
@@ -725,7 +805,7 @@ pub async fn get_entity_documents(
     cap: CapabilityGuard,
     state: &State<AppState>,
     public_id: String,
-) -> Result<Json<ApiEnvelope<Value>>, Status> {
+) -> Result<Json<ApiEnvelope<Value>>, ApiError> {
     let exec = pg(state)?;
     let ctx = cap.ctx.clone();
     let v = exec
@@ -746,7 +826,7 @@ pub async fn get_entity_documents(
             Ok(Value::Array(rows.iter().map(document_json).collect()))
         })
         .await
-        .map_err(|e| to_status(&e))?;
+        .map_err(|e| ApiError::of_db(&e))?;
     Ok(Json(ApiEnvelope {
         data: v,
         meta: meta(),
@@ -762,20 +842,32 @@ pub struct DocumentUploadInput {
     pub bytes: Vec<u8>,
 }
 
-#[post("/entities/<public_id>/documents", format = "json", data = "<body>")]
+#[post("/entities/<public_id>/documents", data = "<body>")]
 pub async fn upload_entity_document(
     cap: CapabilityGuard,
     state: &State<AppState>,
     public_id: String,
-    body: Json<DocumentUploadInput>,
-) -> Result<Json<ApiEnvelope<Value>>, Status> {
-    let body = body.into_inner();
+    body: Data<'_>,
+) -> Result<Json<ApiEnvelope<Value>>, ApiError> {
+    // A byte-array JSON body inflates ~4× — the default 1 MiB `json` limit
+    // made the 20 MB document cap unreachable. Read `Data` explicitly with
+    // room for the encoded form.
+    let raw = body
+        .open(90.mebibytes())
+        .into_bytes()
+        .await
+        .map_err(|_| ApiError::from(Status::BadRequest))?;
+    if !raw.is_complete() {
+        return Err(ApiError::from(Status::PayloadTooLarge));
+    }
+    let body: DocumentUploadInput =
+        serde_json::from_slice(&raw.into_inner()).map_err(|_| ApiError::from(Status::BadRequest))?;
     if body.kind.trim().is_empty()
         || body.file_name.trim().is_empty()
         || body.bytes.is_empty()
         || body.bytes.len() > 20 * 1024 * 1024
     {
-        return Err(Status::UnprocessableEntity);
+        return Err(ApiError::from(Status::UnprocessableEntity));
     }
     let exec = pg(state)?;
     let ctx = cap.ctx.clone();
@@ -844,7 +936,7 @@ pub async fn upload_entity_document(
             Ok(document_json(&r))
         })
         .await
-        .map_err(|e| to_status(&e))?;
+        .map_err(|e| ApiError::of_db(&e))?;
     Ok(Json(ApiEnvelope {
         data: v,
         meta: meta(),
@@ -857,9 +949,9 @@ pub async fn download_entity_document(
     state: &State<AppState>,
     public_id: String,
     document_id: String,
-) -> Result<(ContentType, Arc<[u8]>), Status> {
-    let pid: uuid::Uuid = public_id.parse().map_err(|_| Status::NotFound)?;
-    let did: uuid::Uuid = document_id.parse().map_err(|_| Status::NotFound)?;
+) -> Result<BlobDownload, ApiError> {
+    let pid: uuid::Uuid = public_id.parse().map_err(|_| ApiError::from(Status::NotFound))?;
+    let did: uuid::Uuid = document_id.parse().map_err(|_| ApiError::from(Status::NotFound))?;
     let exec = pg(state)?;
     let ctx = cap.ctx.clone();
     let v = exec
@@ -879,8 +971,10 @@ pub async fn download_entity_document(
             .map_err(db_err)?;
             let (file_id,) = row.ok_or_else(|| http_err(404, "document not found"))?;
             let row2: Option<(String, Option<Vec<u8>>)> = sqlx::query_as(
-                "SELECT content_type, content FROM core.file_object WHERE file_id=$1",
+                "SELECT content_type, content FROM core.file_object
+                 WHERE tenant_id=$1 AND file_id=$2",
             )
+            .bind(ctx.tenant_id)
             .bind(file_id)
             .fetch_optional(&mut *t)
             .await
@@ -892,7 +986,7 @@ pub async fn download_entity_document(
             }))
         })
         .await
-        .map_err(|e| to_status(&e))?;
+        .map_err(|e| ApiError::of_db(&e))?;
     blob_response(&v)
 }
 
@@ -902,14 +996,28 @@ pub async fn delete_entity_document(
     state: &State<AppState>,
     public_id: String,
     document_id: String,
-) -> Result<Json<ApiEnvelope<Value>>, Status> {
-    let pid: uuid::Uuid = public_id.parse().map_err(|_| Status::NotFound)?;
-    let did: uuid::Uuid = document_id.parse().map_err(|_| Status::NotFound)?;
+) -> Result<Json<ApiEnvelope<Value>>, ApiError> {
+    let pid: uuid::Uuid = public_id.parse().map_err(|_| ApiError::from(Status::NotFound))?;
+    let did: uuid::Uuid = document_id.parse().map_err(|_| ApiError::from(Status::NotFound))?;
     let exec = pg(state)?;
     let ctx = cap.ctx.clone();
     exec.run(Deadline::in_secs(10), move |pool| async move {
         let mut t = tx(&pool, &ctx).await?;
         checked_entity(&mut t, &ctx, pid, crate::dataperm::Op::Update).await?;
+        // Fetch the backing file first: after the link goes away an
+        // unreferenced blob is orphaned forever.
+        let fid: Option<uuid::Uuid> = sqlx::query_scalar(
+            "SELECT d.file_id FROM core.entity_document d
+             JOIN core.entity e ON e.tenant_id=d.tenant_id AND e.entity_id=d.entity_id
+             WHERE d.tenant_id=$1 AND e.public_id=$2 AND d.doc_id=$3",
+        )
+        .bind(ctx.tenant_id)
+        .bind(pid)
+        .bind(did)
+        .fetch_optional(&mut *t)
+        .await
+        .map_err(db_err)?
+        .flatten();
         let changed = sqlx::query(
             "DELETE FROM core.entity_document d USING core.entity e
              WHERE d.tenant_id=$1 AND e.tenant_id=d.tenant_id
@@ -925,11 +1033,28 @@ pub async fn delete_entity_document(
         if changed == 0 {
             return Err(http_err(404, "document not found"));
         }
+        // Drop the blob when nothing else references it (other documents,
+        // report instances).
+        if let Some(fid) = fid {
+            sqlx::query(
+                "DELETE FROM core.file_object f
+                 WHERE f.tenant_id=$1 AND f.file_id=$2
+                   AND NOT EXISTS (SELECT 1 FROM core.entity_document d
+                       WHERE d.tenant_id=$1 AND d.file_id=$2)
+                   AND NOT EXISTS (SELECT 1 FROM core.report_instance ri
+                       WHERE ri.tenant_id=$1 AND ri.file_id=$2)",
+            )
+            .bind(ctx.tenant_id)
+            .bind(fid)
+            .execute(&mut *t)
+            .await
+            .map_err(db_err)?;
+        }
         t.commit().await.map_err(db_err)?;
         Ok(Value::Null)
     })
     .await
-    .map_err(|e| to_status(&e))?;
+    .map_err(|e| ApiError::of_db(&e))?;
     Ok(Json(ApiEnvelope {
         data: json!({ "deleted": true }),
         meta: meta(),
@@ -969,7 +1094,7 @@ fn report_row(r: &PgRow) -> Value {
 
 const REPORT_SELECT: &str = "SELECT r.*, f.size, c.login AS creator_login
      FROM core.report_instance r
-     LEFT JOIN core.file_object f ON f.file_id=r.file_id
+     LEFT JOIN core.file_object f ON f.tenant_id=r.tenant_id AND f.file_id=r.file_id
      LEFT JOIN sec.principal_credential c ON c.principal_id=r.created_by
      WHERE r.tenant_id=$1";
 
@@ -977,7 +1102,7 @@ const REPORT_SELECT: &str = "SELECT r.*, f.size, c.login AS creator_login
 pub async fn list_reports(
     cap: CapabilityGuard,
     state: &State<AppState>,
-) -> Result<Json<ApiEnvelope<Value>>, Status> {
+) -> Result<Json<ApiEnvelope<Value>>, ApiError> {
     let exec = pg(state)?;
     let ctx = cap.ctx.clone();
     let v = exec
@@ -1041,14 +1166,20 @@ pub async fn list_reports(
                         .and_then(|s| s.parse::<uuid::Uuid>().ok())
                     {
                         Some(pid) => visible.contains(&pid),
-                        None => true,
+                        // No entity bound: only the creator sees it — a
+                        // missing/unparseable entity_id must not broadcast
+                        // the report to the whole tenant.
+                        None => r
+                            .try_get::<uuid::Uuid, _>("created_by")
+                            .map(|c| c == ctx.principal_id)
+                            .unwrap_or(false),
                     }
                 })
                 .collect();
             Ok(Value::Array(rows.iter().map(report_row).collect()))
         })
         .await
-        .map_err(|e| to_status(&e))?;
+        .map_err(|e| ApiError::of_db(&e))?;
     Ok(Json(ApiEnvelope {
         data: v,
         meta: meta(),
@@ -1060,13 +1191,13 @@ pub async fn create_report(
     cap: CapabilityGuard,
     state: &State<AppState>,
     body: String,
-) -> Result<Json<ApiEnvelope<Value>>, Status> {
-    let parsed: Value = serde_json::from_str(&body).map_err(|_| Status::BadRequest)?;
+) -> Result<Json<ApiEnvelope<Value>>, ApiError> {
+    let parsed: Value = serde_json::from_str(&body).map_err(|_| ApiError::from(Status::BadRequest))?;
     let entity_public_id = parsed
         .get("entity_id")
         .and_then(Value::as_str)
         .filter(|v| !v.trim().is_empty())
-        .ok_or(Status::UnprocessableEntity)?
+        .ok_or_else(|| ApiError::from(Status::UnprocessableEntity))?
         .to_string();
     let template_id = parsed
         .get("template")
@@ -1079,7 +1210,7 @@ pub async fn create_report(
         .unwrap_or("csv")
         .to_string();
     if !matches!(format.as_str(), "pdf" | "xlsx" | "docx" | "json" | "csv") {
-        return Err(Status::UnprocessableEntity);
+        return Err(ApiError::from(Status::UnprocessableEntity));
     }
     let exec = pg(state)?;
     let ctx = cap.ctx.clone();
@@ -1118,6 +1249,18 @@ pub async fn create_report(
                     "application/json",
                 ),
                 _ => {
+                    // Formula-injection guard (OWASP): cells starting with
+                    // = + - @ or a control char would execute in Excel —
+                    // prefix with ' to force text.
+                    fn csv_cell(s: &str) -> String {
+                        let escaped = s.replace('"', "\"\"");
+                        match s.chars().next() {
+                            Some(c) if matches!(c, '=' | '+' | '-' | '@' | '\t' | '\r') => {
+                                format!("'{escaped}")
+                            }
+                            _ => escaped,
+                        }
+                    }
                     let mut csv = String::from("field,value\n");
                     if let Some(fields) = rec.fields.as_ref().and_then(Value::as_object) {
                         for (k, v) in fields {
@@ -1125,7 +1268,11 @@ pub async fn create_report(
                                 .as_str()
                                 .map(str::to_string)
                                 .unwrap_or_else(|| v.to_string());
-                            csv.push_str(&format!("{k},\"{}\"\n", text.replace('"', "\"\"")));
+                            csv.push_str(&format!(
+                                "\"{}\",\"{}\"\n",
+                                csv_cell(k),
+                                csv_cell(&text)
+                            ));
                         }
                     }
                     (csv.into_bytes(), "text/csv")
@@ -1175,7 +1322,7 @@ pub async fn create_report(
             Ok(report_row(&r))
         })
         .await
-        .map_err(|e| to_status(&e))?;
+        .map_err(|e| ApiError::of_db(&e))?;
     Ok(Json(ApiEnvelope {
         data: v,
         meta: meta(),

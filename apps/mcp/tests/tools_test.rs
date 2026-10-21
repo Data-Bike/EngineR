@@ -471,3 +471,67 @@ fn embedded_agent_tool_doc_is_the_real_skill_md() {
         assert!(AGENT_TOOL_MD.contains(marker), "missing marker: {marker}");
     }
 }
+
+#[test]
+fn file_read_tools_accept_either_capability() {
+    // Mirrors the API guard: GET /files/* is authorized by entity.read OR
+    // report.export (any-of). Drift here would hide tools from principals
+    // the API would happily serve.
+    for name in ["files.get", "files.download", "files.upload_status"] {
+        let tool = TOOLS.iter().find(|t| t.name == name).expect(name);
+        assert!(
+            tool.capabilities.contains(&"entity.read")
+                && tool.capabilities.contains(&"report.export"),
+            "{name}: expected any-of [entity.read, report.export], got {:?}",
+            tool.capabilities
+        );
+    }
+    let read_only = vec!["entity.read".to_string()];
+    let export_only = vec!["report.export".to_string()];
+    for name in ["files.get", "files.download", "files.upload_status"] {
+        assert!(
+            tools_for_capabilities(&read_only).iter().any(|t| t.name == name),
+            "{name} missing for entity.read"
+        );
+        assert!(
+            tools_for_capabilities(&export_only).iter().any(|t| t.name == name),
+            "{name} missing for report.export"
+        );
+    }
+}
+
+#[test]
+fn entity_scoped_checks_use_entity_read() {
+    // GET /entities/{id}/checks falls under the generic entity.read mapping
+    // server-side — check.view alone must not gate the tool.
+    let tool = TOOLS
+        .iter()
+        .find(|t| t.name == "entity_checks.list")
+        .unwrap();
+    assert_eq!(tool.capabilities, &["entity.read"]);
+}
+
+#[test]
+fn list_and_preflight_agree_for_any_of_tools() {
+    // tools/list and the tools/call pre-flight share cap_granted + the same
+    // capabilities array — for every cap combination the advertised set
+    // must equal the callable set.
+    for caps in [
+        vec!["entity.read".to_string()],
+        vec!["report.export".to_string()],
+        vec!["users.manage".to_string()],
+        vec!["security.manage".to_string()],
+    ] {
+        for tool in TOOLS {
+            let listed = tools_for_capabilities(&caps)
+                .iter()
+                .any(|t| t.name == tool.name);
+            let preflight = tool.capabilities.is_empty()
+                || tool
+                    .capabilities
+                    .iter()
+                    .any(|c| enginer_mcp::tools::cap_granted(&caps, c));
+            assert_eq!(listed, preflight, "{}: list/call drift", tool.name);
+        }
+    }
+}

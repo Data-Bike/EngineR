@@ -63,6 +63,9 @@ vi.mock('vue-i18n', () => ({
   }),
 });
 ;(globalThis as any).__useRouter = (...args: unknown[]) => (globalThis as any).useRouter(...args);
+// @nuxtjs/i18n localePath: tests treat paths as already localized.
+;(globalThis as any).useLocalePath = () => (p: string) => p;
+;(globalThis as any).__useLocalePath = (...args: unknown[]) => (globalThis as any).useLocalePath(...args);
 ;(globalThis as any).useAuth = () => ({
   isAuthenticated: { value: false },
   fetchContext: vi.fn(),

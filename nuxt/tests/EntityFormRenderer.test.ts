@@ -102,3 +102,31 @@ describe('EntityFormRenderer edit scenario', () => {
     ]));
   });
 });
+
+describe('EntityFormRenderer unsaved-changes guard', () => {
+  function guardOfLastMount(): () => unknown {
+    const calls = (globalThis as any).onBeforeRouteLeave.mock.calls as unknown[][];
+    return calls[calls.length - 1][0] as () => unknown;
+  }
+
+  it('lets navigation through while nothing changed', () => {
+    mountForm();
+    expect(guardOfLastMount()()).toBe(true);
+  });
+
+  it('keeps holding navigation after a failed submit (parent never marks it saved)', async () => {
+    const wrapper = mountForm();
+    await wrapper.get('[data-field="full_name"]').setValue('ООО Новое имя');
+    await wrapper.get('form').trigger('submit');
+    expect(wrapper.emitted('submit')).toHaveLength(1);
+    expect(guardOfLastMount()()).toBeInstanceOf(Promise);
+  });
+
+  it('releases navigation once the parent marks the save as done', async () => {
+    const wrapper = mountForm();
+    await wrapper.get('[data-field="full_name"]').setValue('ООО Новое имя');
+    expect(guardOfLastMount()()).toBeInstanceOf(Promise);
+    (wrapper.vm as unknown as { markSaved: () => void }).markSaved();
+    expect(guardOfLastMount()()).toBe(true);
+  });
+});

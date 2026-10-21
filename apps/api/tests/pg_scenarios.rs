@@ -1098,6 +1098,107 @@ fn field_mask_redacts_value() {
 }
 
 #[test]
+fn history_respects_field_mask() {
+    // Regression: the history diff used to bypass field permissions — a
+    // masked/denied field leaked its cleartext via old_value/new_value.
+    let Some(h) = harness() else { return };
+    let inn = uniq("44");
+    let (_, body) = create_entity(&h, &inn, "ООО «История-маска»", vec![]);
+    let pid = body["data"]["public_id"].as_str().unwrap().to_string();
+
+    let login = uniq("histmask_").to_lowercase();
+    let (status, body) = create_group(
+        &h,
+        &uniq("hist_mask_").to_lowercase(),
+        "data",
+        None,
+        vec![json!({
+            "effect":"allow","resource_type":"field",
+            "type_alias":"legal_entity","field":"inn",
+            "action":"read","mask":"partial-mask"
+        })],
+    );
+    assert_eq!(status, Status::Ok, "{body}");
+    let gid = body["data"]["id"].as_str().unwrap().to_string();
+    let (status, _) = create_user(&h, &login, vec!["managers", "all_data", &gid]);
+    assert_eq!(status, Status::Ok);
+
+    let Some(u) = harness_as(&login, "test-pass-12345") else {
+        return;
+    };
+    let (status, body) = req(
+        &u,
+        Method::Get,
+        &format!("/api/v1/entities/{pid}/history"),
+        None,
+    );
+    assert_eq!(status, Status::Ok, "{body}");
+    // No cleartext inn anywhere in the diff — masked exactly like the entity
+    // view (partial-mask keeps the outer characters).
+    let blob = body.to_string();
+    assert!(
+        !blob.contains(&inn),
+        "history diff must not leak the masked value: {blob}"
+    );
+    delete_group(&h, &gid);
+}
+
+#[test]
+fn history_hides_denied_field() {
+    // Same class of leak via an outright deny — the change must not appear.
+    let Some(h) = harness() else { return };
+    let inn = uniq("44");
+    let (_, body) = create_entity(&h, &inn, "ООО «История-доступ»", vec![]);
+    let pid = body["data"]["public_id"].as_str().unwrap().to_string();
+
+    let login = uniq("histdeny_").to_lowercase();
+    let (status, body) = create_group(
+        &h,
+        &uniq("hist_deny_").to_lowercase(),
+        "data",
+        None,
+        vec![json!({
+            "effect":"deny","resource_type":"field",
+            "type_alias":"legal_entity","field":"inn","action":"read"
+        })],
+    );
+    assert_eq!(status, Status::Ok, "{body}");
+    let gid = body["data"]["id"].as_str().unwrap().to_string();
+    let (status, _) = create_user(&h, &login, vec!["managers", "all_data", &gid]);
+    assert_eq!(status, Status::Ok);
+
+    let Some(u) = harness_as(&login, "test-pass-12345") else {
+        return;
+    };
+    let (status, body) = req(
+        &u,
+        Method::Get,
+        &format!("/api/v1/entities/{pid}/history"),
+        None,
+    );
+    assert_eq!(status, Status::Ok, "{body}");
+    let blob = body.to_string();
+    assert!(
+        !blob.contains(&inn),
+        "denied field value must not leak via history: {blob}"
+    );
+    // And the denied field's changes are dropped, not just nulled.
+    let leaked = body["data"]
+        .as_array()
+        .map(|entries| {
+            entries.iter().any(|e| {
+                e["changes"].as_array().is_some_and(|cs| {
+                    cs.iter()
+                        .any(|c| c["alias"].as_str() == Some("inn"))
+                })
+            })
+        })
+        .unwrap_or(false);
+    assert!(!leaked, "denied field must be absent from history: {body}");
+    delete_group(&h, &gid);
+}
+
+#[test]
 fn hidden_entity_hides_its_relations() {
     let Some(h) = harness() else { return };
     let (_, body) = create_entity(&h, &uniq("91"), "ООО «Видимый»", vec![]);
@@ -1722,4 +1823,90 @@ fn disabling_account_revokes_its_tokens() {
         Status::Unauthorized,
         "disabled principal's token must die"
     );
+}
+
+/// Regression: `/schemas/published` must serialize the owning catalog
+/// (hydrated from `core.catalog`, not trusted from JSON content), and a
+/// draft's `base_revision` must belong to the resolved catalog — pinning a
+/// revision from a foreign stream is rejected (docs/28 §3).
+#[test]
+fn schema_published_catalog_hydration_and_cross_catalog_base() {
+    let Some(h) = harness() else { return };
+
+    // 1. Every published record exposes its owning catalog alias.
+    let (status, body) = req(&h, Method::Get, "/api/v1/schemas/published", None);
+    assert_eq!(status, Status::Ok, "{body}");
+    let all = body["data"].as_array().cloned().unwrap_or_default();
+    assert!(!all.is_empty(), "no published revisions in demo data");
+    for rec in &all {
+        assert!(
+            rec["catalog"].as_str().map(|c| !c.is_empty()).unwrap_or(false),
+            "published revision missing catalog: {rec}"
+        );
+    }
+
+    // 2. Revision of the general stream, plus a fresh catalog that owns no
+    //    revisions — independent of whichever demo catalogs happen to exist.
+    let mut by_catalog: std::collections::HashMap<String, String> = Default::default();
+    for rec in &all {
+        let cat = rec["catalog"].as_str().unwrap_or_default().to_string();
+        let rev = rec["revision_id"].as_str().unwrap_or_default().to_string();
+        if !cat.is_empty() && !rev.is_empty() {
+            by_catalog.entry(cat).or_insert(rev);
+        }
+    }
+    let general_rev = by_catalog
+        .get("general")
+        .cloned()
+        .expect("general catalog must have a published revision");
+    let alias = uniq("pgcat_").to_lowercase();
+    let (status, body) = req(
+        &h,
+        Method::Post,
+        "/api/v1/catalogs",
+        Some(json!({"alias": alias, "name": alias, "description": "pg_scenarios"})),
+    );
+    assert!(status == Status::Ok || status == Status::Created, "{body}");
+
+    // 3. A draft in the fresh catalog pinned to general's revision → 400.
+    let (status, body) = req(
+        &h,
+        Method::Post,
+        "/api/v1/schemas/drafts",
+        Some(json!({
+            "catalog": alias,
+            "name": "pg cross-catalog",
+            "base_revision": general_rev,
+        })),
+    );
+    assert_eq!(
+        status,
+        Status::BadRequest,
+        "cross-catalog base_revision accepted: {body}"
+    );
+
+    // 4. Same catalog without a base succeeds — then clean the draft and the
+    //    catalog up.
+    let (status, body) = req(
+        &h,
+        Method::Post,
+        "/api/v1/schemas/drafts",
+        Some(json!({
+            "catalog": alias,
+            "name": "pg same-catalog",
+        })),
+    );
+    assert_eq!(status, Status::Created, "{body}");
+    let draft_id = body["data"]["revision_id"].as_str().unwrap().to_string();
+    let etag = body["data"]["etag"].as_str().unwrap().to_string();
+    let delete_path = format!("/api/v1/schemas/drafts/{draft_id}");
+    let r = h
+        .client
+        .req(Method::Delete, &delete_path)
+        .header(Header::new("X-CSRF-Token", h.csrf.clone()))
+        .header(Header::new("If-Match", etag))
+        .dispatch();
+    assert_eq!(r.status(), Status::Ok, "draft cleanup failed");
+    let (status, body) = req(&h, Method::Post, &format!("/api/v1/catalogs/{alias}/retire"), None);
+    assert_eq!(status, Status::Ok, "catalog cleanup failed: {body}");
 }

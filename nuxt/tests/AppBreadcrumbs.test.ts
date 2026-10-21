@@ -100,6 +100,19 @@ describe('AppBreadcrumbs', () => {
     (globalThis as any).__routerDeny = ['/entities'];
   });
 
+  it('drops the locale prefix segment (prefix_except_default)', () => {
+    // Non-default locale routes are /{locale}/... — 'en' is not a level.
+    route.path = '/en/objects/person';
+    const wrapper = mountCrumbs();
+    const lis = wrapper.findAll('li');
+    expect(lis.map((l) => l.text())).toEqual([
+      'nav.home',
+      'nav.objects',
+      'person',
+    ]);
+    expect(lis[1].attributes('data-to')).toBe('/objects');
+  });
+
   it('updates when the route changes', async () => {
     route.path = '/objects';
     const wrapper = mountCrumbs();

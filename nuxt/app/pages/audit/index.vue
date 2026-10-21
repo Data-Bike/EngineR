@@ -103,13 +103,18 @@
           <template v-for="entry in entries" :key="entry.audit_id">
             <tr
               class="border-b border-[var(--ui-border)] hover:bg-[var(--ui-bg-muted)] cursor-pointer"
+              tabindex="0"
+              role="button"
+              :aria-expanded="expandedId === entry.audit_id"
               @click="toggleExpand(entry.audit_id)"
+              @keydown.enter.prevent="toggleExpand(entry.audit_id)"
+              @keydown.space.prevent="toggleExpand(entry.audit_id)"
             >
               <td class="py-2 px-3 text-[var(--ui-text-muted)]">{{ entry.sequence }}</td>
               <td class="py-2 px-3">{{ formatDate(entry.occurred_at) }}</td>
               <td class="py-2 px-3">
                 <UBadge :color="kindColor(entry.kind)" size="sm">
-                  {{ t(`audit.kind.${entry.kind}`) }}
+                  {{ enumLabel(t, te, 'audit.kind', entry.kind) }}
                 </UBadge>
               </td>
               <td class="py-2 px-3 font-mono text-xs">{{ entry.actor }}</td>
@@ -340,7 +345,7 @@ definePageMeta({
   middleware: ['auth', capability('audit.read')],
 });
 
-const { t } = useI18n();
+const { t, te } = useI18n();
 const api = useApi();
 const toast = useToast();
 const { available: catalogList } = useCatalog();
@@ -468,7 +473,7 @@ async function fetchAudit() {
   } catch (err) {
     toast.add({
       title: t('common.error'),
-      description: err instanceof Error ? err.message : String(err),
+      description: displayError(err, t, te),
       color: 'error',
     });
   } finally {
@@ -495,7 +500,7 @@ async function loadMore() {
   } catch (err) {
     toast.add({
       title: t('common.error'),
-      description: err instanceof Error ? err.message : String(err),
+      description: displayError(err, t, te),
       color: 'error',
     });
   } finally {
@@ -515,7 +520,7 @@ async function verifyChain() {
   } catch (err) {
     toast.add({
       title: t('common.error'),
-      description: err instanceof Error ? err.message : String(err),
+      description: displayError(err, t, te),
       color: 'error',
     });
   } finally {
@@ -535,7 +540,7 @@ async function createCheckpoint() {
   } catch (err) {
     toast.add({
       title: t('common.error'),
-      description: err instanceof Error ? err.message : String(err),
+      description: displayError(err, t, te),
       color: 'error',
     });
   } finally {
@@ -584,7 +589,7 @@ async function saveRetention() {
   } catch (err) {
     toast.add({
       title: t('common.error'),
-      description: err instanceof Error ? err.message : String(err),
+      description: displayError(err, t, te),
       color: 'error',
     });
   } finally {

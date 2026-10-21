@@ -35,21 +35,6 @@ export class SchemaEndpoints {
     return this.client.get<unknown>(`/schemas/types/${typeId}/view`, { query: { view_type: viewType, catalog: options?.catalog } });
   }
 
-  /** POST /schemas/types — create a type. */
-  async createType(body: unknown): Promise<ParsedResponse<unknown>> {
-    return this.client.post<unknown>('/schemas/types', body);
-  }
-
-  /** PUT /schemas/types/{typeId} — update a type. */
-  async updateType(typeId: string, body: unknown): Promise<ParsedResponse<unknown>> {
-    return this.client.put<unknown>(`/schemas/types/${typeId}`, body);
-  }
-
-  /** DELETE /schemas/types/{typeId} — delete a type. */
-  async deleteType(typeId: string): Promise<ParsedResponse<unknown>> {
-    return this.client.delete<unknown>(`/schemas/types/${typeId}`);
-  }
-
   /** GET /schemas/drafts — list schema drafts (per-catalog stream when
    * `catalog` is given; always permission-filtered per catalog). */
   async listDrafts(options?: { catalog?: string }): Promise<ParsedResponse<SchemaRevisionRecord[]>> {
@@ -81,21 +66,6 @@ export class SchemaEndpoints {
    * catalog's stream. */
   async listPredicates(options?: { catalog?: string }): Promise<ParsedResponse<unknown[]>> {
     return this.client.get<unknown[]>('/schemas/predicates', { query: options });
-  }
-
-  /** POST /schemas/predicates — create a predicate. */
-  async createPredicate(body: unknown): Promise<ParsedResponse<unknown>> {
-    return this.client.post<unknown>('/schemas/predicates', body);
-  }
-
-  /** PUT /schemas/predicates/{alias} — update a predicate. */
-  async updatePredicate(alias: string, body: unknown): Promise<ParsedResponse<unknown>> {
-    return this.client.put<unknown>(`/schemas/predicates/${alias}`, body);
-  }
-
-  /** DELETE /schemas/predicates/{alias} — delete a predicate. */
-  async deletePredicate(alias: string): Promise<ParsedResponse<unknown>> {
-    return this.client.delete<unknown>(`/schemas/predicates/${alias}`);
   }
 
   /** POST /schemas/drafts — create a schema draft inside a catalog's

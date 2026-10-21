@@ -38,8 +38,9 @@
                 variant="ghost"
                 color="error"
                 icon="i-lucide-archive"
+                :aria-label="t('catalog.retire')"
                 :title="t('catalog.retire')"
-                @click="retireCatalog(cat)"
+                @click="askRetire(cat)"
               />
             </div>
           </div>
@@ -74,6 +75,20 @@
         <UButton :loading="saving" @click="saveCatalog">{{ t('catalog.save') }}</UButton>
       </template>
     </UModal>
+
+    <UModal v-model:open="showRetire">
+      <template #header>{{ t('catalog.retire') }}</template>
+      <template #body>
+        <p>{{ t('catalog.retire_confirm') }}</p>
+        <p v-if="retireTarget" class="mt-2 font-mono text-sm">{{ retireTarget.alias }}</p>
+      </template>
+      <template #footer>
+        <UButton variant="ghost" @click="showRetire = false">{{ t('catalog.cancel') }}</UButton>
+        <UButton color="error" :loading="retiring" @click="retireCatalog">
+          {{ t('catalog.retire') }}
+        </UButton>
+      </template>
+    </UModal>
   </div>
 </template>
 
@@ -85,9 +100,10 @@ definePageMeta({
   middleware: ['auth', capability('admin.pages.access')],
 });
 
-const { t } = useI18n();
+const { t, te } = useI18n();
 const api = useApi();
 const toast = useToast();
+const authStore = useAuthStore();
 
 const loading = ref(false);
 const saving = ref(false);
@@ -95,6 +111,9 @@ const showDialog = ref(false);
 const editing = ref(false);
 const catalogs = ref<CatalogRecord[]>([]);
 const formData = ref({ alias: '', name: '', description: '' });
+const showRetire = ref(false);
+const retiring = ref(false);
+const retireTarget = ref<CatalogRecord | null>(null);
 
 async function fetchCatalogs() {
   loading.value = true;
@@ -102,7 +121,7 @@ async function fetchCatalogs() {
     const res = await api.catalogs.list();
     catalogs.value = res.data ?? [];
   } catch (e: unknown) {
-    toast.add({ title: t('common.error'), description: e instanceof Error ? e.message : String(e), color: 'error' });
+    toast.add({ title: t('common.error'), description: displayError(e, t, te), color: 'error' });
   } finally {
     loading.value = false;
   }
@@ -139,21 +158,35 @@ async function saveCatalog() {
     }
     showDialog.value = false;
     await fetchCatalogs();
+    // /me/context.catalogs feeds the header selector — refresh it so a
+    // newly created (or renamed) catalog shows up without a reload.
+    await authStore.fetchContext();
   } catch (e: unknown) {
-    toast.add({ title: t('common.error'), description: e instanceof Error ? e.message : String(e), color: 'error' });
+    toast.add({ title: t('common.error'), description: displayError(e, t, te), color: 'error' });
   } finally {
     saving.value = false;
   }
 }
 
-async function retireCatalog(cat: CatalogRecord) {
-  if (!confirm(t('catalog.retire_confirm'))) return;
+function askRetire(cat: CatalogRecord) {
+  retireTarget.value = cat;
+  showRetire.value = true;
+}
+
+async function retireCatalog() {
+  if (!retireTarget.value) return;
+  retiring.value = true;
   try {
-    await api.catalogs.retire(cat.alias);
+    await api.catalogs.retire(retireTarget.value.alias);
     toast.add({ title: t('catalog.retire_success'), color: 'success' });
+    showRetire.value = false;
+    retireTarget.value = null;
     await fetchCatalogs();
+    await authStore.fetchContext();
   } catch (e: unknown) {
-    toast.add({ title: t('common.error'), description: e instanceof Error ? e.message : String(e), color: 'error' });
+    toast.add({ title: t('common.error'), description: displayError(e, t, te), color: 'error' });
+  } finally {
+    retiring.value = false;
   }
 }
 

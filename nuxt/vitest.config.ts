@@ -35,6 +35,7 @@ export default defineConfig({
             ['onBeforeRouteLeave', `const onBeforeRouteLeave = globalThis.__onBeforeRouteLeave;`],
             ['useRoute', `const useRoute = globalThis.__useRoute;`],
             ['useRouter', `const useRouter = globalThis.__useRouter;`],
+            ['useLocalePath', `const useLocalePath = globalThis.__useLocalePath;`],
             ['useAuth', `const useAuth = globalThis.__useAuth;`],
             ['useToast', `const useToast = globalThis.__useToast;`],
             ['useCatalog', `const useCatalog = globalThis.__useCatalog;`],

@@ -405,6 +405,21 @@ fn ops_uuid(n: u64) -> uuid::Uuid {
 /// Seed operational demo data: requests, checks, risk, tasks, workflows,
 /// monitors, connectors and one ready report. All rows use fixed ids so the
 /// seed is idempotent across restarts.
+/// The tenant's default catalog — every seeded row lands in `general`.
+/// `core.catalog` rows are created by the catalog migration, so this runs
+/// before any seed insert that requires catalog_id.
+async fn general_catalog_id(conn: &mut Conn, tenant: uuid::Uuid) -> Result<i64, DbError> {
+    sqlx::query_scalar(
+        "SELECT catalog_id FROM core.catalog WHERE tenant_id=$1 AND alias='general'",
+    )
+    .bind(tenant)
+    .fetch_one(&mut *conn)
+    .await
+    .map_err(|e| DbError::Other {
+        message: e.to_string(),
+    })
+}
+
 async fn seed_operations(conn: &mut Conn, tenant: uuid::Uuid) -> Result<(), DbError> {
     let db = |e: sqlx::Error| DbError::Other {
         message: e.to_string(),
@@ -586,15 +601,17 @@ async fn seed_operations(conn: &mut Conn, tenant: uuid::Uuid) -> Result<(), DbEr
             {"name": "reviewed", "transitions": [{"to": "scheduled", "action": "schedule_next"}, {"to": "escalated", "action": "escalate"}]},
             {"name": "escalated", "transitions": [{"to": "reviewed", "action": "resolve_escalation"}, {"to": "scheduled", "action": "schedule_next"}]}]}
     }"##).expect("workflow definitions seed is valid json");
+    let catalog_id = general_catalog_id(conn, tenant).await?;
     for (alias, def) in wf_defs.as_object().unwrap() {
         sqlx::query(
-            "INSERT INTO meta.workflow_definition (tenant_id, definition_id, content)
-             VALUES ($1,$2,$3)
+            "INSERT INTO meta.workflow_definition (tenant_id, definition_id, content, catalog_id)
+             VALUES ($1,$2,$3,$4)
              ON CONFLICT (tenant_id, definition_id) DO UPDATE SET content=EXCLUDED.content",
         )
         .bind(tenant)
         .bind(alias)
         .bind(def)
+        .bind(catalog_id)
         .execute(&mut *conn)
         .await
         .map_err(db)?;
@@ -850,14 +867,18 @@ async fn seed_schema(conn: &mut Conn, tenant: uuid::Uuid) -> Result<(), DbError>
              "group": "general"}
         ]
     }"##).expect("seed revision content is valid json");
+    // schema_revision.catalog_id is NOT NULL — the seed revision lives in the
+    // tenant's `general` catalog (created by migration 20261020000025).
+    let catalog_id: i64 = general_catalog_id(conn, tenant).await?;
     sqlx::query(
         "INSERT INTO meta.schema_revision
-         (tenant_id, revision_id, public_id, state, semantic_version, content, published_at)
-         VALUES ($1, 1, gen_random_uuid(), 'published', '1.0.0', $2, now())
+         (tenant_id, revision_id, public_id, state, semantic_version, content, published_at, catalog_id)
+         VALUES ($1, 1, gen_random_uuid(), 'published', '1.0.0', $2, now(), $3)
          ON CONFLICT (tenant_id, revision_id) DO UPDATE SET content=EXCLUDED.content",
     )
     .bind(tenant)
     .bind(content)
+    .bind(catalog_id)
     .execute(&mut *conn)
     .await
     .map_err(db)?;
@@ -875,13 +896,14 @@ async fn seed_schema(conn: &mut Conn, tenant: uuid::Uuid) -> Result<(), DbError>
         let tid = schema_uuid(n);
         sqlx::query(
             "INSERT INTO meta.type_definition
-             (tenant_id, type_id, stable_alias, entity_class, created_revision)
-             VALUES ($1,$2,$3,$4,1) ON CONFLICT (tenant_id, type_id) DO NOTHING",
+             (tenant_id, type_id, stable_alias, entity_class, created_revision, catalog_id)
+             VALUES ($1,$2,$3,$4,1,$5) ON CONFLICT (tenant_id, type_id) DO NOTHING",
         )
         .bind(tenant)
         .bind(tid)
         .bind(alias)
         .bind(class)
+        .bind(catalog_id)
         .execute(&mut *conn)
         .await
         .map_err(db)?;
@@ -937,14 +959,15 @@ async fn seed_schema(conn: &mut Conn, tenant: uuid::Uuid) -> Result<(), DbError>
         let pid = schema_uuid(n);
         sqlx::query(
             "INSERT INTO meta.predicate_definition
-             (tenant_id, predicate_id, stable_alias, is_edge, scalar_kind, created_revision)
-             VALUES ($1,$2,$3,$4,$5,1) ON CONFLICT (tenant_id, predicate_id) DO NOTHING",
+             (tenant_id, predicate_id, stable_alias, is_edge, scalar_kind, created_revision, catalog_id)
+             VALUES ($1,$2,$3,$4,$5,1,$6) ON CONFLICT (tenant_id, predicate_id) DO NOTHING",
         )
         .bind(tenant)
         .bind(pid)
         .bind(alias)
         .bind(is_edge)
         .bind(kind)
+        .bind(catalog_id)
         .execute(&mut *conn)
         .await
         .map_err(db)?;
@@ -1137,6 +1160,8 @@ async fn seed_entities(conn: &mut Conn, tenant: uuid::Uuid) -> Result<(), DbErro
     };
     let admin: uuid::Uuid = "00000000-0000-0000-0000-0000000000a1".parse().unwrap();
 
+    let catalog_id = general_catalog_id(conn, tenant).await?;
+
     // (entity_id, type_n, public_id)
     let entities: [(i64, u64, &str); 8] = [
         (1, 1, "00000000-0000-7000-9000-000000000001"),
@@ -1151,14 +1176,15 @@ async fn seed_entities(conn: &mut Conn, tenant: uuid::Uuid) -> Result<(), DbErro
     for (eid, type_n, public) in entities {
         sqlx::query(
             "INSERT INTO core.entity
-             (tenant_id, entity_id, public_id, type_id, entity_class, created_by, head_revision)
-             VALUES ($1,$2,$3,$4,0,$5,1) ON CONFLICT (tenant_id, entity_id) DO NOTHING",
+             (tenant_id, entity_id, public_id, type_id, entity_class, created_by, head_revision, catalog_id)
+             VALUES ($1,$2,$3,$4,0,$5,1,$6) ON CONFLICT (tenant_id, entity_id) DO NOTHING",
         )
         .bind(tenant)
         .bind(eid)
         .bind(public.parse::<uuid::Uuid>().unwrap())
         .bind(schema_uuid(type_n))
         .bind(admin)
+        .bind(catalog_id)
         .execute(&mut *conn)
         .await
         .map_err(db)?;
@@ -1267,8 +1293,8 @@ async fn seed_entities(conn: &mut Conn, tenant: uuid::Uuid) -> Result<(), DbErro
         sqlx::query(
             "INSERT INTO core.statement
              (tenant_id, statement_id, subject, predicate, object, object_kind,
-              valid_from, provenance, status, revision, fingerprint)
-             SELECT $1,$2,$3,$4,$5,$6,'2026-01-01T00:00:00Z',$7,'active',1,$8
+              valid_from, provenance, status, revision, fingerprint, catalog_id)
+             SELECT $1,$2,$3,$4,$5,$6,'2026-01-01T00:00:00Z',$7,'active',1,$8,$9
              WHERE NOT EXISTS (
                 SELECT 1 FROM core.statement WHERE tenant_id=$1 AND statement_id=$2
              )",
@@ -1281,6 +1307,7 @@ async fn seed_entities(conn: &mut Conn, tenant: uuid::Uuid) -> Result<(), DbErro
         .bind(kind)
         .bind(serde_json::json!({"kind":"user","principal_id":admin}))
         .bind(format!("seed-{sid}"))
+        .bind(catalog_id)
         .execute(&mut *conn)
         .await
         .map_err(db)?;

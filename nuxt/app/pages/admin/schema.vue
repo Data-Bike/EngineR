@@ -521,7 +521,7 @@ import { capability } from '~/middleware/capability';
 
 definePageMeta({ middleware: ['auth', capability('schema.draft')] });
 
-const { t, locale } = useI18n();
+const { t, te, locale } = useI18n();
 const api = useApi();
 const { catalogParams, selected: selectedCatalog } = useCatalog();
 const toast = useToast();
@@ -576,8 +576,16 @@ const tabs = computed(() => [
   { value: 'drafts', label: `${t('schema.drafts')} (${drafts.value.length})` },
   { value: 'published', label: `${t('schema.published')} (${revisions.value.length})` },
 ]);
-const currentRevision = computed(() => revisions.value.find(revision => revision.status === 'published'));
-const latestRevision = computed(() => currentRevision.value ?? revisions.value[0]);
+// Drafts live in one catalog stream: with "all catalogs" selected the server
+// creates in `general`, so the base must come from the target stream only —
+// basing a general draft on another catalog's revision fails with 400.
+const targetCatalog = computed(() => selectedCatalog.value || 'general');
+const streamRevisions = computed(() =>
+  revisions.value.filter(revision => !revision.catalog || revision.catalog === targetCatalog.value));
+const currentRevision = computed(() =>
+  streamRevisions.value.find(revision => revision.status === 'published'));
+const latestRevision = computed(() =>
+  streamRevisions.value.find(revision => revision.status === 'published') ?? streamRevisions.value[0]);
 const readyDrafts = computed(() => drafts.value.filter(draft => draft.status === 'impact_ready').length);
 const breakingDrafts = computed(() => drafts.value.filter(draft => draft.impact?.breaking).length);
 const isBusy = computed(() => busyAction.value.length > 0);
@@ -615,7 +623,7 @@ const draftStateOptions = computed(() => [
 
 const baseRevisionOptions = computed(() => [
   { label: t('schema.empty_base'), value: null },
-  ...revisions.value
+  ...streamRevisions.value
     .map(revision => ({
       label: `${revision.display_name} · v${revision.semantic_version} · ${statusLabel(revision.status)}`,
       value: revision.revision_id,
@@ -655,7 +663,7 @@ function prettyJson(value: unknown): string {
 }
 
 function errorText(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+  return displayError(error, t, te);
 }
 
 async function reloadAll(): Promise<void> {
@@ -701,7 +709,7 @@ async function createDraft(): Promise<void> {
       description: createForm.description.trim(),
       semantic_version: createForm.semantic_version.trim(),
       base_revision: createForm.base_revision || undefined,
-    });
+    }, catalogParams());
     createDialogOpen.value = false;
     toast.add({ title: t('schema.created_success'), color: 'success' });
     await reloadAll();

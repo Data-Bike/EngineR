@@ -38,9 +38,10 @@ pub struct ToolDef {
     /// `/api/v1`-relative path template; `{name}` segments are filled from
     /// `ParamLoc::Path` arguments.
     pub path: &'static str,
-    /// Capability wire string from `enginer_security_domain::CapabilityAction`.
-    /// `None` = no capability needed beyond a valid credential.
-    pub capability: Option<&'static str>,
+    /// Capability wire strings from `enginer_security_domain::CapabilityAction`.
+    /// Any-of semantics mirroring the API guard (`required_capabilities`):
+    /// an empty slice = no capability needed beyond a valid credential.
+    pub capabilities: &'static [&'static str],
     pub params: &'static [Param],
 }
 
@@ -54,7 +55,17 @@ const ID: Param = Param {
     loc: P,
     ty: "string",
     required: true,
-    desc: "Entity public id or task/check/group/user id (uuid).",
+    desc: "Resource public id (uuid).",
+};
+
+/// Entity-only identifier — `entities.*` tools resolve core entities, not
+/// task/check/group/user ids.
+const ENTITY_ID: Param = Param {
+    name: "id",
+    loc: P,
+    ty: "string",
+    required: true,
+    desc: "Entity public id (uuid).",
 };
 
 /// Stable alias identifier (types, predicates) used in path templates.
@@ -111,30 +122,30 @@ pub static TOOLS: &[ToolDef] = &[
     ToolDef {
         name: "context.get",
         desc: "Current principal context: identity, tenant, capabilities, URL rules.",
-        method: "GET", path: "/me/context", capability: None, params: &[],
+        method: "GET", path: "/me/context", capabilities: &[], params: &[],
     },
     ToolDef {
         name: "dashboard.stats",
         desc: "Aggregate dashboard counters for the tenant.",
-        method: "GET", path: "/dashboard/stats", capability: Some("entity.read"), params: &[],
+        method: "GET", path: "/dashboard/stats", capabilities: &["entity.read"], params: &[],
     },
 
     // --- Catalogs (docs/28) -------------------------------------------------
     ToolDef {
         name: "catalogs.list",
         desc: "List catalogs visible to the caller (catalog-gated).",
-        method: "GET", path: "/catalogs", capability: Some("entity.read"), params: &[],
+        method: "GET", path: "/catalogs", capabilities: &["entity.read"], params: &[],
     },
     ToolDef {
         name: "catalogs.get",
         desc: "Catalog detail by alias or public id.",
-        method: "GET", path: "/catalogs/{catalog_ref}", capability: Some("entity.read"),
+        method: "GET", path: "/catalogs/{catalog_ref}", capabilities: &["entity.read"],
         params: &[CATALOG_REF],
     },
     ToolDef {
         name: "catalogs.create",
         desc: "Create a custom catalog (alias, name, description, settings).",
-        method: "POST", path: "/catalogs", capability: Some("catalog.manage"),
+        method: "POST", path: "/catalogs", capabilities: &["catalog.manage"],
         params: &[
             Param { name: "alias", loc: B, ty: "string", required: true, desc: "Catalog alias: ^[a-z][a-z0-9_-]{0,62}$." },
             Param { name: "name", loc: B, ty: "string", required: true, desc: "Display name." },
@@ -145,7 +156,7 @@ pub static TOOLS: &[ToolDef] = &[
     ToolDef {
         name: "catalogs.update",
         desc: "Update a catalog (name/description/settings/status).",
-        method: "PUT", path: "/catalogs/{catalog_ref}", capability: Some("catalog.manage"),
+        method: "PUT", path: "/catalogs/{catalog_ref}", capabilities: &["catalog.manage"],
         params: &[
             CATALOG_REF,
             Param { name: "name", loc: B, ty: "string", required: false, desc: "Display name." },
@@ -157,7 +168,7 @@ pub static TOOLS: &[ToolDef] = &[
     ToolDef {
         name: "catalogs.retire",
         desc: "Retire a catalog (fails while it still holds live entities).",
-        method: "POST", path: "/catalogs/{catalog_ref}/retire", capability: Some("catalog.manage"),
+        method: "POST", path: "/catalogs/{catalog_ref}/retire", capabilities: &["catalog.manage"],
         params: &[CATALOG_REF],
     },
 
@@ -165,7 +176,7 @@ pub static TOOLS: &[ToolDef] = &[
     ToolDef {
         name: "entities.list",
         desc: "List/search entities. Filter by type alias and free-text search.",
-        method: "GET", path: "/entities", capability: Some("entity.read"),
+        method: "GET", path: "/entities", capabilities: &["entity.read"],
         params: &[
             Param { name: "type", loc: Q, ty: "string", required: false, desc: "Type alias, e.g. legal_entity." },
             Param { name: "search", loc: Q, ty: "string", required: false, desc: "Free-text search." },
@@ -177,13 +188,13 @@ pub static TOOLS: &[ToolDef] = &[
     ToolDef {
         name: "entities.get",
         desc: "Get a single entity with its statements and attributes.",
-        method: "GET", path: "/entities/{id}", capability: Some("entity.read"),
-        params: &[ID, CATALOG],
+        method: "GET", path: "/entities/{id}", capabilities: &["entity.read"],
+        params: &[ENTITY_ID, CATALOG],
     },
     ToolDef {
         name: "entities.create",
         desc: "Create an entity. `type_id` selects the schema type (uuid or alias); `fields` carries predicate values. `catalog` picks the owning catalog — without it the type's own catalog is used.",
-        method: "POST", path: "/entities", capability: Some("entity.create"),
+        method: "POST", path: "/entities", capabilities: &["entity.create"],
         params: &[
             Param { name: "type_id", loc: B, ty: "string", required: true, desc: "Published type alias or uuid." },
             Param { name: "fields", loc: B, ty: "object", required: false, desc: "Predicate values keyed by predicate alias." },
@@ -196,9 +207,9 @@ pub static TOOLS: &[ToolDef] = &[
     ToolDef {
         name: "entities.update",
         desc: "Update entity fields (predicate values). `catalog` is a mismatch check — entities never change catalogs.",
-        method: "PUT", path: "/entities/{id}", capability: Some("entity.edit"),
+        method: "PUT", path: "/entities/{id}", capabilities: &["entity.edit"],
         params: &[
-            ID,
+            ENTITY_ID,
             Param { name: "fields", loc: B, ty: "object", required: false, desc: "Predicate values to set (alias→value map; a statement array also works)." },
             Param { name: "predicate_id", loc: B, ty: "string", required: false, desc: "Single predicate to set (with `value`)." },
             Param { name: "value", loc: B, ty: "object", required: false, desc: "Value for `predicate_id`." },
@@ -209,18 +220,18 @@ pub static TOOLS: &[ToolDef] = &[
     ToolDef {
         name: "entities.retire",
         desc: "Retire (soft-delete) an entity.",
-        method: "POST", path: "/entities/{id}/retire", capability: Some("entity.retire"),
+        method: "POST", path: "/entities/{id}/retire", capabilities: &["entity.retire"],
         params: &[
-            ID,
+            ENTITY_ID,
             Param { name: "reason", loc: B, ty: "string", required: false, desc: "Retirement reason." },
         ],
     },
     ToolDef {
         name: "entities.merge",
         desc: "Merge another entity into this one.",
-        method: "POST", path: "/entities/{id}/merge", capability: Some("entity.merge"),
+        method: "POST", path: "/entities/{id}/merge", capabilities: &["entity.merge"],
         params: &[
-            ID,
+            ENTITY_ID,
             Param { name: "loser_public_id", loc: B, ty: "string", required: true, desc: "Public id of the entity merged away." },
             Param { name: "reason", loc: B, ty: "string", required: false, desc: "Merge reason." },
         ],
@@ -228,7 +239,7 @@ pub static TOOLS: &[ToolDef] = &[
     ToolDef {
         name: "entities.query",
         desc: "Run an advanced entity query (AST filters, facets, sort). `catalog` scopes the query to one catalog.",
-        method: "POST", path: "/entities/query", capability: Some("query.advanced"),
+        method: "POST", path: "/entities/query", capabilities: &["query.advanced"],
         params: &[
             Param { name: "query", loc: B, ty: "object", required: true, desc: "Query AST per docs/12." },
             CATALOG,
@@ -237,27 +248,27 @@ pub static TOOLS: &[ToolDef] = &[
     ToolDef {
         name: "entities.graph",
         desc: "Entity neighbourhood graph (relations up to a depth/direction).",
-        method: "POST", path: "/entities/{id}/graph", capability: Some("entity.read"),
+        method: "POST", path: "/entities/{id}/graph", capabilities: &["entity.read"],
         params: &[
-            ID,
-            Param { name: "max_depth", loc: B, ty: "integer", required: false, desc: "Traversal depth." },
+            ENTITY_ID,
+            Param { name: "max_depth", loc: B, ty: "integer", required: false, desc: "Traversal depth 1..5 (default 1)." },
             Param { name: "direction", loc: B, ty: "string", required: false, desc: "outgoing|incoming|both." },
             Param { name: "locale", loc: B, ty: "string", required: false, desc: "Label locale." },
-            Param { name: "predicate_id", loc: B, ty: "string", required: false, desc: "Restrict to one relation predicate." },
+            Param { name: "as_of", loc: B, ty: "string", required: false, desc: "RFC3339 timestamp or YYYY-MM-DD (end of day UTC) — historical view." },
         ],
     },
     ToolDef {
         name: "entities.history",
         desc: "Revision history of an entity.",
-        method: "GET", path: "/entities/{id}/history", capability: Some("entity.read"),
-        params: &[ID],
+        method: "GET", path: "/entities/{id}/history", capabilities: &["entity.read"],
+        params: &[ENTITY_ID],
     },
 
     // --- Relations --------------------------------------------------------
     ToolDef {
         name: "relations.list",
         desc: "List relations of an entity (direction-aware).",
-        method: "GET", path: "/entities/{id}/relations", capability: Some("entity.read"),
+        method: "GET", path: "/entities/{id}/relations", capabilities: &["entity.read"],
         params: &[
             ID,
             Param { name: "direction", loc: Q, ty: "string", required: false, desc: "outgoing|incoming|both." },
@@ -267,7 +278,7 @@ pub static TOOLS: &[ToolDef] = &[
     ToolDef {
         name: "relations.create",
         desc: "Create a relation between this entity and a target.",
-        method: "POST", path: "/entities/{id}/relations", capability: Some("entity.edit"),
+        method: "POST", path: "/entities/{id}/relations", capabilities: &["entity.edit"],
         params: &[
             ID,
             Param { name: "predicate", loc: B, ty: "string", required: true, desc: "Predicate alias." },
@@ -278,7 +289,7 @@ pub static TOOLS: &[ToolDef] = &[
     ToolDef {
         name: "relations.delete",
         desc: "Delete a relation instance of an entity.",
-        method: "DELETE", path: "/entities/{id}/relations/{relation_id}", capability: Some("entity.edit"),
+        method: "DELETE", path: "/entities/{id}/relations/{relation_id}", capabilities: &["entity.edit"],
         params: &[
             ID,
             Param { name: "relation_id", loc: P, ty: "string", required: true, desc: "Relation instance id." },
@@ -289,13 +300,13 @@ pub static TOOLS: &[ToolDef] = &[
     ToolDef {
         name: "documents.list",
         desc: "List documents attached to an entity.",
-        method: "GET", path: "/entities/{id}/documents", capability: Some("entity.read"),
+        method: "GET", path: "/entities/{id}/documents", capabilities: &["entity.read"],
         params: &[ID],
     },
     ToolDef {
         name: "documents.upload",
         desc: "Attach a document to an entity (small files; bytes is a JSON array of 0-255 ints).",
-        method: "POST", path: "/entities/{id}/documents", capability: Some("entity.edit"),
+        method: "POST", path: "/entities/{id}/documents", capabilities: &["entity.edit"],
         params: &[
             ID,
             Param { name: "kind", loc: B, ty: "string", required: true, desc: "Document kind." },
@@ -308,7 +319,7 @@ pub static TOOLS: &[ToolDef] = &[
     ToolDef {
         name: "documents.delete",
         desc: "Remove a document from an entity.",
-        method: "DELETE", path: "/entities/{id}/documents/{doc_id}", capability: Some("entity.edit"),
+        method: "DELETE", path: "/entities/{id}/documents/{doc_id}", capabilities: &["entity.edit"],
         params: &[
             ID,
             Param { name: "doc_id", loc: P, ty: "string", required: true, desc: "Document id." },
@@ -318,44 +329,44 @@ pub static TOOLS: &[ToolDef] = &[
     ToolDef {
         name: "files.get",
         desc: "File object metadata (content hash, size, status).",
-        method: "GET", path: "/files/{id}", capability: Some("entity.edit"),
+        method: "GET", path: "/files/{id}", capabilities: &["entity.read", "report.export"],
         params: &[ID],
     },
     ToolDef {
         name: "files.delete",
         desc: "Delete a file object.",
-        method: "DELETE", path: "/files/{id}", capability: Some("entity.edit"),
+        method: "DELETE", path: "/files/{id}", capabilities: &["entity.edit"],
         params: &[ID],
     },
     ToolDef {
         name: "files.upload_init",
         desc: "Begin a staged upload session (chunk upload itself is binary and not exposed over MCP).",
-        method: "POST", path: "/files/upload/init", capability: Some("entity.edit"),
+        method: "POST", path: "/files/upload/init", capabilities: &["entity.edit"],
         params: &[
             Param { name: "filename", loc: B, ty: "string", required: true, desc: "File name." },
             Param { name: "expected_size", loc: B, ty: "integer", required: true, desc: "Bytes total." },
             Param { name: "expected_hash", loc: B, ty: "string", required: true, desc: "Hex digest of the full content." },
             Param { name: "chunk_size", loc: B, ty: "integer", required: true, desc: "Chunk size in bytes." },
-            Param { name: "hash_algorithm", loc: B, ty: "string", required: false, desc: "sha256|blake3 (default sha256)." },
+            Param { name: "hash_algorithm", loc: B, ty: "string", required: true, desc: "sha256|blake2b (required by the API)." },
             Param { name: "content_type", loc: B, ty: "string", required: false, desc: "MIME type." },
         ],
     },
     ToolDef {
         name: "files.upload_status",
         desc: "Staged upload session status.",
-        method: "GET", path: "/files/upload/{id}", capability: Some("entity.edit"),
+        method: "GET", path: "/files/upload/{id}", capabilities: &["entity.read", "report.export"],
         params: &[ID],
     },
     ToolDef {
         name: "files.upload_abort",
         desc: "Abort a staged upload session.",
-        method: "POST", path: "/files/upload/{id}/abort", capability: Some("entity.edit"),
+        method: "POST", path: "/files/upload/{id}/abort", capabilities: &["entity.edit"],
         params: &[ID],
     },
     ToolDef {
         name: "files.upload_chunk",
         desc: "Upload one chunk of a staged upload (data_base64 = base64-encoded raw bytes).",
-        method: "PUT", path: "/files/upload/{id}/chunks/{index}", capability: Some("entity.edit"),
+        method: "PUT", path: "/files/upload/{id}/chunks/{index}", capabilities: &["entity.edit"],
         params: &[
             ID,
             Param { name: "index", loc: P, ty: "integer", required: true, desc: "Chunk index." },
@@ -365,7 +376,7 @@ pub static TOOLS: &[ToolDef] = &[
     ToolDef {
         name: "files.upload_complete",
         desc: "Finish a staged upload — verifies hash/size and marks the file ready.",
-        method: "POST", path: "/files/upload/{id}/complete", capability: Some("entity.edit"),
+        method: "POST", path: "/files/upload/{id}/complete", capabilities: &["entity.edit"],
         params: &[
             ID,
             Param { name: "final_hash", loc: B, ty: "string", required: true, desc: "Hex digest of the full content." },
@@ -375,13 +386,13 @@ pub static TOOLS: &[ToolDef] = &[
     ToolDef {
         name: "files.download",
         desc: "Download a file object — response returned as base64.",
-        method: "GET", path: "/files/{id}/download", capability: Some("entity.edit"),
+        method: "GET", path: "/files/{id}/download", capabilities: &["entity.read", "report.export"],
         params: &[ID],
     },
     ToolDef {
         name: "documents.download",
         desc: "Download an entity document — response returned as base64.",
-        method: "GET", path: "/entities/{id}/documents/{doc_id}/download", capability: Some("entity.read"),
+        method: "GET", path: "/entities/{id}/documents/{doc_id}/download", capabilities: &["entity.read"],
         params: &[
             ID,
             Param { name: "doc_id", loc: P, ty: "string", required: true, desc: "Document id." },
@@ -392,32 +403,32 @@ pub static TOOLS: &[ToolDef] = &[
     ToolDef {
         name: "tasks.list",
         desc: "List workflow tasks attached to an entity.",
-        method: "GET", path: "/entities/{id}/tasks", capability: Some("entity.read"),
+        method: "GET", path: "/entities/{id}/tasks", capabilities: &["entity.read"],
         params: &[ID],
     },
     ToolDef {
         name: "tasks.create",
         desc: "Create a task on an entity.",
-        method: "POST", path: "/entities/{id}/tasks", capability: Some("entity.edit"),
+        method: "POST", path: "/entities/{id}/tasks", capabilities: &["entity.edit"],
         params: &[
             ID,
             Param { name: "kind", loc: B, ty: "string", required: true, desc: "Task kind." },
-            Param { name: "title", loc: B, ty: "string", required: false, desc: "Task title." },
+            Param { name: "title", loc: B, ty: "string", required: true, desc: "Task title (required by the API)." },
             Param { name: "description", loc: B, ty: "string", required: false, desc: "Task description." },
-            Param { name: "priority", loc: B, ty: "string", required: false, desc: "Task priority." },
-            Param { name: "due_date", loc: B, ty: "string", required: false, desc: "RFC3339 due date." },
+            Param { name: "priority", loc: B, ty: "integer", required: false, desc: "Task priority 1..20 (default 5)." },
+            Param { name: "due_date", loc: B, ty: "string", required: false, desc: "Due date, RFC3339 or YYYY-MM-DD." },
         ],
     },
     ToolDef {
         name: "tasks.start",
         desc: "Mark a task in-progress.",
-        method: "POST", path: "/tasks/{id}/start", capability: Some("entity.edit"),
+        method: "POST", path: "/tasks/{id}/start", capabilities: &["entity.edit"],
         params: &[ID],
     },
     ToolDef {
         name: "tasks.complete",
         desc: "Complete a task.",
-        method: "POST", path: "/tasks/{id}/complete", capability: Some("entity.edit"),
+        method: "POST", path: "/tasks/{id}/complete", capabilities: &["entity.edit"],
         params: &[
             ID,
             Param { name: "resolution", loc: B, ty: "string", required: false, desc: "Resolution note." },
@@ -426,7 +437,7 @@ pub static TOOLS: &[ToolDef] = &[
     ToolDef {
         name: "tasks.cancel",
         desc: "Cancel a task.",
-        method: "POST", path: "/tasks/{id}/cancel", capability: Some("entity.edit"),
+        method: "POST", path: "/tasks/{id}/cancel", capabilities: &["entity.edit"],
         params: &[
             ID,
             Param { name: "reason", loc: B, ty: "string", required: false, desc: "Cancellation reason." },
@@ -437,13 +448,13 @@ pub static TOOLS: &[ToolDef] = &[
     ToolDef {
         name: "factors.list",
         desc: "Risk factors of an entity.",
-        method: "GET", path: "/entities/{id}/factors", capability: Some("risk.view"),
+        method: "GET", path: "/entities/{id}/factors", capabilities: &["risk.view"],
         params: &[ID],
     },
     ToolDef {
         name: "factors.resolve",
         desc: "Resolve a risk factor on an entity.",
-        method: "POST", path: "/entities/{id}/factors/{factor_id}/resolve", capability: Some("risk.resolve"),
+        method: "POST", path: "/entities/{id}/factors/{factor_id}/resolve", capabilities: &["risk.resolve"],
         params: &[
             ID,
             Param { name: "factor_id", loc: P, ty: "string", required: true, desc: "Factor id." },
@@ -453,13 +464,14 @@ pub static TOOLS: &[ToolDef] = &[
     ToolDef {
         name: "assessment.get",
         desc: "Current risk assessment of an entity.",
-        method: "GET", path: "/entities/{id}/assessment", capability: Some("assessment.view"),
+        method: "GET", path: "/entities/{id}/assessment", capabilities: &["assessment.view"],
         params: &[ID],
     },
     ToolDef {
         name: "assessment.create",
         desc: "Trigger a new risk assessment for an entity.",
-        method: "POST", path: "/entities/{id}/assessment", capability: Some("assessment.view"),
+        // Write op — the API gates POST assessment under entity.edit.
+        method: "POST", path: "/entities/{id}/assessment", capabilities: &["entity.edit"],
         params: &[
             ID,
             Param { name: "rationale", loc: B, ty: "string", required: false, desc: "Analyst rationale." },
@@ -471,7 +483,7 @@ pub static TOOLS: &[ToolDef] = &[
     ToolDef {
         name: "assessments.list",
         desc: "List risk assessments of the tenant.",
-        method: "GET", path: "/assessments", capability: Some("assessment.view"),
+        method: "GET", path: "/assessments", capabilities: &["assessment.view"],
         params: &[
             Param { name: "status", loc: Q, ty: "string", required: false, desc: "Status filter." },
             Param { name: "limit", loc: Q, ty: "integer", required: false, desc: "Page size." },
@@ -483,7 +495,7 @@ pub static TOOLS: &[ToolDef] = &[
     ToolDef {
         name: "checks.list",
         desc: "List check instances.",
-        method: "GET", path: "/checks", capability: Some("check.view"),
+        method: "GET", path: "/checks", capabilities: &["check.view"],
         params: &[
             Param { name: "target_entity_id", loc: Q, ty: "string", required: false, desc: "Filter by entity." },
             Param { name: "status", loc: Q, ty: "string", required: false, desc: "pending|running|completed|failed." },
@@ -495,19 +507,19 @@ pub static TOOLS: &[ToolDef] = &[
     ToolDef {
         name: "checks.get",
         desc: "Get a check instance.",
-        method: "GET", path: "/checks/{id}", capability: Some("check.view"),
+        method: "GET", path: "/checks/{id}", capabilities: &["check.view"],
         params: &[ID],
     },
     ToolDef {
         name: "checks.evidence",
         desc: "Evidence items of a check instance.",
-        method: "GET", path: "/checks/{id}/evidence", capability: Some("check.view"),
+        method: "GET", path: "/checks/{id}/evidence", capabilities: &["check.view"],
         params: &[ID],
     },
     ToolDef {
         name: "checks.create",
         desc: "Request a new check for an entity.",
-        method: "POST", path: "/checks", capability: Some("check.run"),
+        method: "POST", path: "/checks", capabilities: &["check.run"],
         params: &[
             Param { name: "target_entity_id", loc: B, ty: "string", required: true, desc: "Entity to check." },
             Param { name: "check_kind", loc: B, ty: "string", required: true, desc: "kyc|sanctions|financial_health|…" },
@@ -517,7 +529,7 @@ pub static TOOLS: &[ToolDef] = &[
     ToolDef {
         name: "entity_checks.list",
         desc: "Checks attached to a specific entity.",
-        method: "GET", path: "/entities/{id}/checks", capability: Some("check.view"),
+        method: "GET", path: "/entities/{id}/checks", capabilities: &["entity.read"],
         params: &[ID],
     },
 
@@ -525,19 +537,19 @@ pub static TOOLS: &[ToolDef] = &[
     ToolDef {
         name: "schema.types",
         desc: "Published entity types (permission-filtered). `catalog` picks one catalog's stream — the same alias may differ across catalogs.",
-        method: "GET", path: "/schemas/types", capability: Some("entity.read"),
+        method: "GET", path: "/schemas/types", capabilities: &["entity.read"],
         params: &[CATALOG],
     },
     ToolDef {
         name: "schema.type_get",
         desc: "Type detail with predicate slots.",
-        method: "GET", path: "/schemas/types/{alias}", capability: Some("entity.read"),
+        method: "GET", path: "/schemas/types/{alias}", capabilities: &["entity.read"],
         params: &[ALIAS, CATALOG],
     },
     ToolDef {
         name: "schema.type_view",
         desc: "Resolved view definition (form|list) for a type — fields are permission-filtered.",
-        method: "GET", path: "/schemas/types/{alias}/view", capability: Some("entity.read"),
+        method: "GET", path: "/schemas/types/{alias}/view", capabilities: &["entity.read"],
         params: &[
             ALIAS,
             Param { name: "view_type", loc: Q, ty: "string", required: true, desc: "form|list." },
@@ -547,31 +559,31 @@ pub static TOOLS: &[ToolDef] = &[
     ToolDef {
         name: "schema.predicates",
         desc: "Published predicates (relation predicates are permission-filtered).",
-        method: "GET", path: "/schemas/predicates", capability: Some("entity.read"),
+        method: "GET", path: "/schemas/predicates", capabilities: &["entity.read"],
         params: &[CATALOG],
     },
     ToolDef {
         name: "schema.published",
         desc: "Published schema revisions (one stream per catalog).",
-        method: "GET", path: "/schemas/published", capability: Some("entity.read"),
+        method: "GET", path: "/schemas/published", capabilities: &["entity.read"],
         params: &[CATALOG],
     },
     ToolDef {
         name: "schema.drafts",
         desc: "List schema drafts (per-catalog when `catalog` is given).",
-        method: "GET", path: "/schemas/drafts", capability: Some("schema.draft"),
+        method: "GET", path: "/schemas/drafts", capabilities: &["schema.draft"],
         params: &[CATALOG],
     },
     ToolDef {
         name: "schema.draft_get",
         desc: "Get a schema draft.",
-        method: "GET", path: "/schemas/drafts/{id}", capability: Some("schema.draft"),
+        method: "GET", path: "/schemas/drafts/{id}", capabilities: &["schema.draft"],
         params: &[ID],
     },
     ToolDef {
         name: "schema.draft_create",
         desc: "Create a schema draft inside a catalog's stream (`catalog` — default `general`).",
-        method: "POST", path: "/schemas/drafts", capability: Some("schema.draft"),
+        method: "POST", path: "/schemas/drafts", capabilities: &["schema.draft"],
         params: &[
             Param { name: "name", loc: B, ty: "string", required: true, desc: "Draft name." },
             Param { name: "base_revision", loc: B, ty: "string", required: false, desc: "Revision to branch from." },
@@ -581,7 +593,7 @@ pub static TOOLS: &[ToolDef] = &[
     ToolDef {
         name: "schema.draft_update",
         desc: "Update a schema draft (types/predicates/changes).",
-        method: "PUT", path: "/schemas/drafts/{id}", capability: Some("schema.draft"),
+        method: "PUT", path: "/schemas/drafts/{id}", capabilities: &["schema.draft"],
         params: &[
             ID,
             Param { name: "display_name", loc: B, ty: "string", required: true, desc: "Draft display name." },
@@ -597,25 +609,25 @@ pub static TOOLS: &[ToolDef] = &[
     ToolDef {
         name: "schema.draft_delete",
         desc: "Delete a schema draft.",
-        method: "DELETE", path: "/schemas/drafts/{id}", capability: Some("schema.draft"),
+        method: "DELETE", path: "/schemas/drafts/{id}", capabilities: &["schema.draft"],
         params: &[ID, IF_MATCH],
     },
     ToolDef {
         name: "schema.draft_validate",
         desc: "Validate a schema draft against the registry rules.",
-        method: "POST", path: "/schemas/drafts/{id}/validate", capability: Some("schema.draft"),
+        method: "POST", path: "/schemas/drafts/{id}/validate", capabilities: &["schema.draft"],
         params: &[ID],
     },
     ToolDef {
         name: "schema.draft_impact",
         desc: "Impact analysis of publishing a draft.",
-        method: "POST", path: "/schemas/drafts/{id}/impact", capability: Some("schema.draft"),
+        method: "POST", path: "/schemas/drafts/{id}/impact", capabilities: &["schema.draft"],
         params: &[ID],
     },
     ToolDef {
         name: "schema.draft_publish",
         desc: "Publish a schema draft (creates a new revision).",
-        method: "POST", path: "/schemas/drafts/{id}/publish", capability: Some("schema.publish"),
+        method: "POST", path: "/schemas/drafts/{id}/publish", capabilities: &["schema.publish"],
         params: &[
             ID,
             Param { name: "reason", loc: B, ty: "string", required: true, desc: "Publish reason (audit)." },
@@ -625,13 +637,13 @@ pub static TOOLS: &[ToolDef] = &[
     ToolDef {
         name: "schema.revision_get",
         desc: "Get a published schema revision.",
-        method: "GET", path: "/schemas/revisions/{id}", capability: Some("entity.read"),
+        method: "GET", path: "/schemas/revisions/{id}", capabilities: &["entity.read"],
         params: &[ID],
     },
     ToolDef {
         name: "schema.revision_retire",
         desc: "Retire a published schema revision.",
-        method: "POST", path: "/schemas/revisions/{id}/retire", capability: Some("schema.publish"),
+        method: "POST", path: "/schemas/revisions/{id}/retire", capabilities: &["schema.publish"],
         params: &[
             ID,
             Param { name: "reason", loc: B, ty: "string", required: false, desc: "Retirement reason." },
@@ -641,7 +653,7 @@ pub static TOOLS: &[ToolDef] = &[
     ToolDef {
         name: "schema.revision_migration",
         desc: "Migration status of a published revision.",
-        method: "GET", path: "/schemas/revisions/{id}/migration-status", capability: Some("entity.read"),
+        method: "GET", path: "/schemas/revisions/{id}/migration-status", capabilities: &["entity.read"],
         params: &[ID],
     },
 
@@ -649,7 +661,7 @@ pub static TOOLS: &[ToolDef] = &[
     ToolDef {
         name: "requests.list",
         desc: "List requests/processes.",
-        method: "GET", path: "/requests", capability: Some("entity.read"),
+        method: "GET", path: "/requests", capabilities: &["entity.read"],
         params: &[
             Param { name: "status", loc: Q, ty: "string", required: false, desc: "Status filter." },
             Param { name: "limit", loc: Q, ty: "integer", required: false, desc: "Page size." },
@@ -659,32 +671,31 @@ pub static TOOLS: &[ToolDef] = &[
     ToolDef {
         name: "requests.create",
         desc: "Create a request/process.",
-        method: "POST", path: "/requests", capability: Some("entity.create"),
+        method: "POST", path: "/requests", capabilities: &["entity.create"],
         params: &[
             Param { name: "target_entity_id", loc: B, ty: "string", required: true, desc: "Entity the request is about." },
-            Param { name: "check_kinds", loc: B, ty: "array", required: false, desc: "Check kinds to run." },
             Param { name: "requested_product", loc: B, ty: "string", required: true, desc: "Requested product." },
             Param { name: "requested_limit", loc: B, ty: "number", required: false, desc: "Requested limit." },
             Param { name: "urgency", loc: B, ty: "string", required: false, desc: "Urgency level." },
-            Param { name: "due_date", loc: B, ty: "string", required: false, desc: "RFC3339 due date." },
+            Param { name: "due_date", loc: B, ty: "string", required: false, desc: "Due date, YYYY-MM-DD." },
         ],
     },
     ToolDef {
         name: "workflows.get",
         desc: "Workflow instance detail.",
-        method: "GET", path: "/workflows/{id}", capability: Some("entity.read"),
+        method: "GET", path: "/workflows/{id}", capabilities: &["entity.read"],
         params: &[ID],
     },
     ToolDef {
         name: "workflows.tasks",
         desc: "Tasks of a workflow instance.",
-        method: "GET", path: "/workflows/{id}/tasks", capability: Some("entity.read"),
+        method: "GET", path: "/workflows/{id}/tasks", capabilities: &["entity.read"],
         params: &[ID],
     },
     ToolDef {
         name: "workflows.create",
         desc: "Start a workflow instance.",
-        method: "POST", path: "/workflows", capability: Some("entity.create"),
+        method: "POST", path: "/workflows", capabilities: &["entity.create"],
         params: &[
             Param { name: "definition_id", loc: B, ty: "string", required: true, desc: "Workflow definition id/alias." },
             Param { name: "target_entity_id", loc: B, ty: "string", required: true, desc: "Subject entity (required by the API)." },
@@ -694,7 +705,7 @@ pub static TOOLS: &[ToolDef] = &[
     ToolDef {
         name: "workflows.transition",
         desc: "Trigger a workflow transition.",
-        method: "POST", path: "/workflows/{id}/transition", capability: Some("entity.edit"),
+        method: "POST", path: "/workflows/{id}/transition", capabilities: &["entity.edit"],
         params: &[
             ID,
             Param { name: "trigger", loc: B, ty: "string", required: true, desc: "Transition trigger (action name from the workflow definition)." },
@@ -706,23 +717,23 @@ pub static TOOLS: &[ToolDef] = &[
     ToolDef {
         name: "monitors.list",
         desc: "Monitors with schedule and last result.",
-        method: "GET", path: "/monitors", capability: Some("monitor.manage"), params: &[],
+        method: "GET", path: "/monitors", capabilities: &["monitor.manage"], params: &[],
     },
     ToolDef {
         name: "monitors.run",
         desc: "Run a monitor now.",
-        method: "POST", path: "/monitors/{id}/run", capability: Some("monitor.manage"),
+        method: "POST", path: "/monitors/{id}/run", capabilities: &["monitor.manage"],
         params: &[ID],
     },
     ToolDef {
         name: "reports.list",
         desc: "Report instances.",
-        method: "GET", path: "/reports", capability: Some("report.view"), params: &[],
+        method: "GET", path: "/reports", capabilities: &["report.view"], params: &[],
     },
     ToolDef {
         name: "reports.generate",
         desc: "Generate a report.",
-        method: "POST", path: "/reports", capability: Some("report.run"),
+        method: "POST", path: "/reports", capabilities: &["report.run"],
         params: &[
             Param { name: "entity_id", loc: B, ty: "string", required: true, desc: "Entity the report covers." },
             Param { name: "template", loc: B, ty: "string", required: false, desc: "Report template id/alias." },
@@ -734,18 +745,18 @@ pub static TOOLS: &[ToolDef] = &[
     ToolDef {
         name: "connectors.list",
         desc: "Connector instances.",
-        method: "GET", path: "/connectors", capability: Some("connector.manage"), params: &[],
+        method: "GET", path: "/connectors", capabilities: &["connector.manage"], params: &[],
     },
     ToolDef {
         name: "connectors.get",
         desc: "Connector instance detail.",
-        method: "GET", path: "/connectors/{id}", capability: Some("connector.manage"),
+        method: "GET", path: "/connectors/{id}", capabilities: &["connector.manage"],
         params: &[ID],
     },
     ToolDef {
         name: "connectors.update",
         desc: "Patch a connector instance (name, enabled flag, config keys).",
-        method: "PATCH", path: "/connectors/{id}", capability: Some("connector.manage"),
+        method: "PATCH", path: "/connectors/{id}", capabilities: &["connector.manage"],
         params: &[
             ID,
             Param { name: "display_name", loc: B, ty: "string", required: false, desc: "Instance name." },
@@ -758,13 +769,13 @@ pub static TOOLS: &[ToolDef] = &[
     ToolDef {
         name: "connectors.delete",
         desc: "Delete a connector instance.",
-        method: "DELETE", path: "/connectors/{id}", capability: Some("connector.manage"),
+        method: "DELETE", path: "/connectors/{id}", capabilities: &["connector.manage"],
         params: &[ID],
     },
     ToolDef {
         name: "connectors.create",
         desc: "Register a connector instance.",
-        method: "POST", path: "/connectors", capability: Some("connector.manage"),
+        method: "POST", path: "/connectors", capabilities: &["connector.manage"],
         params: &[
             Param { name: "connector_type_id", loc: B, ty: "string", required: true, desc: "Connector type id/alias." },
             Param { name: "display_name", loc: B, ty: "string", required: false, desc: "Instance name." },
@@ -776,19 +787,19 @@ pub static TOOLS: &[ToolDef] = &[
     ToolDef {
         name: "connectors.enable",
         desc: "Enable a connector instance.",
-        method: "POST", path: "/connectors/{id}/enable", capability: Some("connector.manage"),
+        method: "POST", path: "/connectors/{id}/enable", capabilities: &["connector.manage"],
         params: &[ID],
     },
     ToolDef {
         name: "connectors.disable",
         desc: "Disable a connector instance.",
-        method: "POST", path: "/connectors/{id}/disable", capability: Some("connector.manage"),
+        method: "POST", path: "/connectors/{id}/disable", capabilities: &["connector.manage"],
         params: &[ID],
     },
     ToolDef {
         name: "connectors.health",
         desc: "Run a health check on a connector instance.",
-        method: "POST", path: "/connectors/{id}/health", capability: Some("connector.manage"),
+        method: "POST", path: "/connectors/{id}/health", capabilities: &["connector.manage"],
         params: &[ID],
     },
 
@@ -796,7 +807,7 @@ pub static TOOLS: &[ToolDef] = &[
     ToolDef {
         name: "audit.query",
         desc: "Query the audit trail (kind/actor/action/resource/effect/time filters).",
-        method: "GET", path: "/audit", capability: Some("audit.read"),
+        method: "GET", path: "/audit", capabilities: &["audit.read"],
         params: &[
             Param { name: "kind", loc: Q, ty: "string", required: false, desc: "Event kind." },
             Param { name: "actor", loc: Q, ty: "string", required: false, desc: "Actor principal id." },
@@ -814,17 +825,17 @@ pub static TOOLS: &[ToolDef] = &[
     ToolDef {
         name: "audit.checkpoint_get",
         desc: "Latest audit chain checkpoint.",
-        method: "GET", path: "/audit/checkpoint", capability: Some("audit.read"), params: &[],
+        method: "GET", path: "/audit/checkpoint", capabilities: &["audit.read"], params: &[],
     },
     ToolDef {
         name: "audit.checkpoint_create",
         desc: "Create an audit chain checkpoint.",
-        method: "POST", path: "/audit/checkpoint", capability: Some("security.manage"), params: &[],
+        method: "POST", path: "/audit/checkpoint", capabilities: &["security.manage"], params: &[],
     },
     ToolDef {
         name: "audit.verify",
         desc: "Verify audit chain integrity over a range.",
-        method: "POST", path: "/audit/verify", capability: Some("security.manage"),
+        method: "POST", path: "/audit/verify", capabilities: &["security.manage"],
         params: &[
             Param { name: "from", loc: B, ty: "string", required: false, desc: "Range start." },
             Param { name: "to", loc: B, ty: "string", required: false, desc: "Range end." },
@@ -833,12 +844,12 @@ pub static TOOLS: &[ToolDef] = &[
     ToolDef {
         name: "audit.retention_get",
         desc: "Current audit retention policy.",
-        method: "GET", path: "/audit/retention", capability: Some("audit.read"), params: &[],
+        method: "GET", path: "/audit/retention", capabilities: &["audit.read"], params: &[],
     },
     ToolDef {
         name: "audit.retention_set",
         desc: "Update the audit retention policy.",
-        method: "PUT", path: "/audit/retention", capability: Some("security.manage"),
+        method: "PUT", path: "/audit/retention", capabilities: &["security.manage"],
         params: &[
             Param { name: "retention_days", loc: B, ty: "integer", required: true, desc: "1..36500 days." },
             Param { name: "legal_hold", loc: B, ty: "boolean", required: false, desc: "Freeze deletions." },
@@ -851,23 +862,23 @@ pub static TOOLS: &[ToolDef] = &[
     ToolDef {
         name: "admin.dump_run",
         desc: "Start a full-database export (enginer-dump) — privileged, dumps all tenants.",
-        method: "POST", path: "/admin/dump", capability: Some("security.manage"), params: &[],
+        method: "POST", path: "/admin/dump", capabilities: &["security.manage"], params: &[],
     },
     ToolDef {
         name: "admin.dump_list",
         desc: "List dump runs with status and downloadable part files.",
-        method: "GET", path: "/admin/dump", capability: Some("security.manage"), params: &[],
+        method: "GET", path: "/admin/dump", capabilities: &["security.manage"], params: &[],
     },
     ToolDef {
         name: "admin.dump_delete",
         desc: "Delete a finished dump run and its files.",
-        method: "DELETE", path: "/admin/dump/{id}", capability: Some("security.manage"),
+        method: "DELETE", path: "/admin/dump/{id}", capabilities: &["security.manage"],
         params: &[ID],
     },
     ToolDef {
         name: "admin.dump_restore",
         desc: "Replay a stored dump into the database (merge: ON CONFLICT DO NOTHING + sequence replay). Destructive — mutates production data.",
-        method: "POST", path: "/admin/dump/{id}/restore", capability: Some("security.manage"),
+        method: "POST", path: "/admin/dump/{id}/restore", capabilities: &["security.manage"],
         params: &[ID, CONFIRM_RESTORE],
     },
 
@@ -875,12 +886,12 @@ pub static TOOLS: &[ToolDef] = &[
     ToolDef {
         name: "permissions.groups",
         desc: "List permission/role groups with rules and memberships.",
-        method: "GET", path: "/permissions/groups", capability: Some("admin.pages.access"), params: &[],
+        method: "GET", path: "/permissions/groups", capabilities: &["admin.pages.access"], params: &[],
     },
     ToolDef {
         name: "permissions.group_create",
         desc: "Create a role group (class data|capability, optional parent, rules, members).",
-        method: "POST", path: "/permissions/groups", capability: Some("security.manage"),
+        method: "POST", path: "/permissions/groups", capabilities: &["security.manage"],
         params: &[
             Param { name: "name", loc: B, ty: "string", required: true, desc: "Group alias." },
             Param { name: "class", loc: B, ty: "string", required: true, desc: "data|capability." },
@@ -893,7 +904,7 @@ pub static TOOLS: &[ToolDef] = &[
     ToolDef {
         name: "permissions.group_update",
         desc: "Update a role group (rules/members replaced as new validity windows).",
-        method: "PUT", path: "/permissions/groups/{id}", capability: Some("security.manage"),
+        method: "PUT", path: "/permissions/groups/{id}", capabilities: &["security.manage"],
         params: &[
             ID,
             Param { name: "name", loc: B, ty: "string", required: true, desc: "Group alias." },
@@ -906,7 +917,7 @@ pub static TOOLS: &[ToolDef] = &[
     ToolDef {
         name: "permissions.group_delete",
         desc: "Delete a role group (soft-delete; fails when child roles exist).",
-        method: "DELETE", path: "/permissions/groups/{id}", capability: Some("security.manage"),
+        method: "DELETE", path: "/permissions/groups/{id}", capabilities: &["security.manage"],
         params: &[ID],
     },
 
@@ -914,12 +925,12 @@ pub static TOOLS: &[ToolDef] = &[
     ToolDef {
         name: "users.role_groups",
         desc: "Role groups available for user membership.",
-        method: "GET", path: "/users/groups", capability: Some("user.read"), params: &[],
+        method: "GET", path: "/users/groups", capabilities: &["user.read"], params: &[],
     },
     ToolDef {
         name: "users.list",
         desc: "List/search users (name, login, email, IP prefix, role, status).",
-        method: "GET", path: "/users", capability: Some("user.read"),
+        method: "GET", path: "/users", capabilities: &["user.read"],
         params: &[
             Param { name: "q", loc: Q, ty: "string", required: false, desc: "Free text over name/login/email." },
             Param { name: "group_id", loc: Q, ty: "string", required: false, desc: "Role group id filter." },
@@ -932,13 +943,13 @@ pub static TOOLS: &[ToolDef] = &[
     ToolDef {
         name: "users.get",
         desc: "User detail: roles (direct + inherited), sessions, status.",
-        method: "GET", path: "/users/{id}", capability: Some("user.read"),
+        method: "GET", path: "/users/{id}", capabilities: &["user.read"],
         params: &[ID],
     },
     ToolDef {
         name: "users.create",
         desc: "Create a user or service account (`is_service_account`), assign roles.",
-        method: "POST", path: "/users", capability: Some("user.create"),
+        method: "POST", path: "/users", capabilities: &["user.create"],
         params: &[
             Param { name: "login", loc: B, ty: "string", required: true, desc: "Globally unique login." },
             Param { name: "display_name", loc: B, ty: "string", required: true, desc: "Display name." },
@@ -952,7 +963,7 @@ pub static TOOLS: &[ToolDef] = &[
     ToolDef {
         name: "users.update",
         desc: "Update a user: display_name/status/email/password/roles.",
-        method: "PUT", path: "/users/{id}", capability: Some("user.edit"),
+        method: "PUT", path: "/users/{id}", capabilities: &["user.edit"],
         params: &[
             ID,
             Param { name: "display_name", loc: B, ty: "string", required: false, desc: "New name." },
@@ -965,13 +976,13 @@ pub static TOOLS: &[ToolDef] = &[
     ToolDef {
         name: "users.delete",
         desc: "Disable a user (soft delete; ends sessions, revokes API tokens, closes memberships).",
-        method: "DELETE", path: "/users/{id}", capability: Some("user.delete"),
+        method: "DELETE", path: "/users/{id}", capabilities: &["user.delete"],
         params: &[ID],
     },
     ToolDef {
         name: "users.activity",
         desc: "Per-user activity: created/changed/viewed entities + audit log.",
-        method: "GET", path: "/users/{id}/activity", capability: Some("user.read"),
+        method: "GET", path: "/users/{id}/activity", capabilities: &["user.read"],
         params: &[
             ID,
             Param { name: "q", loc: Q, ty: "string", required: false, desc: "Free text over the log." },
@@ -981,13 +992,13 @@ pub static TOOLS: &[ToolDef] = &[
     ToolDef {
         name: "users.tokens",
         desc: "List API tokens of a user (metadata only — never the secret).",
-        method: "GET", path: "/users/{id}/tokens", capability: Some("user.read"),
+        method: "GET", path: "/users/{id}/tokens", capabilities: &["user.read"],
         params: &[ID],
     },
     ToolDef {
         name: "users.token_create",
         desc: "Issue an API token for a user/service account. The plaintext token is returned once.",
-        method: "POST", path: "/users/{id}/tokens", capability: Some("user.edit"),
+        method: "POST", path: "/users/{id}/tokens", capabilities: &["user.edit"],
         params: &[
             ID,
             Param { name: "name", loc: B, ty: "string", required: true, desc: "Token label." },
@@ -997,7 +1008,7 @@ pub static TOOLS: &[ToolDef] = &[
     ToolDef {
         name: "users.token_revoke",
         desc: "Revoke an API token.",
-        method: "DELETE", path: "/users/{id}/tokens/{token_id}", capability: Some("user.edit"),
+        method: "DELETE", path: "/users/{id}/tokens/{token_id}", capabilities: &["user.edit"],
         params: &[
             ID,
             Param { name: "token_id", loc: P, ty: "string", required: true, desc: "Token id." },
@@ -1040,19 +1051,24 @@ pub fn tool_descriptor(tool: &ToolDef) -> Value {
     })
 }
 
+/// Is `cap` granted by this capability set? Umbrella grants are expanded
+/// the same way the API guard treats them: `users.manage` covers every
+/// `user.*`, `security.manage` covers `catalog.manage`. Shared by
+/// `tools/list` and the `tools/call` pre-flight so both sides agree.
+pub fn cap_granted(caps: &[String], cap: &str) -> bool {
+    if caps.iter().any(|c| c == cap) {
+        return true;
+    }
+    (cap.starts_with("user.") && caps.iter().any(|c| c == "users.manage"))
+        || (cap == "catalog.manage" && caps.iter().any(|c| c == "security.manage"))
+}
+
 /// Tools the given capability set permits. `None` capability = always
 /// available. Umbrella grants (`users.manage` covering `user.*`) are expanded
 /// here the same way the API guard treats them.
 pub fn tools_for_capabilities(caps: &[String]) -> Vec<&'static ToolDef> {
-    let has = |cap: &str| -> bool {
-        if caps.iter().any(|c| c == cap) {
-            return true;
-        }
-        // Umbrella: users.manage covers every user.* capability.
-        cap.starts_with("user.") && caps.iter().any(|c| c == "users.manage")
-    };
     TOOLS
         .iter()
-        .filter(|t| t.capability.map_or(true, has))
+        .filter(|t| t.capabilities.is_empty() || t.capabilities.iter().any(|c| cap_granted(caps, c)))
         .collect()
 }

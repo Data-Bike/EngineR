@@ -53,7 +53,11 @@
         <tbody>
           <tr v-for="u in users" :key="u.principal_id"
               class="border-t border-[var(--ui-border)] hover:bg-[var(--ui-bg-muted)] cursor-pointer"
-              @click="openDetail(u.principal_id)">
+              tabindex="0"
+              role="button"
+              @click="openDetail(u.principal_id)"
+              @keydown.enter.prevent="openDetail(u.principal_id)"
+              @keydown.space.prevent="openDetail(u.principal_id)">
             <td class="p-3 font-medium">{{ u.display_name }}</td>
             <td class="p-3">{{ u.login }}</td>
             <td class="p-3 text-[var(--ui-text-muted)]">{{ u.email ?? '—' }}</td>
@@ -257,7 +261,7 @@ definePageMeta({
   middleware: ['auth', capability(['users.manage', 'user.read'])],
 });
 
-const { t } = useI18n();
+const { t, te } = useI18n();
 const toast = useToast();
 const api = useApi();
 const authStore = useAuthStore();
@@ -344,7 +348,7 @@ async function load() {
     });
     users.value = (res.data ?? []) as UserRow[];
   } catch (e: unknown) {
-    toast.add({ title: t('common.error'), description: e instanceof Error ? e.message : String(e), color: 'error' });
+    toast.add({ title: t('common.error'), description: displayError(e, t, te), color: 'error' });
   } finally {
     loading.value = false;
   }
@@ -398,7 +402,7 @@ async function saveEdit() {
     await openDetail(detail.value.principal_id);
     await load();
   } catch (e: unknown) {
-    toast.add({ title: t('common.error'), description: e instanceof Error ? e.message : String(e), color: 'error' });
+    toast.add({ title: t('common.error'), description: displayError(e, t, te), color: 'error' });
   } finally {
     saving.value = false;
   }
@@ -424,7 +428,7 @@ async function openDetail(id: string) {
     await loadActivity();
     await loadTokens();
   } catch (e: unknown) {
-    toast.add({ title: t('common.error'), description: e instanceof Error ? e.message : String(e), color: 'error' });
+    toast.add({ title: t('common.error'), description: displayError(e, t, te), color: 'error' });
   }
 }
 
@@ -434,7 +438,7 @@ async function loadActivity() {
     const res = await api.users.activity(detail.value.principal_id, activityQuery.value || undefined);
     activity.value = res.data as typeof activity.value;
   } catch (e: unknown) {
-    toast.add({ title: t('common.error'), description: e instanceof Error ? e.message : String(e), color: 'error' });
+    toast.add({ title: t('common.error'), description: displayError(e, t, te), color: 'error' });
   }
 }
 
@@ -466,7 +470,7 @@ async function createToken() {
     tokenForm.value = { name: '', days: '' };
     await loadTokens();
   } catch (e: unknown) {
-    toast.add({ title: t('common.error'), description: e instanceof Error ? e.message : String(e), color: 'error' });
+    toast.add({ title: t('common.error'), description: displayError(e, t, te), color: 'error' });
   } finally {
     tokenSaving.value = false;
   }
@@ -478,7 +482,7 @@ async function revokeToken(tokenId: string) {
     await api.users.revokeToken(detail.value.principal_id, tokenId);
     await loadTokens();
   } catch (e: unknown) {
-    toast.add({ title: t('common.error'), description: e instanceof Error ? e.message : String(e), color: 'error' });
+    toast.add({ title: t('common.error'), description: displayError(e, t, te), color: 'error' });
   }
 }
 
@@ -507,7 +511,7 @@ async function saveUser() {
     toast.add({ title: t('users.saved'), color: 'success' });
     await load();
   } catch (e: unknown) {
-    toast.add({ title: t('common.error'), description: e instanceof Error ? e.message : String(e), color: 'error' });
+    toast.add({ title: t('common.error'), description: displayError(e, t, te), color: 'error' });
   } finally {
     saving.value = false;
   }
@@ -519,7 +523,7 @@ async function disableUser(u: UserRow) {
     toast.add({ title: t('users.disabled_ok'), color: 'success' });
     await load();
   } catch (e: unknown) {
-    toast.add({ title: t('common.error'), description: e instanceof Error ? e.message : String(e), color: 'error' });
+    toast.add({ title: t('common.error'), description: displayError(e, t, te), color: 'error' });
   }
 }
 

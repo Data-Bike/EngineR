@@ -56,12 +56,12 @@
               </NuxtLink>
             </td>
             <td class="py-2 px-3">
-              <UBadge variant="subtle" size="sm">{{ t(`entity.monitoring.freq.${mon.frequency}`) }}</UBadge>
+              <UBadge variant="subtle" size="sm">{{ enumLabel(t, te, 'entity.monitoring.freq', mon.frequency) }}</UBadge>
             </td>
             <td class="py-2 px-3" :class="{ 'text-red-500': isOverdue(mon.next_run) }">
-              {{ mon.next_run }}
+              {{ formatDateTime(mon.next_run) }}
             </td>
-            <td class="py-2 px-3">{{ mon.last_run ?? '—' }}</td>
+            <td class="py-2 px-3">{{ formatDateTime(mon.last_run) }}</td>
             <td class="py-2 px-3">
               <div v-if="mon.last_result" class="flex items-center gap-2">
                 <span>{{ mon.last_result.checks_completed }}/{{ mon.last_result.checks_completed + mon.last_result.checks_failed }}</span>
@@ -96,7 +96,7 @@ definePageMeta({
   middleware: ['auth', capability('monitor.manage')],
 });
 
-const { t } = useI18n();
+const { t, te } = useI18n();
 const toast = useToast();
 const api = useApi();
 
@@ -120,7 +120,7 @@ async function fetchMonitors() {
   } catch (err) {
     toast.add({
       title: t('common.error'),
-      description: err instanceof Error ? err.message : String(err),
+      description: displayError(err, t, te),
       color: 'error',
     });
   } finally {
@@ -137,7 +137,7 @@ async function runNow(monitorId: string) {
   } catch (err) {
     toast.add({
       title: t('common.error'),
-      description: err instanceof Error ? err.message : String(err),
+      description: displayError(err, t, te),
       color: 'error',
     });
   } finally {

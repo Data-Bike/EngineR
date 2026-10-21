@@ -17,6 +17,25 @@ use serde::{Deserialize, Serialize};
 
 use crate::authn;
 use crate::AppState;
+use crate::ApiError;
+
+/// The `x-csrf-token` header value (empty string when absent) — used by
+/// cookie-authenticated mutations that don't go through `CapabilityGuard`.
+pub struct CsrfHeader(pub String);
+
+#[rocket::async_trait]
+impl<'r> FromRequest<'r> for CsrfHeader {
+    type Error = std::convert::Infallible;
+
+    async fn from_request(req: &'r Request<'_>) -> request::Outcome<Self, Self::Error> {
+        request::Outcome::Success(CsrfHeader(
+            req.headers()
+                .get_one("x-csrf-token")
+                .unwrap_or_default()
+                .to_string(),
+        ))
+    }
+}
 
 /// Client metadata captured for session audit (user-agent + peer IP).
 pub struct ClientMeta {
@@ -111,11 +130,47 @@ fn session_cookie(session_id: uuid::Uuid, ttl_hours: i64) -> Cookie<'static> {
     c.set_same_site(SameSite::Lax);
     c.set_path("/");
     c.set_max_age(rocket::time::Duration::hours(ttl_hours));
-    // `secure` is enabled automatically when Rocket detects TLS (docs/16 §13).
+    // `Secure` is on by default — behind a TLS-terminating proxy Rocket's
+    // auto-detection cannot see TLS, so relying on it leaves the cookie
+    // unprotected. `ENGINER_INSECURE_COOKIES=1` opts out for plain-HTTP
+    // dev deployments (localhost counts as a secure context in browsers,
+    // so local dev keeps working with the flag unset too).
+    c.set_secure(std::env::var_os("ENGINER_INSECURE_COOKIES").is_none());
     c
 }
 
 const SESSION_TTL_HOURS: i64 = 12;
+
+/// Sliding-window login rate limit per client IP. In-memory and
+/// best-effort — a multi-instance deployment should add an edge limiter,
+/// but a single API instance still must not let one source hammer
+/// `/auth/login` unboundedly.
+fn login_rate_allow(ip: &str) -> bool {
+    const WINDOW: std::time::Duration = std::time::Duration::from_secs(300);
+    const MAX_ATTEMPTS: usize = 20;
+    const MAX_TRACKED: usize = 10_000;
+    use std::collections::HashMap;
+    use std::sync::{Mutex, OnceLock};
+    static BUCKET: OnceLock<Mutex<HashMap<String, std::collections::VecDeque<std::time::Instant>>>> =
+        OnceLock::new();
+    let map = BUCKET.get_or_init(|| Mutex::new(HashMap::new()));
+    let now = std::time::Instant::now();
+    let Ok(mut map) = map.lock() else {
+        return true; // poisoned lock must not take login down
+    };
+    if map.len() >= MAX_TRACKED {
+        map.clear();
+    }
+    let attempts = map.entry(ip.to_string()).or_default();
+    while attempts.front().is_some_and(|t| now.duration_since(*t) > WINDOW) {
+        attempts.pop_front();
+    }
+    if attempts.len() >= MAX_ATTEMPTS {
+        return false;
+    }
+    attempts.push_back(now);
+    true
+}
 
 #[post("/auth/login", data = "<body>")]
 pub async fn login(
@@ -123,20 +178,28 @@ pub async fn login(
     body: Json<LoginBody>,
     cookies: &CookieJar<'_>,
     client: ClientMeta,
-) -> Result<Json<ApiEnvelope<LoginResponse>>, Status> {
+) -> Result<Json<ApiEnvelope<LoginResponse>>, ApiError> {
     let Some(exec) = state.db_executor.clone() else {
-        return Err(Status::ServiceUnavailable);
+        return Err(ApiError::from(Status::ServiceUnavailable));
     };
     let body = body.into_inner();
     let login_name = body.username.trim().to_lowercase();
     let client_ip = client.ip.clone();
     if login_name.is_empty() || body.password.is_empty() {
-        return Err(Status::Unauthorized);
+        return Err(ApiError::from(Status::Unauthorized));
+    }
+    // Per-IP attempt budget (docs/16 §13): the per-login lockout stops
+    // password guessing on one account, but a single source spraying many
+    // logins could also re-trigger every lockout window (lockout DoS).
+    // Counted before any credential work so success/failure timing stays
+    // uniform.
+    if !login_rate_allow(client_ip.as_deref().unwrap_or("unknown")) {
+        return Err(ApiError::from(Status::TooManyRequests));
     }
 
     let cred = authn::find_credential(&exec, &login_name)
         .await
-        .map_err(|_| Status::ServiceUnavailable)?
+        .map_err(|_| ApiError::from(Status::ServiceUnavailable))?
         .unwrap_or(serde_json::Value::Null);
 
     // Uniform failure: no oracle on whether the login exists, is locked, or
@@ -164,7 +227,7 @@ pub async fn login(
     };
     let unauthorized = || {
         audit_failure(&cred);
-        Err(Status::Unauthorized)
+        Err(ApiError::from(Status::Unauthorized))
     };
     if cred.is_null() {
         // Burn an argon2 verify anyway so a missing login takes the same
@@ -195,18 +258,42 @@ pub async fn login(
     let tenant: uuid::Uuid = cred["tenant_id"]
         .as_str()
         .and_then(|s| s.parse().ok())
-        .ok_or(Status::InternalServerError)?;
+        .ok_or_else(|| ApiError::from(Status::InternalServerError))?;
     let principal: uuid::Uuid = cred["principal_id"]
         .as_str()
         .and_then(|s| s.parse().ok())
-        .ok_or(Status::InternalServerError)?;
+        .ok_or_else(|| ApiError::from(Status::InternalServerError))?;
 
     let principal_row = authn::load_principal(&exec, tenant, principal)
         .await
-        .map_err(|_| Status::ServiceUnavailable)?
-        .ok_or(Status::Unauthorized)?;
+        .map_err(|_| ApiError::from(Status::ServiceUnavailable))?
+        .ok_or_else(|| ApiError::from(Status::Unauthorized))?;
     if principal_row.1 != "active" {
-        return Err(Status::Unauthorized);
+        return Err(ApiError::from(Status::Unauthorized));
+    }
+
+    // login.use_ui gates interactive UI sessions: a capability group may
+    // withhold UI login (e.g. API-only service accounts) while Bearer
+    // access stays open. Evaluated through the same capability resolution
+    // /me/context uses — superadmin bypass and superuser filtering included.
+    let gate_ctx = authn::AuthContext {
+        session_id: uuid::Uuid::nil(),
+        tenant_id: tenant,
+        principal_id: principal,
+        display_name: principal_row.0.clone(),
+        auth_strength: "password".to_string(),
+        groups_revision: 0,
+        csrf_token: String::new(),
+        via_bearer: false,
+    };
+    let ui_caps = authn::principal_profile(&exec, &gate_ctx)
+        .await
+        .map_err(|_| ApiError::from(Status::ServiceUnavailable))?
+        .map(|p| p.capabilities)
+        .unwrap_or_default();
+    if !ui_caps.iter().any(|c| c == "login.use_ui") {
+        audit_failure(&cred);
+        return Err(ApiError::from(Status::Forbidden));
     }
 
     let csrf = uuid::Uuid::now_v7().to_string();
@@ -221,7 +308,7 @@ pub async fn login(
         SESSION_TTL_HOURS,
     )
     .await
-    .map_err(|_| Status::ServiceUnavailable)?;
+    .map_err(|_| ApiError::from(Status::ServiceUnavailable))?;
 
     cookies.add(session_cookie(session_id, SESSION_TTL_HOURS));
     rocket::tokio::spawn(crate::audit_pg::record_audit_event(
@@ -250,14 +337,44 @@ pub async fn login(
 }
 
 #[post("/auth/logout")]
-pub async fn logout(state: &State<AppState>, cookies: &CookieJar<'_>) -> Json<serde_json::Value> {
+pub async fn logout(
+    state: &State<AppState>,
+    cookies: &CookieJar<'_>,
+    csrf_header: CsrfHeader,
+) -> Result<Json<serde_json::Value>, ApiError> {
     if let (Some(exec), Some(cookie)) = (state.db_executor.clone(), cookies.get("session")) {
         if let Ok(sid) = cookie.value().parse::<uuid::Uuid>() {
+            // Cookie-authenticated mutations require the CSRF token the SPA
+            // received at login (same contract as /auth/refresh). A request
+            // without it did not come from the app — refuse rather than end
+            // someone else's session on a cross-site post.
+            let session_csrf = exec
+                .run(enginer_db_runtime::Deadline::in_secs(5), move |pool| async move {
+                    sqlx::query_as::<_, (Option<String>,)>(
+                        "SELECT csrf_token FROM sec.session WHERE session_id=$1",
+                    )
+                    .bind(sid)
+                    .fetch_optional(&pool)
+                    .await
+                    .map(|row| serde_json::json!(row.map(|(c,)| c)))
+                    .map_err(|e| enginer_db_runtime::DbError::Other {
+                        message: e.to_string(),
+                    })
+                })
+                .await
+                .map_err(|_| ApiError::from(Status::ServiceUnavailable))?;
+            // `null` = no session row or row without a token — nothing to
+            // compare; a stored token must match the header.
+            if let Some(stored) = session_csrf.as_str() {
+                if stored != csrf_header.0 {
+                    return Err(ApiError::from(Status::Forbidden));
+                }
+            }
             let _ = authn::end_session(&exec, sid).await;
         }
     }
     cookies.remove(Cookie::from("session"));
-    Json(serde_json::json!({ "ok": true }))
+    Ok(Json(serde_json::json!({ "ok": true })))
 }
 
 #[get("/me/context")]
@@ -265,33 +382,33 @@ pub async fn me_context(
     state: &State<AppState>,
     cookies: &CookieJar<'_>,
     bearer: BearerToken<'_>,
-) -> Result<Json<ApiEnvelope<UserContext>>, Status> {
+) -> Result<Json<ApiEnvelope<UserContext>>, ApiError> {
     let Some(exec) = state.db_executor.clone() else {
-        return Err(Status::ServiceUnavailable);
+        return Err(ApiError::from(Status::ServiceUnavailable));
     };
     // Same two credential channels as the PEP guard: Bearer API token wins
     // over the session cookie when both are present.
     let ctx = if let Some(token) = bearer.0 {
         authn::resolve_bearer(&exec, token)
             .await
-            .map_err(|_| Status::ServiceUnavailable)?
-            .ok_or(Status::Unauthorized)?
+            .map_err(|_| ApiError::from(Status::ServiceUnavailable))?
+            .ok_or_else(|| ApiError::from(Status::Unauthorized))?
     } else {
         let Some(cookie) = cookies.get("session") else {
-            return Err(Status::Unauthorized);
+            return Err(ApiError::from(Status::Unauthorized));
         };
         let Ok(sid) = cookie.value().parse::<uuid::Uuid>() else {
-            return Err(Status::Unauthorized);
+            return Err(ApiError::from(Status::Unauthorized));
         };
         authn::resolve_session(&exec, sid)
             .await
-            .map_err(|_| Status::ServiceUnavailable)?
-            .ok_or(Status::Unauthorized)?
+            .map_err(|_| ApiError::from(Status::ServiceUnavailable))?
+            .ok_or_else(|| ApiError::from(Status::Unauthorized))?
     };
     let profile = authn::principal_profile(&exec, &ctx)
         .await
-        .map_err(|_| Status::ServiceUnavailable)?
-        .ok_or(Status::Unauthorized)?;
+        .map_err(|_| ApiError::from(Status::ServiceUnavailable))?
+        .ok_or_else(|| ApiError::from(Status::Unauthorized))?;
 
     // Catalogs visible to this principal (docs/28 §6): every active
     // catalog row filtered through DataPerm::can_catalog — the same gate
@@ -331,8 +448,11 @@ pub async fn me_context(
             }
         })
         .await
-        .ok()
-        .and_then(|v| v.as_array().cloned())
+        // A catalog-load failure must surface, not masquerade as "no
+        // catalogs" — the UI would silently hide catalog-scoped screens.
+        .map_err(|e| ApiError::of_db(&e))?
+        .as_array()
+        .cloned()
         .unwrap_or_default();
 
     Ok(Json(ApiEnvelope {
@@ -356,25 +476,45 @@ pub async fn me_context(
 }
 
 /// Extend a still-valid session (singleflight target for the API client).
+/// Cookie-authenticated mutation → same CSRF contract as every other write:
+/// without it a cross-site POST could silently keep a victim session alive.
 #[post("/auth/refresh")]
 pub async fn refresh(
     state: &State<AppState>,
     cookies: &CookieJar<'_>,
-) -> Result<Json<serde_json::Value>, Status> {
+    csrf_header: CsrfHeader,
+) -> Result<Json<serde_json::Value>, ApiError> {
     let Some(exec) = state.db_executor.clone() else {
-        return Err(Status::ServiceUnavailable);
+        return Err(ApiError::from(Status::ServiceUnavailable));
     };
     let Some(cookie) = cookies.get("session") else {
-        return Err(Status::Unauthorized);
+        return Err(ApiError::from(Status::Unauthorized));
     };
     let Ok(sid) = cookie.value().parse::<uuid::Uuid>() else {
-        return Err(Status::Unauthorized);
+        return Err(ApiError::from(Status::Unauthorized));
     };
+    let csrf = csrf_header.0;
     let v = exec
         .run(
             enginer_db_runtime::Deadline::in_secs(5),
             move |pool| async move {
-                let res = sqlx::query(
+                let row: Option<(Option<String>,)> = sqlx::query_as(
+                    "SELECT csrf_token FROM sec.session
+                     WHERE session_id = $1 AND ended_at IS NULL AND expires_at > now()",
+                )
+                .bind(sid)
+                .fetch_optional(&pool)
+                .await
+                .map_err(|e| enginer_db_runtime::DbError::Other {
+                    message: e.to_string(),
+                })?;
+                let Some((session_csrf,)) = row else {
+                    return Ok(serde_json::json!({ "outcome": "expired" }));
+                };
+                if session_csrf.as_deref().unwrap_or_default() != csrf {
+                    return Ok(serde_json::json!({ "outcome": "csrf_mismatch" }));
+                }
+                sqlx::query(
                     "UPDATE sec.session
                      SET expires_at = now() + ($2 || ' hours')::interval, last_seen_at = now()
                      WHERE session_id = $1 AND ended_at IS NULL AND expires_at > now()",
@@ -386,15 +526,16 @@ pub async fn refresh(
                 .map_err(|e| enginer_db_runtime::DbError::Other {
                     message: e.to_string(),
                 })?;
-                Ok(serde_json::json!({ "updated": res.rows_affected() }))
+                Ok(serde_json::json!({ "outcome": "refreshed" }))
             },
         )
         .await
-        .map_err(|_| Status::ServiceUnavailable)?;
-    if v["updated"].as_u64().unwrap_or(0) == 0 {
-        return Err(Status::Unauthorized);
+        .map_err(|_| ApiError::from(Status::ServiceUnavailable))?;
+    match v["outcome"].as_str() {
+        Some("refreshed") => Ok(Json(serde_json::json!({ "ok": true }))),
+        Some("csrf_mismatch") => Err(ApiError::from(Status::Forbidden)),
+        _ => Err(ApiError::from(Status::Unauthorized)),
     }
-    Ok(Json(serde_json::json!({ "ok": true })))
 }
 
 /// Route group.

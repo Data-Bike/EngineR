@@ -27,7 +27,7 @@
                 {{ t('admin.trans_object') }}
               </UBadge>
               <UBadge v-if="type.entity_count !== undefined" variant="soft" size="sm" color="primary">
-                {{ type.entity_count }} {{ t('admin.objects_count', 'объектов') }}
+                {{ type.entity_count }} {{ t('admin.objects_count') }}
               </UBadge>
             </div>
             <p class="text-sm text-[var(--ui-text-muted)] mt-1">{{ type.description }}</p>
@@ -47,7 +47,7 @@
             <UButton size="sm" variant="outline" @click="editType(type)">
               {{ t('common.edit') }}
             </UButton>
-            <UButton size="sm" variant="ghost" color="error" icon="i-lucide-trash" @click="deleteType(type)" />
+            <UButton size="sm" variant="ghost" color="error" icon="i-lucide-trash" :aria-label="t('common.delete')" :title="t('common.delete')" @click="deleteType(type)" />
           </div>
         </div>
       </UCard>
@@ -145,7 +145,7 @@ definePageMeta({
   middleware: ['auth', capability('admin.pages.access')],
 });
 
-const { t } = useI18n();
+const { t, te } = useI18n();
 const toast = useToast();
 const api = useApi();
 const { catalogParams, selected: selectedCatalog } = useCatalog();
@@ -265,7 +265,7 @@ async function fetchTypes() {
 
     types.value = enriched;
   } catch (e: unknown) {
-    toast.add({ title: t('common.error'), description: e instanceof Error ? e.message : String(e), color: 'error' });
+    toast.add({ title: t('common.error'), description: displayError(e, t, te), color: 'error' });
   } finally {
     loading.value = false;
   }
@@ -364,7 +364,7 @@ async function saveType() {
     toast.add({ title: t('admin.type_saved'), color: 'success' });
     await fetchTypes();
   } catch (e: unknown) {
-    toast.add({ title: t('common.error'), description: e instanceof Error ? e.message : String(e), color: 'error' });
+    toast.add({ title: t('common.error'), description: displayError(e, t, te), color: 'error' });
   } finally {
     saving.value = false;
   }
@@ -392,7 +392,7 @@ async function deleteType(type: SchemaType) {
     toast.add({ title: t('admin.type_deleted'), color: 'success' });
     await fetchTypes();
   } catch (e: unknown) {
-    toast.add({ title: t('common.error'), description: e instanceof Error ? e.message : String(e), color: 'error' });
+    toast.add({ title: t('common.error'), description: displayError(e, t, te), color: 'error' });
   }
 }
 

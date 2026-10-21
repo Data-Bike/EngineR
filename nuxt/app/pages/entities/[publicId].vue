@@ -18,9 +18,9 @@
     <!-- Entity card -->
     <template v-else-if="entity">
       <!-- Header (docs/17 §4) -->
-      <div class="flex items-start justify-between">
-        <div>
-          <h1 class="text-2xl font-bold">
+      <div class="flex items-start justify-between gap-4">
+        <div class="min-w-0">
+          <h1 class="text-2xl font-bold break-words">
             {{ entity.display_name ?? entity.public_id }}
           </h1>
           <p v-if="entity.display_name" class="mt-1 font-mono text-xs text-[var(--ui-text-muted)]">
@@ -37,7 +37,7 @@
         </div>
         <div class="flex gap-2">
           <UButton
-            v-if="entity.status === 'active'"
+            v-if="entity.status === 'active' && auth.hasCapability('entity.edit')"
             icon="i-lucide-pencil"
             variant="outline"
             :to="`/entities/${entity.public_id}/edit`"
@@ -45,7 +45,7 @@
             {{ t('entity.edit') }}
           </UButton>
           <UButton
-            v-if="entity.status === 'active'"
+            v-if="entity.status === 'active' && auth.hasCapability('entity.retire')"
             icon="i-lucide-archive"
             variant="outline"
             @click="showRetire = true"
@@ -56,7 +56,7 @@
       </div>
 
       <!-- Tabs (docs/17 §4) -->
-      <UTabs :items="tabItems" v-model="activeTab">
+      <UTabs :items="tabItems" v-model="activeTab" :ui="{ list: 'w-full overflow-x-auto' }">
         <template #content="{ item }">
           <div class="py-4">
                         <EntityOverview v-if="item.value === 'overview'" :entity="entity" />
@@ -106,10 +106,11 @@ definePageMeta({
   middleware: ['auth', capability('entity.read')],
 });
 
-const { t } = useI18n();
+const { t, te } = useI18n();
 const route = useRoute();
 const toast = useToast();
 const api = useApi();
+const auth = useAuthStore();
 // The catalog selector scopes *listings*; an entity page must resolve the
 // entity wherever the principal can read it — passing the selected catalog
 // here would 404 readable entities that live in another catalog.
@@ -144,7 +145,7 @@ async function fetchEntity() {
     const res = await api.entities.get(publicId.value);
     entity.value = res.data;
   } catch (e: unknown) {
-    error.value = e instanceof Error ? e.message : t('entity.error');
+    error.value = displayError(e, t, te);
   } finally {
     loading.value = false;
   }
@@ -160,11 +161,20 @@ async function doRetire() {
     toast.add({ title: t('entity.retired_success'), color: 'success' });
     await fetchEntity();
   } catch (e: unknown) {
-    toast.add({ title: t('common.error'), description: e instanceof Error ? e.message : String(e), color: 'error' });
+    toast.add({ title: t('common.error'), description: displayError(e, t, te), color: 'error' });
   } finally {
     retiring.value = false;
   }
 }
+
+// Breadcrumb: replace the raw public_id crumb with the display name once
+// the entity loads (shared labels — composable module state).
+const { setBreadcrumbLabel } = useBreadcrumbLabels();
+watch(
+  () => entity.value?.display_name,
+  (name) => setBreadcrumbLabel(publicId.value, name ?? null),
+);
+onUnmounted(() => setBreadcrumbLabel(publicId.value, null));
 
 onMounted(() => {
   if (!isChildRoute.value) fetchEntity();

@@ -203,11 +203,11 @@ describe('capability middleware', () => {
     expect(mw(to, {})).toBeUndefined();
   });
 
-  it('throws 403 when the capability is missing', () => {
+  it('redirects to /forbidden when the capability is missing', () => {
     const store = useAuthStore();
     store.user = userProfile({ capabilities: ['entity.read'] });
     const mw = capability('users.manage');
-    expect(() => mw(to, {})).toThrowError(expect.objectContaining({ statusCode: 403 }));
+    expect(mw(to, {})).toEqual({ path: '/forbidden', query: { from: '/x' } });
   });
 
   it('any-of: allows when any listed capability is present', () => {
@@ -221,7 +221,7 @@ describe('capability middleware', () => {
     const store = useAuthStore();
     store.user = userProfile({ capabilities: ['entity.read'] });
     const mw = capability(['users.manage', 'user.read']);
-    expect(() => mw(to, {})).toThrowError(expect.objectContaining({ statusCode: 403 }));
+    expect(mw(to, {})).toEqual({ path: '/forbidden', query: { from: '/x' } });
   });
 });
 

@@ -57,7 +57,7 @@ definePageMeta({
   layout: 'auth',
 });
 
-const { t } = useI18n();
+const { t, te } = useI18n();
 const { fetchContext } = useAuth();
 
 const form = reactive({ username: '', password: '' });
@@ -84,7 +84,7 @@ async function onSubmit() {
     const redirect = (route.query.redirect as string) ?? '/';
     await navigateTo(redirect);
   } catch (e: unknown) {
-    error.value = e instanceof Error ? e.message : t('auth.error');
+    error.value = displayError(e, t, te);
   } finally {
     loading.value = false;
   }

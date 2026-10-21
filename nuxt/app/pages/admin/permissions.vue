@@ -1,7 +1,7 @@
 <template>
   <div class="p-4 sm:p-6 space-y-6 max-w-full overflow-x-hidden">
-    <div class="flex items-center justify-between">
-      <div>
+    <div class="flex items-center justify-between flex-wrap gap-2">
+      <div class="min-w-0">
         <h1 class="text-2xl font-bold">{{ t('admin.permissions_title') }}</h1>
         <p class="text-[var(--ui-text-muted)] mt-1">{{ t('admin.permissions_desc') }}</p>
       </div>
@@ -26,8 +26,8 @@
       </div>
       <div v-else class="space-y-2 mt-4">
         <UCard v-for="node in visibleTree" :key="node.id" :style="{ marginInlineStart: `${node.depth * 1.5}rem` }">
-        <div class="flex items-start justify-between">
-          <div class="flex-1">
+        <div class="flex items-start justify-between gap-2">
+          <div class="flex-1 min-w-0">
             <div class="flex items-center gap-2 flex-wrap">
               <UIcon v-if="node.depth > 0" name="i-lucide-corner-down-right" class="text-[var(--ui-text-muted)]" />
               <p class="font-medium">{{ node.name }}</p>
@@ -54,9 +54,9 @@
                   <UBadge :color="ruleColor(rule.effect)" variant="soft" size="sm">{{ rule.effect }}</UBadge>
                   <span class="text-[var(--ui-text-muted)]">
                     {{ t(`admin.res_${rule.resource_type === 'predicate' ? 'relation' : rule.resource_type}`, rule.resource_type) }}
-                    <strong>{{ resourceLabel(rule) }}</strong>
+                    <strong class="break-all">{{ resourceLabel(rule) }}</strong>
                   </span>
-                  <span class="text-[var(--ui-text-muted)]">{{ t('admin.action') }}: <strong>{{ rule.action }}</strong></span>
+                  <span class="text-[var(--ui-text-muted)]">{{ t('admin.action') }}: <strong class="break-all">{{ rule.action }}</strong></span>
                 </div>
                 <p v-if="rule.mask" class="text-xs text-[var(--ui-text-muted)] mt-1">{{ t('admin.mask') }}: {{ rule.mask }}</p>
               </div>
@@ -187,7 +187,7 @@ definePageMeta({
   middleware: ['auth', capability('admin.pages.access')],
 });
 
-const { t } = useI18n();
+const { t, te } = useI18n();
 const toast = useToast();
 const api = useApi();
 const authStore = useAuthStore();
@@ -282,7 +282,7 @@ async function fetchPermissionGroups() {
       })),
     }));
   } catch (e: unknown) {
-    toast.add({ title: t('common.error'), description: e instanceof Error ? e.message : String(e), color: 'error' });
+    toast.add({ title: t('common.error'), description: displayError(e, t, te), color: 'error' });
   } finally {
     loading.value = false;
   }
@@ -459,7 +459,7 @@ async function saveGroup() {
     toast.add({ title: t('admin.permission_saved'), color: 'success' });
     await fetchPermissionGroups();
   } catch (e: unknown) {
-    toast.add({ title: t('common.error'), description: e instanceof Error ? e.message : String(e), color: 'error' });
+    toast.add({ title: t('common.error'), description: displayError(e, t, te), color: 'error' });
   } finally {
     saving.value = false;
   }
@@ -471,7 +471,7 @@ async function deleteGroup(group: PermissionGroup) {
     toast.add({ title: t('admin.permission_deleted'), color: 'success' });
     await fetchPermissionGroups();
   } catch (e: unknown) {
-    toast.add({ title: t('common.error'), description: e instanceof Error ? e.message : String(e), color: 'error' });
+    toast.add({ title: t('common.error'), description: displayError(e, t, te), color: 'error' });
   }
 }
 

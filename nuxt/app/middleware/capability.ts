@@ -19,10 +19,10 @@ export function capability(cap: string | string[]) {
       });
     }
     if (!required.some((c) => store.hasCapability(c))) {
-      throw createError({
-        statusCode: 403,
-        statusMessage: 'Capability denied',
-      });
+      // navigateTo instead of throwing createError — a thrown error on a
+      // client-side deep link surfaces as a [NUXT_E1005] console diagnostic
+      // even though the error page renders correctly.
+      return navigateTo({ path: '/forbidden', query: { from: to.fullPath } });
     }
   });
 }

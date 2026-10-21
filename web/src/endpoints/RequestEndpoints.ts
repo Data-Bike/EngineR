@@ -9,8 +9,8 @@ export class RequestEndpoints {
   constructor(private readonly client: ApiClient) {}
 
   /** GET /requests — list requests. */
-  async list(): Promise<ParsedResponse<unknown[]>> {
-    return this.client.get<unknown[]>('/requests');
+  async list(query?: { status?: string; limit?: number; cursor?: string }): Promise<ParsedResponse<unknown[]>> {
+    return this.client.get<unknown[]>('/requests', query ? { query } : undefined);
   }
 
   /** POST /requests — create a request. */

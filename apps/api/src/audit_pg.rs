@@ -13,6 +13,7 @@
 use crate::authn::AuthContext;
 use crate::workspace_routes::{meta, ApiEnvelope, CapabilityGuard};
 use crate::AppState;
+use crate::ApiError;
 use enginer_audit_persistence::chain::ChainHasher;
 use enginer_db_runtime::{AsyncStdDbExecutor, DbError, Deadline};
 use enginer_persistence::RlsContext;
@@ -31,8 +32,8 @@ fn db(e: sqlx::Error) -> DbError {
     }
 }
 
-fn pg(state: &State<AppState>) -> Result<Arc<AsyncStdDbExecutor>, Status> {
-    state.db_executor.clone().ok_or(Status::ServiceUnavailable)
+fn pg(state: &State<AppState>) -> Result<Arc<AsyncStdDbExecutor>, ApiError> {
+    state.db_executor.clone().ok_or_else(|| ApiError::from(Status::ServiceUnavailable))
 }
 
 pub(crate) async fn audit_tx<'e>(
@@ -283,11 +284,36 @@ pub async fn query_audit(
     from: Option<String>,
     to: Option<String>,
     limit: Option<u32>,
-    cursor: Option<i64>,
+    cursor: Option<String>,
     catalog: Option<String>,
-) -> Result<Json<ApiEnvelope<Value>>, Status> {
+) -> Result<Json<ApiEnvelope<Value>>, ApiError> {
     let exec = pg(state)?;
     let ctx = cap.ctx.clone();
+    // Strict parsing up front — Rocket/`Option<T>` silently drops malformed
+    // values (`cursor=abc` → first page, `from=garbage` → no filter), which
+    // hides exactly the typos an auditor needs to notice.
+    let cursor = match cursor.as_deref() {
+        None => None,
+        Some(c) => Some(
+            c.parse::<i64>()
+                .map_err(|_| ApiError::from(Status::UnprocessableEntity))?,
+        ),
+    };
+    if matches!(cursor, Some(c) if c < 0) {
+        return Err(ApiError::from(Status::UnprocessableEntity));
+    }
+    for ts in [&from, &to] {
+        if let Some(s) = ts {
+            if chrono::DateTime::parse_from_rfc3339(s).is_err() {
+                return Err(ApiError::from(Status::UnprocessableEntity));
+            }
+        }
+    }
+    if let Some(l) = limit {
+        if !(1..=500).contains(&l) {
+            return Err(ApiError::from(Status::UnprocessableEntity));
+        }
+    }
     let v = exec
         .run(Deadline::in_secs(10), move |pool| async move {
             let mut tx = audit_tx(&pool, &ctx, "audit.read").await?;
@@ -298,16 +324,31 @@ pub async fn query_audit(
                 crate::dataperm::DataPerm::load(&mut tx, ctx.tenant_id, ctx.principal_id).await?;
             // Optional `?catalog=` filter (docs/28 §9): explicit slice to
             // one catalog on top of the per-row visibility gate below.
-            // An unresolvable ref is a 422, consistent with entity routes.
+            // An unresolvable ref is a 422, an explicitly requested catalog
+            // the principal cannot read is a loud 403 (docs/28 §4) —
+            // silently returning an empty list would mask the denial.
             let catalog_id = match catalog.as_deref() {
-                Some(r) => Some(
-                    crate::entity_pg::resolve_catalog(&mut tx, ctx.tenant_id, r)
-                        .await?
-                        .catalog_id,
-                ),
+                Some(r) => {
+                    let c = crate::entity_pg::resolve_catalog(&mut tx, ctx.tenant_id, r).await?;
+                    let ckeys = [c.public_id.to_string(), c.alias.clone()];
+                    let ckey_refs: Vec<&str> = ckeys.iter().map(String::as_str).collect();
+                    if !perm.can_catalog(&ckey_refs, crate::dataperm::Op::Read) {
+                        return Err(crate::entity_pg::http_err(403, "catalog.denied"));
+                    }
+                    Some(c.catalog_id)
+                }
                 None => None,
             };
+            // Range is pre-validated in the route; clamp stays as a belt for
+            // any future caller that bypasses it.
             let limit = limit.unwrap_or(100).clamp(1, 500) as i64;
+            // Keyset on a positive sequence — a negative cursor is a
+            // loud 422, not an empty page masquerading as "no more rows".
+            if let Some(c) = cursor {
+                if c < 0 {
+                    return Err(crate::entity_pg::http_err(422, "cursor.invalid"));
+                }
+            }
             let actor_uuid = actor.as_deref().and_then(|s| s.parse::<uuid::Uuid>().ok());
             let actor_login = actor.filter(|s| s.parse::<uuid::Uuid>().is_err());
             let resource_uuid = resource_id
@@ -360,12 +401,17 @@ pub async fn query_audit(
             .bind(from_ts.map(|t| t.with_timezone(&chrono::Utc)))
             .bind(to_ts.map(|t| t.with_timezone(&chrono::Utc)))
             .bind(cursor)
-            .bind(limit)
+            .bind(limit + 1)
             .bind(catalog_id)
             .fetch_all(&mut *tx)
             .await
             .map_err(db)?;
-            let out: Vec<Value> = rows
+            // One extra row distinguishes "exactly `limit` events exist"
+            // from "more pages remain" — the next cursor is the last emitted
+            // sequence so keyset paging is discoverable, not guesswork.
+            let has_more = rows.len() as i64 > limit;
+            let out_rows = if has_more { &rows[..rows.len() - 1] } else { &rows[..] };
+            let out: Vec<Value> = out_rows
                 .iter()
                 .filter(|r| {
                     let pid: Option<uuid::Uuid> = r.try_get("catalog_pid").ok().flatten();
@@ -386,19 +432,31 @@ pub async fn query_audit(
                 })
                 .map(row_to_record)
                 .collect();
-            Ok(Value::Array(out))
+            let next_cursor = if has_more {
+                out_rows
+                    .last()
+                    .and_then(|r| r.try_get::<Option<i64>, _>("sequence").ok().flatten())
+            } else {
+                None
+            };
+            Ok(json!({
+                "events": Value::Array(out),
+                "next_cursor": next_cursor,
+            }))
         })
         .await
         .map_err(|e| {
-            let st = crate::entity_pg::to_status(&e);
-            if st == Status::InternalServerError {
+            let err = ApiError::of_db(&e);
+            if err.status == Status::InternalServerError {
                 tracing::error!(error = %e, "audit query failed");
             }
-            st
+            err
         })?;
+    let mut m = meta();
+    m["next_cursor"] = v.get("next_cursor").cloned().unwrap_or(Value::Null);
     Ok(Json(ApiEnvelope {
-        data: v,
-        meta: meta(),
+        data: v.get("events").cloned().unwrap_or(Value::Array(vec![])),
+        meta: m,
     }))
 }
 
@@ -410,7 +468,7 @@ pub async fn query_audit(
 pub async fn latest_checkpoint(
     cap: CapabilityGuard,
     state: &State<AppState>,
-) -> Result<Json<ApiEnvelope<Value>>, Status> {
+) -> Result<Json<ApiEnvelope<Value>>, ApiError> {
     let exec = pg(state)?;
     let ctx = cap.ctx.clone();
     let v = exec
@@ -425,10 +483,10 @@ pub async fn latest_checkpoint(
             .fetch_optional(&mut *tx)
             .await
             .map_err(db)?;
+            // "Latest" absent is a valid state, not an error — the UI
+            // fetches this on every audit-page mount.
             let Some((cid, seq, hash, created)) = row else {
-                return Err(DbError::Other {
-                    message: "HTTP404:checkpoint".into(),
-                });
+                return Ok(Value::Null);
             };
             Ok(json!({
                 "checkpoint_id": cid, "sequence": seq,
@@ -436,10 +494,7 @@ pub async fn latest_checkpoint(
             }))
         })
         .await
-        .map_err(|e| match e {
-            DbError::Other { message } if message == "HTTP404:checkpoint" => Status::NotFound,
-            _ => Status::InternalServerError,
-        })?;
+        .map_err(|e| ApiError::of_db(&e))?;
     Ok(Json(ApiEnvelope {
         data: v,
         meta: meta(),
@@ -450,12 +505,21 @@ pub async fn latest_checkpoint(
 pub async fn create_checkpoint(
     cap: CapabilityGuard,
     state: &State<AppState>,
-) -> Result<Json<ApiEnvelope<Value>>, Status> {
+) -> Result<Json<ApiEnvelope<Value>>, ApiError> {
     let exec = pg(state)?;
     let ctx = cap.ctx.clone();
     let v = exec
         .run(Deadline::in_secs(10), move |pool| async move {
             let mut tx = audit_tx(&pool, &ctx, "audit.checkpoint").await?;
+            // Serialize with event append (insert_event takes the same
+            // advisory lock): without it an event landing between "find
+            // head" and "insert checkpoint" silently anchors the checkpoint
+            // one entry behind the true head.
+            sqlx::query("SELECT pg_advisory_xact_lock(hashtext($1::text))")
+                .bind(ctx.tenant_id)
+                .execute(&mut *tx)
+                .await
+                .map_err(db)?;
             let last: Option<(i64, String)> = sqlx::query_as(
                 "SELECT sequence, entry_hash FROM audit.event
                  WHERE tenant_id=$1 AND sequence IS NOT NULL
@@ -487,10 +551,7 @@ pub async fn create_checkpoint(
             }))
         })
         .await
-        .map_err(|e| match e {
-            DbError::Other { message } if message == "HTTP409:checkpoint" => Status::Conflict,
-            _ => Status::InternalServerError,
-        })?;
+        .map_err(|e| ApiError::of_db(&e))?;
     Ok(Json(ApiEnvelope {
         data: v,
         meta: meta(),
@@ -501,7 +562,7 @@ pub async fn create_checkpoint(
 pub async fn verify_chain(
     cap: CapabilityGuard,
     state: &State<AppState>,
-) -> Result<Json<ApiEnvelope<Value>>, Status> {
+) -> Result<Json<ApiEnvelope<Value>>, ApiError> {
     let exec = pg(state)?;
     let ctx = cap.ctx.clone();
     let v = exec
@@ -576,7 +637,7 @@ pub async fn verify_chain(
         .await
         .map_err(|e| {
             tracing::error!(error = %e, "audit verify failed");
-            Status::InternalServerError
+            ApiError::from(Status::InternalServerError)
         })?;
     Ok(Json(ApiEnvelope {
         data: v,
@@ -607,7 +668,7 @@ fn default_true() -> bool {
 pub async fn get_retention(
     cap: CapabilityGuard,
     state: &State<AppState>,
-) -> Result<Json<ApiEnvelope<Value>>, Status> {
+) -> Result<Json<ApiEnvelope<Value>>, ApiError> {
     let exec = pg(state)?;
     let ctx = cap.ctx.clone();
     let v = exec
@@ -628,7 +689,7 @@ pub async fn get_retention(
             }))
         })
         .await
-        .map_err(|_| Status::InternalServerError)?;
+        .map_err(|_| ApiError::from(Status::InternalServerError))?;
     Ok(Json(ApiEnvelope {
         data: v,
         meta: meta(),
@@ -640,10 +701,10 @@ pub async fn put_retention(
     cap: CapabilityGuard,
     state: &State<AppState>,
     policy: Json<RetentionPolicyBody>,
-) -> Result<Json<ApiEnvelope<Value>>, Status> {
+) -> Result<Json<ApiEnvelope<Value>>, ApiError> {
     let policy = policy.into_inner();
     if !(1..=36500).contains(&policy.retention_days) {
-        return Err(Status::UnprocessableEntity);
+        return Err(ApiError::from(Status::UnprocessableEntity));
     }
     let exec = pg(state)?;
     let ctx = cap.ctx.clone();
@@ -673,7 +734,7 @@ pub async fn put_retention(
             Ok(serde_json::to_value(&policy).unwrap())
         })
         .await
-        .map_err(|_| Status::InternalServerError)?;
+        .map_err(|_| ApiError::from(Status::InternalServerError))?;
     Ok(Json(ApiEnvelope {
         data: v,
         meta: meta(),
@@ -845,7 +906,7 @@ fn parse_rule(action: &str, resource: &Value) -> (String, String) {
     ("capability".to_string(), action.to_string())
 }
 
-fn validate_group_input(input: &PermissionGroupInput) -> Result<(), Status> {
+fn validate_group_input(input: &PermissionGroupInput) -> Result<(), ApiError> {
     // The PDP resolves special roles by `COALESCE(special, alias)`: a group
     // merely NAMED 'superadmin'/'superuser' grants its members the special
     // powers, so the aliases are reserved and cannot be created or renamed
@@ -868,7 +929,7 @@ fn validate_group_input(input: &PermissionGroupInput) -> Result<(), Status> {
                     != (rule.resource_type == "capability")
         })
     {
-        return Err(Status::UnprocessableEntity);
+        return Err(ApiError::from(Status::UnprocessableEntity));
     }
     Ok(())
 }
@@ -1002,7 +1063,9 @@ async fn current_policy_revision(
     tenant: uuid::Uuid,
 ) -> Result<i64, DbError> {
     let rev: Option<i64> = sqlx::query_scalar(
-        "SELECT COALESCE(MAX(revision_id),1) FROM sec.policy_revision WHERE tenant_id=$1",
+        "SELECT revision_id FROM sec.policy_revision
+         WHERE tenant_id=$1 AND state='published'
+         ORDER BY published_at DESC NULLS LAST LIMIT 1",
     )
     .bind(tenant)
     .fetch_one(&mut **tx)
@@ -1081,12 +1144,13 @@ async fn write_group(
     let revision = current_policy_revision(tx, tenant).await?;
     sqlx::query(
         "UPDATE sec.policy_rule SET valid_to = $3
-         WHERE tenant_id=$1 AND group_id=$2
+         WHERE tenant_id=$1 AND group_id=$2 AND policy_revision=$4
            AND (valid_to IS NULL OR valid_to > $3)",
     )
     .bind(tenant)
     .bind(group_id)
     .bind(now)
+    .bind(revision)
     .execute(&mut **tx)
     .await
     .map_err(db)?;
@@ -1126,7 +1190,7 @@ async fn write_group(
 pub async fn list_permission_groups(
     cap: CapabilityGuard,
     state: &State<AppState>,
-) -> Result<Json<ApiEnvelope<Value>>, Status> {
+) -> Result<Json<ApiEnvelope<Value>>, ApiError> {
     let exec = pg(state)?;
     let ctx = cap.ctx.clone();
     let v = exec
@@ -1135,7 +1199,7 @@ pub async fn list_permission_groups(
             Ok(Value::Array(load_groups(&mut tx, ctx.tenant_id).await?))
         })
         .await
-        .map_err(|_| Status::InternalServerError)?;
+        .map_err(|_| ApiError::from(Status::InternalServerError))?;
     Ok(Json(ApiEnvelope {
         data: v,
         meta: meta(),
@@ -1147,7 +1211,7 @@ pub async fn create_permission_group(
     cap: CapabilityGuard,
     state: &State<AppState>,
     body: Json<PermissionGroupInput>,
-) -> Result<Json<ApiEnvelope<Value>>, Status> {
+) -> Result<Json<ApiEnvelope<Value>>, ApiError> {
     let body = body.into_inner();
     validate_group_input(&body)?;
     let exec = pg(state)?;
@@ -1207,15 +1271,15 @@ pub async fn create_permission_group(
             if let DbError::Other { message } = &e {
                 if let Some(detail) = message.strip_prefix("HTTP409:") {
                     tracing::warn!(detail = %detail, "permission group conflict");
-                    return Status::Conflict;
+                    return ApiError::of_db(&e);
                 }
                 if let Some(detail) = message.strip_prefix("HTTP422:") {
                     tracing::warn!(detail = %detail, "permission group rejected");
-                    return Status::UnprocessableEntity;
+                    return ApiError::of_db(&e);
                 }
             }
             tracing::error!(error = %e, "create permission group failed");
-            Status::InternalServerError
+            ApiError::from(Status::InternalServerError)
         })?;
     Ok(Json(ApiEnvelope {
         data: v,
@@ -1229,10 +1293,10 @@ pub async fn update_permission_group(
     state: &State<AppState>,
     group_id: String,
     body: Json<PermissionGroupInput>,
-) -> Result<Json<ApiEnvelope<Value>>, Status> {
+) -> Result<Json<ApiEnvelope<Value>>, ApiError> {
     let body = body.into_inner();
     validate_group_input(&body)?;
-    let gid: uuid::Uuid = group_id.parse().map_err(|_| Status::NotFound)?;
+    let gid: uuid::Uuid = group_id.parse().map_err(|_| ApiError::from(Status::NotFound))?;
     let exec = pg(state)?;
     let ctx = cap.ctx.clone();
     let v = exec
@@ -1314,17 +1378,15 @@ pub async fn update_permission_group(
                 .unwrap_or(Value::Null))
         })
         .await
-        .map_err(|e| match e {
-            DbError::Other { message } if message == "HTTP404:group" => Status::NotFound,
-            DbError::Other { message } if message.starts_with("HTTP409:") => {
-                tracing::warn!(detail = %message, "permission group conflict");
-                Status::Conflict
+        .map_err(|e| {
+            if let DbError::Other { message } = &e {
+                if message.starts_with("HTTP409:") {
+                    tracing::warn!(detail = %message, "permission group conflict");
+                } else if message.starts_with("HTTP422:") {
+                    tracing::warn!(detail = %message, "permission group rejected");
+                }
             }
-            DbError::Other { message } if message.starts_with("HTTP422:") => {
-                tracing::warn!(detail = %message, "permission group rejected");
-                Status::UnprocessableEntity
-            }
-            _ => Status::InternalServerError,
+            ApiError::of_db(&e)
         })?;
     Ok(Json(ApiEnvelope {
         data: v,
@@ -1337,8 +1399,8 @@ pub async fn delete_permission_group(
     cap: CapabilityGuard,
     state: &State<AppState>,
     group_id: String,
-) -> Result<Json<ApiEnvelope<Value>>, Status> {
-    let gid: uuid::Uuid = group_id.parse().map_err(|_| Status::NotFound)?;
+) -> Result<Json<ApiEnvelope<Value>>, ApiError> {
+    let gid: uuid::Uuid = group_id.parse().map_err(|_| ApiError::from(Status::NotFound))?;
     let exec = pg(state)?;
     let ctx = cap.ctx.clone();
     exec.run(Deadline::in_secs(15), move |pool| async move {
@@ -1405,11 +1467,7 @@ pub async fn delete_permission_group(
         Ok(Value::Null)
     })
     .await
-    .map_err(|e| match e {
-        DbError::Other { message } if message == "HTTP404:group" => Status::NotFound,
-        DbError::Other { message } if message.starts_with("HTTP409:") => Status::Conflict,
-        _ => Status::InternalServerError,
-    })?;
+    .map_err(|e| ApiError::of_db(&e))?;
     Ok(Json(ApiEnvelope {
         data: json!({ "deleted": true }),
         meta: meta(),

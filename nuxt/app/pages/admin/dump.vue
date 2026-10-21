@@ -56,7 +56,7 @@
                        :data-testid="`restore-${d.dump_id}`" @click="askRestore(d.dump_id)" />
               <UButton v-if="isFinished(d.status)" size="xs" variant="ghost" color="error"
                        icon="i-lucide-trash-2" :title="t('dump.delete')"
-                       :data-testid="`delete-${d.dump_id}`" @click="removeDump(d.dump_id)" />
+                       :data-testid="`delete-${d.dump_id}`" @click="askDelete(d.dump_id)" />
             </td>
           </tr>
           <tr v-if="!dumps.length">
@@ -84,6 +84,23 @@
         </div>
       </template>
     </UModal>
+
+    <UModal v-model:open="deleteDialog" :title="t('dump.delete_title')">
+      <template #body>
+        <UAlert color="error" variant="subtle" icon="i-lucide-alert-triangle"
+                :description="t('dump.delete_desc')" />
+        <p class="mt-3 text-sm font-mono">{{ deleteTarget }}</p>
+      </template>
+      <template #footer>
+        <div class="flex justify-end gap-2">
+          <UButton variant="ghost" @click="deleteDialog = false">{{ t('common.cancel') }}</UButton>
+          <UButton color="error" icon="i-lucide-trash-2" :loading="deleting"
+                   data-testid="confirm-delete" @click="doDelete">
+            {{ t('dump.delete') }}
+          </UButton>
+        </div>
+      </template>
+    </UModal>
   </div>
 </template>
 
@@ -95,7 +112,7 @@ definePageMeta({
   middleware: ['auth', capability(['security.manage'])],
 });
 
-const { t } = useI18n();
+const { t, te } = useI18n();
 const api = useApi();
 const toast = useToast();
 
@@ -108,6 +125,9 @@ const fileInput = ref<HTMLInputElement | null>(null);
 const restoreDialog = ref(false);
 const restoreTarget = ref('');
 const restoring = ref(false);
+const deleteDialog = ref(false);
+const deleteTarget = ref('');
+const deleting = ref(false);
 let pollTimer: ReturnType<typeof setInterval> | null = null;
 
 const BUSY = new Set(['running', 'restoring']);
@@ -134,7 +154,7 @@ async function load() {
       pollTimer = null;
     }
   } catch (e) {
-    error.value = e instanceof Error ? e.message : String(e);
+    error.value = displayError(e, t, te);
   } finally {
     loading.value = false;
   }
@@ -147,7 +167,7 @@ async function runDump() {
     await api.dumps.run();
     await load();
   } catch (e) {
-    error.value = e instanceof Error ? e.message : String(e);
+    error.value = displayError(e, t, te);
   } finally {
     starting.value = false;
   }
@@ -165,7 +185,7 @@ async function onUpload(ev: Event) {
     toast.add({ title: t('dump.uploaded'), color: 'success' });
     await load();
   } catch (e) {
-    error.value = e instanceof Error ? e.message : String(e);
+    error.value = displayError(e, t, te);
   } finally {
     uploading.value = false;
   }
@@ -184,18 +204,28 @@ async function doRestore() {
     restoreDialog.value = false;
     await load();
   } catch (e) {
-    error.value = e instanceof Error ? e.message : String(e);
+    error.value = displayError(e, t, te);
   } finally {
     restoring.value = false;
   }
 }
 
-async function removeDump(id: string) {
+function askDelete(id: string) {
+  deleteTarget.value = id;
+  deleteDialog.value = true;
+}
+
+async function doDelete() {
+  deleting.value = true;
+  error.value = '';
   try {
-    await api.dumps.remove(id);
+    await api.dumps.remove(deleteTarget.value);
+    deleteDialog.value = false;
     await load();
   } catch (e) {
-    error.value = e instanceof Error ? e.message : String(e);
+    error.value = displayError(e, t, te);
+  } finally {
+    deleting.value = false;
   }
 }
 

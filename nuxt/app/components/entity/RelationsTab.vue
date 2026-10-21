@@ -83,8 +83,8 @@
                   </div>
 
                   <p v-if="item.validFrom" class="text-xs text-[var(--ui-text-muted)] mt-1.5">
-                    {{ t('entity.relations.valid_from') }}: {{ item.validFrom }}
-                    <span v-if="item.validTo"> · {{ t('entity.relations.valid_to') }}: {{ item.validTo }}</span>
+                    {{ t('entity.relations.valid_from') }}: {{ formatDateTime(item.validFrom) }}
+                    <span v-if="item.validTo"> · {{ t('entity.relations.valid_to') }}: {{ formatDateTime(item.validTo) }}</span>
                   </p>
                   <p v-if="item.source" class="text-xs text-[var(--ui-text-muted)] mt-1">
                     {{ t('entity.relations.source') }}: {{ item.source }}
@@ -442,7 +442,7 @@ async function submitAddRelation() {
     toast.add({ title: t('entity.relations.added'), color: 'success' });
     await fetchRelations();
   } catch (e: unknown) {
-    toast.add({ title: t('common.error'), description: e instanceof Error ? e.message : String(e), color: 'error' });
+    toast.add({ title: t('common.error'), description: displayError(e, t, te), color: 'error' });
   } finally {
     submitting.value = false;
   }
@@ -465,7 +465,7 @@ async function submitLinkRelation() {
     toast.add({ title: t('entity.relations.linked'), color: 'success' });
     await fetchRelations();
   } catch (e: unknown) {
-    toast.add({ title: t('common.error'), description: e instanceof Error ? e.message : String(e), color: 'error' });
+    toast.add({ title: t('common.error'), description: displayError(e, t, te), color: 'error' });
   } finally {
     submitting.value = false;
   }
@@ -477,7 +477,7 @@ async function removeRelation(item: RelationItem) {
     toast.add({ title: t('entity.relations.removed'), color: 'success' });
     await fetchRelations();
   } catch (e: unknown) {
-    toast.add({ title: t('common.error'), description: e instanceof Error ? e.message : String(e), color: 'error' });
+    toast.add({ title: t('common.error'), description: displayError(e, t, te), color: 'error' });
   }
 }
 
@@ -553,7 +553,7 @@ async function fetchRelations() {
       });
     collapsedGroups.value = new Set();
   } catch (e: unknown) {
-    toast.add({ title: t('common.error'), description: e instanceof Error ? e.message : String(e), color: 'error' });
+    toast.add({ title: t('common.error'), description: displayError(e, t, te), color: 'error' });
     relationGroups.value = [];
   }
 }
@@ -590,7 +590,7 @@ async function fetchRelationMetadata() {
   } catch (cause: unknown) {
     toast.add({
       title: t('common.error'),
-      description: cause instanceof Error ? cause.message : String(cause),
+      description: displayError(cause, t, te),
       color: 'error',
     });
   }

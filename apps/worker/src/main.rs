@@ -62,13 +62,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .map_err(db_err)?;
 
                     // Claim a batch with FOR UPDATE SKIP LOCKED (docs/02 §7).
-                    let rows: Vec<(i64, uuid::Uuid, String, serde_json::Value)> = sqlx::query_as(
-                        "SELECT outbox_id, tenant_id, event_type, payload FROM ops.outbox
+                    let rows: Vec<(i64, uuid::Uuid, String, String, serde_json::Value)> =
+                        sqlx::query_as(
+                            "SELECT outbox_id, tenant_id, aggregate_id, event_type, payload
+                             FROM ops.outbox
                              WHERE dispatched_at IS NULL AND available_at <= now()
                              ORDER BY available_at, outbox_id
                              LIMIT 10
                              FOR UPDATE SKIP LOCKED",
-                    )
+                        )
                     .fetch_all(&mut *tx)
                     .await
                     .map_err(db_err)?;
@@ -80,8 +82,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
                     let count = rows.len();
                     let mut ok_ids = Vec::with_capacity(count);
-                    let mut failed: Vec<(i64, String)> = Vec::new();
-                    for (id, tenant_id, event_type, payload) in &rows {
+                    let mut failed: Vec<(i64, String, String)> = Vec::new();
+                    for (id, tenant_id, aggregate_id, event_type, payload) in &rows {
                         // RLS: scope the transaction to the event's tenant.
                         sqlx::query("SELECT set_config('app.tenant_id', $1, true)")
                             .bind(tenant_id.to_string())
@@ -98,7 +100,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                 );
                             }
                             Err(e) => {
-                                failed.push((*id, e.clone()));
+                                failed.push((*id, aggregate_id.clone(), e.clone()));
                                 tracing::warn!(
                                     outbox_id = id,
                                     event_type = %event_type,
@@ -120,20 +122,43 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         .map_err(db_err)?;
                     }
                     // Failed events stay pending: exponential backoff retry,
-                    // dead-letter after MAX_ATTEMPTS (dispatched + last_error).
-                    for (id, err) in &failed {
-                        sqlx::query(
+                    // dead-letter after MAX_ATTEMPTS (dispatched + last_error
+                    // prefixed 'dead_letter:' so a poisoned event is visibly
+                    // distinct from a delivered one).
+                    for (id, aggregate_id, err) in &failed {
+                        let (retry_at,): (chrono::DateTime<chrono::Utc>,) = sqlx::query_as(
                             "UPDATE ops.outbox
                              SET attempts = attempts + 1,
-                                 last_error = $2,
+                                 last_error = CASE WHEN attempts + 1 >= 5
+                                                   THEN 'dead_letter: ' || $2 ELSE $2 END,
                                  available_at = now() + make_interval(
                                      secs => least(600.0, 10.0 * power(2, attempts))),
                                  dispatched_at = CASE WHEN attempts + 1 >= 5
                                                       THEN now() ELSE dispatched_at END
-                             WHERE outbox_id = $1",
+                             WHERE outbox_id = $1
+                             RETURNING available_at",
                         )
                         .bind(*id)
                         .bind(err)
+                        .fetch_one(&mut *tx)
+                        .await
+                        .map_err(db_err)?;
+                        // Per-aggregate ordering: while this event backs off,
+                        // later events for the same aggregate must not jump
+                        // ahead of it — consumers would see rev N+1 before
+                        // rev N. Push their availability to at least the
+                        // retried event's slot.
+                        sqlx::query(
+                            "UPDATE ops.outbox
+                             SET available_at = GREATEST(available_at, $3)
+                             WHERE dispatched_at IS NULL
+                               AND tenant_id = (SELECT tenant_id FROM ops.outbox WHERE outbox_id=$1)
+                               AND aggregate_id = $2
+                               AND outbox_id <> $1",
+                        )
+                        .bind(*id)
+                        .bind(aggregate_id)
+                        .bind(retry_at)
                         .execute(&mut *tx)
                         .await
                         .map_err(db_err)?;

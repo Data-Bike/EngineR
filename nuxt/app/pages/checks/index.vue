@@ -102,15 +102,15 @@
             <td class="py-2 px-3 font-mono text-xs">{{ chk.check_id.slice(0, 8) }}</td>
             <td class="py-2 px-3">
               <NuxtLink :to="`/entities/${chk.target_entity_id}`" class="hover:underline">
-                {{ chk.target_entity_id.slice(0, 8) }}
+                {{ chk.target_display_name || chk.target_entity_id.slice(0, 8) }}
               </NuxtLink>
             </td>
             <td class="py-2 px-3">
-              <UBadge variant="subtle" size="sm">{{ t(`checks.kind.${chk.check_kind}`) }}</UBadge>
+              <UBadge variant="subtle" size="sm">{{ enumLabel(t, te, 'checks.kind', chk.check_kind) }}</UBadge>
             </td>
             <td class="py-2 px-3">
               <UBadge :color="statusColor(chk.status)" size="sm">
-                {{ t(`checks.status.${chk.status}`) }}
+                {{ enumLabel(t, te, 'checks.status', chk.status) }}
               </UBadge>
             </td>
             <td class="py-2 px-3 text-[var(--ui-text-muted)]">{{ formatDate(chk.created_at) }}</td>
@@ -127,6 +127,9 @@
           </tr>
         </tbody>
       </table></div>
+      <div v-if="nextCursor" class="flex justify-center pt-3">
+        <UButton variant="outline" :loading="loadingMore" @click="loadMore">{{ t('entity.load_more') }}</UButton>
+      </div>
     </UCard>
 
     <!-- New check dialog -->
@@ -178,12 +181,13 @@ import { ref, computed, reactive, onMounted } from 'vue';
 import { useI18n } from 'vue-i18n';
 import { useApi } from '~/composables/useApi';
 import type { CheckResponse, RiskLevel } from '@enginer/api-client';
+import { nextCursorOf } from '~/utils/pagination';
 
 definePageMeta({
   middleware: ['auth', capability('check.view')],
 });
 
-const { t } = useI18n();
+const { t, te } = useI18n();
 const api = useApi();
 const toast = useToast();
 
@@ -261,28 +265,58 @@ function formatDate(iso: string): string {
   return new Date(iso).toLocaleString();
 }
 
+const nextCursor = ref<string | null>(null);
+const loadingMore = ref(false);
+
+function toCheckRow(c: any): CheckRow {
+  return {
+    ...c,
+    check_id: c.check_id,
+    target_entity_id: c.target_entity_id,
+    check_kind: c.kind ?? c.check_kind,
+    final_score: c.final_score ?? c.score ?? null,
+    risk_level: c.risk_level,
+    status: c.status,
+    created_at: c.started_at ?? c.created_at,
+  };
+}
+
+function listQuery(cursor?: string) {
+  return {
+    status: filters.status === 'all' ? undefined : filters.status,
+    kind: filters.kind === 'all' ? undefined : filters.kind,
+    cursor,
+  };
+}
+
 async function fetchChecks() {
   loading.value = true;
   try {
-    const res = await api.checks.listChecks();
-    checks.value = (res.data || []).map((c: any) => ({
-      ...c,
-      check_id: c.check_id,
-      target_entity_id: c.target_entity_id,
-      check_kind: c.kind ?? c.check_kind,
-      final_score: c.final_score ?? c.score ?? null,
-      risk_level: c.risk_level,
-      status: c.status,
-      created_at: c.started_at ?? c.created_at,
-    }));
+    const res = await api.checks.listChecks(listQuery());
+    checks.value = (res.data || []).map(toCheckRow);
+    nextCursor.value = nextCursorOf(res.meta);
   } catch (err) {
     toast.add({
       title: t('common.error'),
-      description: err instanceof Error ? err.message : String(err),
+      description: displayError(err, t, te),
       color: 'error',
     });
   } finally {
     loading.value = false;
+  }
+}
+
+async function loadMore() {
+  if (!nextCursor.value) return;
+  loadingMore.value = true;
+  try {
+    const res = await api.checks.listChecks(listQuery(nextCursor.value));
+    checks.value.push(...(res.data || []).map(toCheckRow));
+    nextCursor.value = nextCursorOf(res.meta);
+  } catch (err) {
+    toast.add({ title: t('common.error'), description: displayError(err, t, te), color: 'error' });
+  } finally {
+    loadingMore.value = false;
   }
 }
 
@@ -301,7 +335,7 @@ async function submitNewCheck() {
   } catch (err) {
     toast.add({
       title: t('common.error'),
-      description: err instanceof Error ? err.message : String(err),
+      description: displayError(err, t, te),
       color: 'error',
     });
   } finally {

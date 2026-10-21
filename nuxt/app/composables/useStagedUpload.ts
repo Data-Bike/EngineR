@@ -30,12 +30,18 @@ async function computeHash(file: File, algorithm: string): Promise<string> {
   const webCryptoAlgorithm = algorithm.toLowerCase().replace('-', '') === 'sha256'
     ? 'SHA-256'
     : algorithm;
+  if (!globalThis.crypto?.subtle) {
+    // crypto.subtle exists only in secure contexts (https, localhost) —
+    // fail loudly instead of an opaque TypeError on plain-http deploys.
+    throw new Error('common.upload_requires_https');
+  }
   const digest = await crypto.subtle.digest(webCryptoAlgorithm, await file.arrayBuffer());
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, '0')).join('');
 }
 
 export function useStagedUpload() {
   const api = useApi();
+  const { t, te } = useI18n();
   const state = ref<StagedUploadState | null>(null);
   const uploading = ref(false);
   const error = ref<string | null>(null);
@@ -72,14 +78,22 @@ export function useStagedUpload() {
         objectId: null,
       };
 
-      // Upload chunks sequentially to keep order simple; parallel is possible.
-      for (let i = 0; i < totalChunks; i++) {
-        const start = i * chunkSize;
-        const end = Math.min(file.size, start + chunkSize);
-        const chunk = file.slice(start, end);
-        const res = await api.files.uploadChunk(uploadId, i, await chunk.arrayBuffer());
-        state.value.receivedChunks = res.data.received_chunks as number;
-        state.value.progress = (state.value.receivedChunks / totalChunks) * 100;
+      try {
+        // Upload chunks sequentially to keep order simple; parallel is possible.
+        for (let i = 0; i < totalChunks; i++) {
+          const start = i * chunkSize;
+          const end = Math.min(file.size, start + chunkSize);
+          const chunk = file.slice(start, end);
+          const res = await api.files.uploadChunk(uploadId, i, await chunk.arrayBuffer());
+          state.value.receivedChunks = res.data.received_chunks as number;
+          state.value.progress = (state.value.receivedChunks / totalChunks) * 100;
+        }
+      } catch (chunkError) {
+        // A failed upload must not linger in "uploading" — abort it so the
+        // server can release the staged chunks instead of waiting for expiry.
+        state.value.status = 'aborted';
+        await api.files.uploadAbort(uploadId, { reason: 'upload_failed' }).catch(() => {});
+        throw chunkError;
       }
 
       const completeRes = await api.files.uploadComplete(uploadId, {
@@ -93,7 +107,7 @@ export function useStagedUpload() {
       state.value.progress = 100;
       return objectId;
     } catch (e: unknown) {
-      error.value = e instanceof Error ? e.message : String(e);
+      error.value = displayError(e, t, te);
       return null;
     } finally {
       uploading.value = false;
@@ -107,7 +121,7 @@ export function useStagedUpload() {
         state.value.status = 'aborted';
       }
     } catch (e: unknown) {
-      error.value = e instanceof Error ? e.message : String(e);
+      error.value = displayError(e, t, te);
     }
   }
 

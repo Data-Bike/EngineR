@@ -33,15 +33,15 @@
             <div class="flex-1">
               <!-- Kind + status -->
               <div class="flex items-center gap-2">
-                <p class="font-medium">{{ t(`entity.checks.kind.${check.kind}`) }}</p>
+                <p class="font-medium">{{ enumLabel(t, te, ['entity.checks.kind', 'checks.kind'], check.kind) }}</p>
                 <UBadge :color="checkStatusColor(check.status)" size="sm">
-                  {{ t(`entity.checks.status.${check.status}`) }}
+                  {{ enumLabel(t, te, ['entity.checks.status', 'checks.status'], check.status) }}
                 </UBadge>
               </div>
               <!-- Timestamps -->
               <p class="text-xs text-[var(--ui-text-muted)] mt-1">
-                <span v-if="check.started_at">{{ t('entity.checks.started') }}: {{ check.started_at }}</span>
-                <span v-if="check.completed_at"> · {{ t('entity.checks.completed') }}: {{ check.completed_at }}</span>
+                <span v-if="check.started_at">{{ t('entity.checks.started') }}: {{ formatDateTime(check.started_at) }}</span>
+                <span v-if="check.completed_at"> · {{ t('entity.checks.completed') }}: {{ formatDateTime(check.completed_at) }}</span>
               </p>
               <!-- Connector -->
               <p v-if="check.connector_id" class="text-xs text-[var(--ui-text-muted)] mt-1">
@@ -75,7 +75,7 @@
                     <div class="flex-1">
                       <p>{{ ev.summary }}</p>
                       <p class="text-xs text-[var(--ui-text-muted)] mt-1">
-                        {{ ev.source }} · {{ ev.retrieved_at }}
+                        {{ ev.source }} · {{ formatDateTime(ev.retrieved_at) }}
                         <UBadge v-if="ev.adverse" color="error" size="sm" class="ml-1">{{ t('entity.checks.adverse') }}</UBadge>
                       </p>
                       <NuxtLink v-if="ev.source_url" :to="ev.source_url" target="_blank" class="text-xs text-blue-500 hover:underline">
@@ -102,7 +102,7 @@ const props = defineProps<{
   entityId: string;
 }>();
 
-const { t } = useI18n();
+const { t, te } = useI18n();
 const toast = useToast();
 const api = useApi();
 
@@ -167,7 +167,7 @@ async function fetchChecks() {
       evidence: (check.evidence ?? []) as unknown as CheckInstance['evidence'],
     }));
   } catch (e: unknown) {
-    toast.add({ title: t('common.error'), description: e instanceof Error ? e.message : String(e), color: 'error' });
+    toast.add({ title: t('common.error'), description: displayError(e, t, te), color: 'error' });
     checks.value = [];
   }
 }
@@ -180,7 +180,7 @@ async function runCheck() {
     toast.add({ title: t('entity.checks.run'), color: 'success' });
     await fetchChecks();
   } catch (e: unknown) {
-    toast.add({ title: t('common.error'), description: e instanceof Error ? e.message : String(e), color: 'error' });
+    toast.add({ title: t('common.error'), description: displayError(e, t, te), color: 'error' });
   } finally {
     running.value = false;
   }

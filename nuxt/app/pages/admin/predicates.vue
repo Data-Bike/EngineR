@@ -78,7 +78,7 @@
             <UButton size="sm" variant="outline" @click="editPredicate(pred)">
               {{ t('common.edit') }}
             </UButton>
-            <UButton size="sm" variant="ghost" color="error" icon="i-lucide-trash" @click="deletePredicate(pred)" />
+            <UButton size="sm" variant="ghost" color="error" icon="i-lucide-trash" :aria-label="t('common.delete')" :title="t('common.delete')" @click="deletePredicate(pred)" />
           </div>
         </div>
       </UCard>
@@ -211,7 +211,7 @@ definePageMeta({
   middleware: ['auth', capability('admin.pages.access')],
 });
 
-const { t } = useI18n();
+const { t, te } = useI18n();
 const toast = useToast();
 const api = useApi();
 const { catalogParams, selected: selectedCatalog } = useCatalog();
@@ -394,7 +394,7 @@ async function fetchPredicates() {
       };
     });
   } catch (e: unknown) {
-    toast.add({ title: t('common.error'), description: e instanceof Error ? e.message : String(e), color: 'error' });
+    toast.add({ title: t('common.error'), description: displayError(e, t, te), color: 'error' });
   } finally {
     loading.value = false;
   }
@@ -495,7 +495,7 @@ async function savePredicate() {
     toast.add({ title: t('admin.predicate_saved'), color: 'success' });
     await fetchPredicates();
   } catch (e: unknown) {
-    toast.add({ title: t('common.error'), description: e instanceof Error ? e.message : String(e), color: 'error' });
+    toast.add({ title: t('common.error'), description: displayError(e, t, te), color: 'error' });
   } finally {
     saving.value = false;
   }
@@ -530,7 +530,7 @@ async function saveGroups() {
     toast.add({ title: t('admin.groups_saved'), color: 'success' });
     await fetchPredicates();
   } catch (e: unknown) {
-    toast.add({ title: t('common.error'), description: e instanceof Error ? e.message : String(e), color: 'error' });
+    toast.add({ title: t('common.error'), description: displayError(e, t, te), color: 'error' });
   } finally {
     savingGroups.value = false;
   }
@@ -558,7 +558,7 @@ async function deletePredicate(pred: Predicate) {
     toast.add({ title: t('admin.predicate_deleted'), color: 'success' });
     await fetchPredicates();
   } catch (e: unknown) {
-    toast.add({ title: t('common.error'), description: e instanceof Error ? e.message : String(e), color: 'error' });
+    toast.add({ title: t('common.error'), description: displayError(e, t, te), color: 'error' });
   }
 }
 

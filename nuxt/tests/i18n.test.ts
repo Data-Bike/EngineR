@@ -8,6 +8,12 @@ import de from '../i18n/locales/de';
 import es from '../i18n/locales/es';
 import zh from '../i18n/locales/zh';
 
+function errorCodeKeys(errors: object, prefix = ''): string[] {
+  return Object.entries(errors).flatMap(([k, v]) =>
+    v && typeof v === 'object' ? errorCodeKeys(v, `${prefix}${k}.`) : [`${prefix}${k}`],
+  );
+}
+
 const allLocales: Record<string, typeof ru> = {
   ru,
   en,
@@ -50,7 +56,7 @@ describe('i18n locale files', () => {
         expect(locale.app.tagline.length).toBeGreaterThan(5);
       });
 
-      it('has all 11 nav keys', () => {
+      it('has all 12 nav keys', () => {
         const navKeys = Object.keys(locale.nav);
         expect(navKeys).toContain('home');
         expect(navKeys).toContain('objects');
@@ -63,7 +69,8 @@ describe('i18n locale files', () => {
         expect(navKeys).toContain('admin');
         expect(navKeys).toContain('integrations');
         expect(navKeys).toContain('audit');
-        expect(navKeys.length).toBe(11);
+        expect(navKeys).toContain('toggle_sidebar');
+        expect(navKeys.length).toBe(12);
       });
 
       it('has all auth keys', () => {
@@ -136,7 +143,7 @@ describe('i18n locale files', () => {
       });
 
       it('has all 33 error code keys', () => {
-        const errorKeys = Object.keys(locale.errors);
+        const errorKeys = errorCodeKeys(locale.errors);
         // Generic (10)
         expect(errorKeys).toContain('bad_request');
         expect(errorKeys).toContain('unauthorized');
@@ -189,9 +196,9 @@ describe('i18n locale files', () => {
   });
 
   it('all locales have identical error code keys', () => {
-    const ruErrorKeys = JSON.stringify(Object.keys(ru.errors).sort());
+    const ruErrorKeys = JSON.stringify(errorCodeKeys(ru.errors).sort());
     for (const [code, locale] of Object.entries(allLocales)) {
-      const errorKeys = JSON.stringify(Object.keys(locale.errors).sort());
+      const errorKeys = JSON.stringify(errorCodeKeys(locale.errors).sort());
       expect(errorKeys, `locale ${code} error keys mismatch`).toBe(ruErrorKeys);
     }
   });

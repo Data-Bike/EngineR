@@ -1,0 +1,472 @@
+[
+  {
+    "name": "login admin",
+    "verdict": "PASS",
+    "evidence": "landed http://localhost:3000/"
+  },
+  {
+    "name": "dump-list",
+    "verdict": "PASS",
+    "evidence": "http://localhost:3000/admin/dump | clean | ISO=0\n    consoleErr=0 pageErr=0 api>=400=0"
+  },
+  {
+    "name": "dump: table renders",
+    "verdict": "PASS",
+    "evidence": "rows=12 overflowXGuard=true"
+  },
+  {
+    "name": "dump: restore confirmation dialog",
+    "verdict": "PASS",
+    "evidence": "visible=true confirmBtn=1 warn=\"Восстановление базы из дампа Содержимое дампа будет загружено в текущую базу: добавятся отсутствующие записи, последовательности сдвинутся т\""
+  },
+  {
+    "name": "dump: bad-upload error state",
+    "verdict": "PASS",
+    "evidence": "alertVisible=true | consoleErr=1 [\"Failed to load resource: the server responded with a status of 422 (Unprocessable Entity)\"] pageErr=0 api>=400=1 [\"422 POST /api/v1/admin/dump/upload\"]"
+  },
+  {
+    "name": "dump: run dump",
+    "verdict": "PASS",
+    "evidence": "POST status=200 | consoleErr=0 pageErr=0 api>=400=0"
+  },
+  {
+    "name": "dump: delete dump",
+    "verdict": "PASS",
+    "evidence": "deleted=true confirmDialog=false (delete has NO confirmation — UX inconsistency w/ restore) | consoleErr=0 pageErr=0 api>=400=0"
+  },
+  {
+    "name": "dump: icon-button a11y names",
+    "verdict": "PASS",
+    "evidence": "0 icon-only buttons without name: []"
+  },
+  {
+    "name": "schema-list",
+    "verdict": "PASS",
+    "evidence": "http://localhost:3000/admin/schema | clean | ISO=0\n    consoleErr=0 pageErr=0 api>=400=0"
+  },
+  {
+    "name": "schema: drafts render",
+    "verdict": "PASS",
+    "evidence": "articles=1"
+  },
+  {
+    "name": "schema: create-draft gating",
+    "verdict": "PASS",
+    "evidence": "emptyDisabled=true badSemverDisabled=true"
+  },
+  {
+    "name": "schema: create draft via dialog (default base_revision)",
+    "verdict": "FAIL",
+    "evidence": "POST=400 dialogError=\"Базовая ревизия не найдена\" — dialog defaults base_revision to a revision from ANOTHER catalog stream → 400"
+  },
+  {
+    "name": "schema: create valid draft (API)",
+    "verdict": "PASS",
+    "evidence": "status=201 base=1 {\"data\":{\"revision_id\":\"30\",\"display_name\":\"QA round6 valid draft\",\"description\":\"validate+impact probe\",\"status\":\"draft\",\"semantic_version\":\"9.21.0\",\"parent_re"
+  },
+  {
+    "name": "schema: validation findings dialog",
+    "verdict": "PASS",
+    "evidence": "dialog=true findings=1 POST=200 — draft contains unknown predicates, dup alias, broken edge domain; server said: \"Результат валидации Валидация не пройдена error alias.duplicate Alias `qa_r6_bogus` используется повторно types[1].stable_alias Закрыть\""
+  },
+  {
+    "name": "schema: publish gated for invalid draft",
+    "verdict": "PASS",
+    "evidence": "publishDisabled=true"
+  },
+  {
+    "name": "schema: clean draft validates",
+    "verdict": "PASS",
+    "evidence": "\"Результат валидации Валидация пройдена warning changes.empty Не заполнен журнал изменений changes Закрыть\""
+  },
+  {
+    "name": "schema: impact report dialog",
+    "verdict": "PASS",
+    "evidence": "visible=true \"Результат анализа влияния Ломающее изменение 384 Затронуто объектов 1536 Затронуто утверждений 0 Новых определений 3 Изменено или погашено Обнаружено ломающее изменение До активаци\""
+  },
+  {
+    "name": "schema: detail dialog (types/predicates JSON)",
+    "verdict": "PASS",
+    "evidence": "visible=true jsonBlocks=2 (no dedicated diff view — JSON only)"
+  },
+  {
+    "name": "schema: delete draft \"QA round6 valid draft\"",
+    "verdict": "PASS",
+    "evidence": "confirmDialog=true stillListed=0"
+  },
+  {
+    "name": "schema: delete draft \"QA round6 INVALID draft\"",
+    "verdict": "PASS",
+    "evidence": "confirmDialog=true stillListed=0"
+  },
+  {
+    "name": "schema: published tab",
+    "verdict": "PASS",
+    "evidence": "revisions=24"
+  },
+  {
+    "name": "types-list",
+    "verdict": "PASS",
+    "evidence": "http://localhost:3000/admin/types | clean | ISO=0\n    consoleErr=0 pageErr=0 api>=400=0"
+  },
+  {
+    "name": "types: create dialog renders",
+    "verdict": "PASS",
+    "evidence": "fields=5"
+  },
+  {
+    "name": "types: invalid alias feedback",
+    "verdict": "PASS",
+    "evidence": "dialogOpen=true errToast=true toast=\"a 23 объектов Полей: 2 qa_code name Изменить Notification Ошибкаschema.validation_failed Ошибка schema.validation_failed\" schemaCalls=4 | consoleErr=0 pageErr=0 api>=400=0"
+  },
+  {
+    "name": "types: cleanup bad-alias draft",
+    "verdict": "PASS",
+    "evidence": "deleted draft 30"
+  },
+  {
+    "name": "types: edit dialog renders fields",
+    "verdict": "PASS",
+    "evidence": "visible=true fields=40 aliasDisabled=true"
+  },
+  {
+    "name": "types: retired display",
+    "verdict": "INFO",
+    "evidence": "listTypes returns published-only; retired types never reach the list"
+  },
+  {
+    "name": "predicates-list",
+    "verdict": "PASS",
+    "evidence": "http://localhost:3000/admin/predicates | clean | ISO=0\n    consoleErr=0 pageErr=0 api>=400=0"
+  },
+  {
+    "name": "predicates: list renders",
+    "verdict": "INFO",
+    "evidence": "cards≈122 | consoleErr=0 pageErr=0 api>=400=0"
+  },
+  {
+    "name": "predicates: groups dialog",
+    "verdict": "CHECK",
+    "evidence": "visible=true inputs=0"
+  },
+  {
+    "name": "predicates: invalid alias feedback",
+    "verdict": "PASS",
+    "evidence": "errToast=true toast=\" 0..1 · Конфиденциальность: internal Изменить Notification Ошибкаschema.validation_failed Ошибка schema.validation_faile\" schemaCalls=4 combos=6"
+  },
+  {
+    "name": "predicates: cleanup bad-alias draft",
+    "verdict": "PASS",
+    "evidence": "deleted draft 30"
+  },
+  {
+    "name": "catalogs-list",
+    "verdict": "PASS",
+    "evidence": "http://localhost:3000/admin/catalogs | clean | ISO=0\n    consoleErr=0 pageErr=0 api>=400=0"
+  },
+  {
+    "name": "catalogs: create catalog",
+    "verdict": "PASS",
+    "evidence": "POST=200 | consoleErr=0 pageErr=0 api>=400=0"
+  },
+  {
+    "name": "catalogs: header selector lists new catalog",
+    "verdict": "CHECK",
+    "evidence": "immediate=false afterReload=true (selector only refreshes via /me/context → needs reload)"
+  },
+  {
+    "name": "catalogs: selector scopes API calls",
+    "verdict": "PASS",
+    "evidence": "callsWithCatalog=1 of 2"
+  },
+  {
+    "name": "catalogs: retire flow (confirm + badge)",
+    "verdict": "PASS",
+    "evidence": "confirmDialog=true retiredShown=true badge=\"QA R6 Catalog qar6919 Погашен qar6919 Изменить Объектов: 0 Типов: 0\""
+  },
+  {
+    "name": "catalogs: retired catalog leaves selector",
+    "verdict": "PASS",
+    "evidence": "stillListed=false"
+  },
+  {
+    "name": "integrations-list",
+    "verdict": "PASS",
+    "evidence": "http://localhost:3000/integrations | clean | ISO=0\n    consoleErr=0 pageErr=0 api>=400=0"
+  },
+  {
+    "name": "integrations: connector list",
+    "verdict": "PASS",
+    "evidence": "rows=2"
+  },
+  {
+    "name": "integrations: health check",
+    "verdict": "PASS",
+    "evidence": "POST status=200 toastShown=true | consoleErr=0 pageErr=0 api>=400=0"
+  },
+  {
+    "name": "integrations: toggle off",
+    "verdict": "PASS",
+    "evidence": "POST /api/v1/connectors/00000000-0000-7000-a000-00000000003e/disable → 200 badge=\"00000000 api test Отключено 10 rps 75 \""
+  },
+  {
+    "name": "integrations: toggle back on",
+    "verdict": "PASS",
+    "evidence": "/api/v1/connectors/00000000-0000-7000-a000-00000000003e/enable → 200"
+  },
+  {
+    "name": "integrations: new-connector dialog",
+    "verdict": "PASS",
+    "evidence": "visible=true fields=4"
+  },
+  {
+    "name": "integrations: icon-button a11y names",
+    "verdict": "FAIL",
+    "evidence": "4 unnamed icon buttons [\"iconify i-lucide:heart-pulse shrink-0 size-4\",\"iconify i-lucide:pause shrink-0 size-4\",\"iconify i-lucide:heart-pulse shrink-0 size-4\",\"iconify i-lucide:pause shrink-0 size-4\"]"
+  },
+  {
+    "name": "docs",
+    "verdict": "PASS",
+    "evidence": "http://localhost:3000/docs | clean | ISO=0\n    consoleErr=0 pageErr=0 api>=400=0"
+  },
+  {
+    "name": "docs: renders (not 404)",
+    "verdict": "PASS",
+    "evidence": "docLinks=23"
+  },
+  {
+    "name": "docs: item renders content",
+    "verdict": "PASS",
+    "evidence": "contentLen=764"
+  },
+  {
+    "name": "docs: locale coverage",
+    "verdict": "INFO",
+    "evidence": "hardcoded RU content (not localized): true"
+  },
+  {
+    "name": "search-empty",
+    "verdict": "PASS",
+    "evidence": "http://localhost:3000/search | clean | ISO=0\n    consoleErr=0 pageErr=0 api>=400=0"
+  },
+  {
+    "name": "search: cyrillic-hit",
+    "verdict": "PASS",
+    "evidence": "q=\"Ромашка\" hits=2 injectedScript=false apiErrs=0 pageErr=0 "
+  },
+  {
+    "name": "search: pct-encoded-quote",
+    "verdict": "PASS",
+    "evidence": "q=\"%22\" hits=0 injectedScript=false apiErrs=0 pageErr=0 "
+  },
+  {
+    "name": "search: xss",
+    "verdict": "PASS",
+    "evidence": "q=\"<script>alert(1)</script>\" hits=0 injectedScript=false apiErrs=0 pageErr=0 "
+  },
+  {
+    "name": "search: hebrew-rtl",
+    "verdict": "PASS",
+    "evidence": "q=\"שלום עולם\" hits=0 injectedScript=false apiErrs=0 pageErr=0 "
+  },
+  {
+    "name": "search: arabic-rtl",
+    "verdict": "PASS",
+    "evidence": "q=\"العربية نص\" hits=0 injectedScript=false apiErrs=0 pageErr=0 "
+  },
+  {
+    "name": "search: emoji",
+    "verdict": "PASS",
+    "evidence": "q=\"🔥📦🏭\" hits=0 injectedScript=false apiErrs=0 pageErr=0 "
+  },
+  {
+    "name": "search: combining-char",
+    "verdict": "PASS",
+    "evidence": "q=\"Ива́нов\" hits=0 injectedScript=false apiErrs=0 pageErr=0 "
+  },
+  {
+    "name": "search: quotes",
+    "verdict": "PASS",
+    "evidence": "q=\"O'Brien \\\"quoted\\\" \\\\backslash\" hits=0 injectedScript=false apiErrs=0 pageErr=0 "
+  },
+  {
+    "name": "search: empty query",
+    "verdict": "PASS",
+    "evidence": "entityCalls=0 url=http://localhost:3000/search"
+  },
+  {
+    "name": "search: result click-through",
+    "verdict": "PASS",
+    "evidence": "landed=http://localhost:3000/entities/00000000-0000-7000-9000-000000000006"
+  },
+  {
+    "name": "search: pagination",
+    "verdict": "INFO",
+    "evidence": "results capped at limit=50, no pagination UI"
+  },
+  {
+    "name": "create: form renders",
+    "verdict": "PASS",
+    "evidence": "inputs=2"
+  },
+  {
+    "name": "create: required-field errors",
+    "verdict": "FAIL",
+    "evidence": "POST=422 formStillThere=0 inlineErrBlock=false msgShown=true — 422 has no validation_errors map → viewError destroys the form"
+  },
+  {
+    "name": "create: entity created → card",
+    "verdict": "PASS",
+    "evidence": "POST=200 landed=http://localhost:3000/entities/01a15c47-a4ba-7a13-a589-6457d184bfa3 pid=01a15c47-a4ba-7a13-a589-6457d184bfa3"
+  },
+  {
+    "name": "create: dedup dialog appears",
+    "verdict": "PASS",
+    "evidence": "visible=true \"Возможный дубликат Точное совпадение wh_zone #1001637 wh_zone Открыть существующий Создать отдельный Отмена\""
+  },
+  {
+    "name": "create: create-distinct on exact dup",
+    "verdict": "FAIL",
+    "evidence": "POST=409 landed=http://localhost:3000/objects/wh_zone/create?catalog=wh formAlive=0 errShown=true — 409 identity collision → viewError destroys the form (same bug as required-field)"
+  },
+  {
+    "name": "create: draft save + restore",
+    "verdict": "PASS",
+    "evidence": "localStorage=true restoredValue=\"Z-QA-R6-55525-DRAFT\" toast=true"
+  },
+  {
+    "name": "entity: edit + revision bump",
+    "verdict": "PASS",
+    "evidence": "PUT=200 rev 1→2 landed=true revBadgeShown=true"
+  },
+  {
+    "name": "cleanup: retire entity via UI",
+    "verdict": "PASS",
+    "evidence": "dialog=true POST=200 status=retired"
+  },
+  {
+    "name": "a11y: tab order reaches sidebar",
+    "verdict": "PASS",
+    "evidence": "sequence: header:BUTTON | header:A→/ | header:INPUT | header:BUTTON | header:BUTTON | header:BUTTON | sidebar:A→/ | sidebar:A→/objects | sidebar:A→/requests | sidebar:A→/checks | sidebar:A→/monitoring | sidebar:A→/risks | sidebar:A→/reports | sidebar:A→/docs"
+  },
+  {
+    "name": "a11y: focus-visible indicator",
+    "verdict": "PASS",
+    "evidence": "14/14 focused elements show visible outline"
+  },
+  {
+    "name": "a11y: unlabeled icon buttons types",
+    "verdict": "FAIL",
+    "evidence": "31: [\"iconify i-lucide:trash shrink-0 size-4\",\"iconify i-lucide:trash shrink-0 size-4\",\"iconify i-lucide:trash shrink-0 size-4\",\"iconify i-lucide:trash shrink-0 size-4\",\"iconify i-lucide:trash shrink-0 size-4\"]"
+  },
+  {
+    "name": "a11y: unlabeled icon buttons predicates",
+    "verdict": "FAIL",
+    "evidence": "122: [\"iconify i-lucide:trash shrink-0 size-4\",\"iconify i-lucide:trash shrink-0 size-4\",\"iconify i-lucide:trash shrink-0 size-4\",\"iconify i-lucide:trash shrink-0 size-4\",\"iconify i-lucide:trash shrink-0 size-4\"]"
+  },
+  {
+    "name": "a11y: unlabeled icon buttons integrations",
+    "verdict": "FAIL",
+    "evidence": "4: [\"iconify i-lucide:heart-pulse shrink-0 size-4\",\"iconify i-lucide:pause shrink-0 size-4\",\"iconify i-lucide:heart-pulse shrink-0 size-4\",\"iconify i-lucide:pause shrink-0 size-4\"]"
+  },
+  {
+    "name": "400px admin-dump",
+    "verdict": "PASS",
+    "evidence": "scrollW=400 innerW=400 pageErr=0"
+  },
+  {
+    "name": "400px admin-schema",
+    "verdict": "PASS",
+    "evidence": "scrollW=400 innerW=400 pageErr=0"
+  },
+  {
+    "name": "400px admin-types",
+    "verdict": "PASS",
+    "evidence": "scrollW=400 innerW=400 pageErr=0"
+  },
+  {
+    "name": "400px admin-predicates",
+    "verdict": "PASS",
+    "evidence": "scrollW=400 innerW=400 pageErr=0"
+  },
+  {
+    "name": "400px admin-catalogs",
+    "verdict": "PASS",
+    "evidence": "scrollW=400 innerW=400 pageErr=0"
+  },
+  {
+    "name": "400px integrations",
+    "verdict": "PASS",
+    "evidence": "scrollW=400 innerW=400 pageErr=0"
+  },
+  {
+    "name": "400px docs",
+    "verdict": "PASS",
+    "evidence": "scrollW=400 innerW=400 pageErr=0"
+  },
+  {
+    "name": "400px search",
+    "verdict": "PASS",
+    "evidence": "scrollW=400 innerW=400 pageErr=0"
+  },
+  {
+    "name": "400px create-whzone",
+    "verdict": "PASS",
+    "evidence": "scrollW=400 innerW=400 pageErr=0"
+  },
+  {
+    "name": "2560px admin-dump",
+    "verdict": "PASS",
+    "evidence": "scrollW=2560 innerW=2560 pageErr=0"
+  },
+  {
+    "name": "2560px admin-schema",
+    "verdict": "PASS",
+    "evidence": "scrollW=2560 innerW=2560 pageErr=0"
+  },
+  {
+    "name": "2560px admin-types",
+    "verdict": "PASS",
+    "evidence": "scrollW=2560 innerW=2560 pageErr=0"
+  },
+  {
+    "name": "2560px admin-predicates",
+    "verdict": "PASS",
+    "evidence": "scrollW=2560 innerW=2560 pageErr=0"
+  },
+  {
+    "name": "2560px admin-catalogs",
+    "verdict": "PASS",
+    "evidence": "scrollW=2560 innerW=2560 pageErr=0"
+  },
+  {
+    "name": "2560px integrations",
+    "verdict": "PASS",
+    "evidence": "scrollW=2560 innerW=2560 pageErr=0"
+  },
+  {
+    "name": "2560px docs",
+    "verdict": "PASS",
+    "evidence": "scrollW=2560 innerW=2560 pageErr=0"
+  },
+  {
+    "name": "2560px search",
+    "verdict": "PASS",
+    "evidence": "scrollW=2560 innerW=2560 pageErr=0"
+  },
+  {
+    "name": "2560px create-whzone",
+    "verdict": "PASS",
+    "evidence": "scrollW=2560 innerW=2560 pageErr=0"
+  },
+  {
+    "name": "rtl: he switches dir",
+    "verdict": "PASS",
+    "evidence": "optionFound=true dir=rtl lang=he"
+  },
+  {
+    "name": "rtl: /admin/schema layout flip",
+    "verdict": "PASS",
+    "evidence": "dir=rtl overflow=false i18n=none"
+  }
+]

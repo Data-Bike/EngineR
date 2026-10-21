@@ -156,6 +156,8 @@ export interface SchemaRevisionRecord {
   impact?: SchemaImpactReport | null;
   publish_reason?: string | null;
   retire_reason?: string | null;
+  /** Owning catalog alias — present on stored records, docs/28 §3. */
+  catalog?: string;
 }
 
 /** Create a draft, optionally based on a published revision. */

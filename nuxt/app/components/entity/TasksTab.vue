@@ -30,15 +30,15 @@
               <p v-if="task.description" class="text-sm text-[var(--ui-text-muted)] mt-1">{{ task.description }}</p>
               <!-- Meta -->
               <div class="flex flex-wrap items-center gap-3 mt-2 text-xs text-[var(--ui-text-muted)]">
-                <UBadge variant="subtle" size="sm">{{ t(`entity.tasks.kind.${task.kind}`) }}</UBadge>
+                <UBadge variant="subtle" size="sm">{{ enumLabel(t, te, 'entity.tasks.kind', task.kind) }}</UBadge>
                 <UBadge :color="taskStatusColor(task.status)" size="sm">
-                  {{ t(`entity.tasks.status.${task.status}`) }}
+                  {{ enumLabel(t, te, 'entity.tasks.status', task.status) }}
                 </UBadge>
                 <span v-if="task.assignee">{{ t('entity.tasks.assignee') }}: {{ task.assignee }}</span>
                 <span v-if="task.due_date" :class="{ 'text-red-500': isOverdue(task.due_date) }">
-                  {{ t('entity.tasks.due_date') }}: {{ task.due_date }}
+                  {{ t('entity.tasks.due_date') }}: {{ formatDateTime(task.due_date) }}
                 </span>
-                <span>{{ t('entity.tasks.created') }}: {{ task.created_at }}</span>
+                <span>{{ t('entity.tasks.created') }}: {{ formatDateTime(task.created_at) }}</span>
               </div>
               <!-- Sub-tasks -->
               <div v-if="task.sub_tasks && task.sub_tasks.length > 0" class="mt-2 text-xs text-[var(--ui-text-muted)]">
@@ -115,7 +115,7 @@ const props = defineProps<{
   requestId?: string;
 }>();
 
-const { t } = useI18n();
+const { t, te } = useI18n();
 const toast = useToast();
 const api = useApi();
 
@@ -204,7 +204,7 @@ async function fetchTasks() {
       due_date: task.due_date ?? undefined,
     }));
   } catch (e: unknown) {
-    toast.add({ title: t('common.error'), description: e instanceof Error ? e.message : String(e), color: 'error' });
+    toast.add({ title: t('common.error'), description: displayError(e, t, te), color: 'error' });
     tasks.value = [];
   }
 }
@@ -215,7 +215,7 @@ async function startTask(taskId: string) {
     toast.add({ title: t('entity.tasks.start'), color: 'success' });
     await fetchTasks();
   } catch (e: unknown) {
-    toast.add({ title: t('common.error'), description: e instanceof Error ? e.message : String(e), color: 'error' });
+    toast.add({ title: t('common.error'), description: displayError(e, t, te), color: 'error' });
   }
 }
 
@@ -225,7 +225,7 @@ async function completeTask(taskId: string) {
     toast.add({ title: t('entity.tasks.complete'), color: 'success' });
     await fetchTasks();
   } catch (e: unknown) {
-    toast.add({ title: t('common.error'), description: e instanceof Error ? e.message : String(e), color: 'error' });
+    toast.add({ title: t('common.error'), description: displayError(e, t, te), color: 'error' });
   }
 }
 
@@ -235,7 +235,7 @@ async function cancelTask(taskId: string) {
     toast.add({ title: t('common.cancel'), color: 'success' });
     await fetchTasks();
   } catch (e: unknown) {
-    toast.add({ title: t('common.error'), description: e instanceof Error ? e.message : String(e), color: 'error' });
+    toast.add({ title: t('common.error'), description: displayError(e, t, te), color: 'error' });
   }
 }
 
@@ -256,7 +256,7 @@ async function createTask() {
     newDueDate.value = '';
     await fetchTasks();
   } catch (e: unknown) {
-    toast.add({ title: t('common.error'), description: e instanceof Error ? e.message : String(e), color: 'error' });
+    toast.add({ title: t('common.error'), description: displayError(e, t, te), color: 'error' });
   } finally {
     creating.value = false;
   }

@@ -101,7 +101,7 @@ impl PermSet {
         let i = op.index();
         if effect == "deny" {
             self.deny[i] = true;
-        } else {
+        } else if effect == "allow" {
             self.allow[i] = true;
         }
     }
@@ -147,6 +147,9 @@ pub struct DataPerm {
     /// (path prefix, allow) url rules sorted longest-prefix-first.
     url_rules: Vec<(String, bool)>,
     url_blanket_deny: bool,
+    /// Tenant the rules were loaded for — binds `tokenize` masks so equal
+    /// values in different tenants yield different tokens.
+    tenant: uuid::Uuid,
 }
 
 fn str_field(resource: &Value, key: &str) -> String {
@@ -198,6 +201,9 @@ impl DataPerm {
              FROM sec.policy_rule r
              WHERE r.tenant_id = $1
                AND r.group_id IN (SELECT group_id FROM eff)
+               AND r.policy_revision = (SELECT revision_id FROM sec.policy_revision
+                   WHERE tenant_id = $1 AND state = 'published'
+                   ORDER BY published_at DESC NULLS LAST LIMIT 1)
                AND r.valid_from <= now() + interval '120 seconds'
                AND (r.valid_to IS NULL OR r.valid_to >= now())",
         )
@@ -233,6 +239,7 @@ impl DataPerm {
         .map_err(&db)?;
 
         let mut perm = DataPerm::from_flags(&flags);
+        perm.tenant = tenant;
         for row in &rows {
             let action: String = row.try_get("action").unwrap_or_default();
             let effect: String = row.try_get("effect").unwrap_or_default();
@@ -283,6 +290,9 @@ impl DataPerm {
                      FROM sec.policy_rule r
                      WHERE r.tenant_id = $1
                        AND r.group_id IN (SELECT group_id FROM eff)
+                       AND r.policy_revision = (SELECT revision_id FROM sec.policy_revision
+                           WHERE tenant_id = $1 AND state = 'published'
+                           ORDER BY published_at DESC NULLS LAST LIMIT 1)
                        AND r.valid_from <= now() + interval '120 seconds'
                        AND (r.valid_to IS NULL OR r.valid_to >= now())",
                 )
@@ -346,6 +356,7 @@ impl DataPerm {
                 })
                 .unwrap_or_default(),
         );
+        perm.tenant = tenant;
         for r in v["rules"].as_array().cloned().unwrap_or_default() {
             perm.apply_rule(
                 r["action"].as_str().unwrap_or_default(),
@@ -761,13 +772,27 @@ impl DataPerm {
                 return false;
             }
         }
+        // URL rules are written in either surface's terms — `/reports`
+        // (SPA route) or `/api/v1/reports` (API route). Match the request
+        // path against both its raw and `/api/v1`-stripped form so a single
+        // rule covers the page *and* the endpoint it calls; otherwise a deny
+        // written for the UI leaves the API wide open (capabilities still
+        // apply underneath, but the URL layer must not be silently inert).
+        let stripped = path.strip_prefix("/api/v1").unwrap_or(path);
         for (prefix, allow) in &self.url_rules {
-            // Longest-prefix match; '/' matches every path.
-            if path == *prefix
-                || prefix == "/"
-                || *prefix == "*"
-                || path.starts_with(&format!("{prefix}/"))
-            {
+            // Longest-prefix match; '/' matches every path. Both the request
+            // path and the rule prefix are compared raw and `/api/v1`-stripped
+            // so either convention on either side still resolves to one rule.
+            let rule_short = prefix.strip_prefix("/api/v1").unwrap_or(prefix.as_str());
+            let matches = [path, stripped].iter().any(|p| {
+                [prefix.as_str(), rule_short].iter().any(|prefix| {
+                    *p == *prefix
+                        || *prefix == "/"
+                        || *prefix == "*"
+                        || p.starts_with(&format!("{prefix}/"))
+                })
+            });
+            if matches {
                 return *allow;
             }
         }
@@ -867,13 +892,14 @@ impl DataPerm {
                 // tokens without revealing the cleartext. Strings hash without
                 // the JSON quotes; other kinds use their JSON representation.
                 "tokenize" | "token" => {
+                    let tenant = self.tenant;
                     let token = fields
                         .get(&k)
                         .map(|v| match v.as_str() {
-                            Some(s) => tokenize(s),
-                            None => tokenize(&v.to_string()),
+                            Some(s) => tokenize(tenant, s),
+                            None => tokenize(tenant, &v.to_string()),
                         })
-                        .unwrap_or_else(|| tokenize(&k));
+                        .unwrap_or_else(|| tokenize(tenant, &k));
                     fields.insert(k, Value::String(token));
                 }
                 _ => {}
@@ -882,10 +908,36 @@ impl DataPerm {
     }
 }
 
-/// Deterministic token for the `tokenize` mask — stable pseudonym, not PII.
-fn tokenize(s: &str) -> String {
-    use sha2::{Digest, Sha256};
-    let digest = Sha256::digest(s.as_bytes());
+/// Key for `tokenize` masks: `ENGINER_MASK_KEY`, or an ephemeral
+/// per-process key when unset — still unpredictable to an attacker who
+/// only sees tokens, just not stable across restarts.
+fn mask_key() -> &'static [u8] {
+    static KEY: std::sync::OnceLock<Vec<u8>> = std::sync::OnceLock::new();
+    KEY.get_or_init(|| match std::env::var("ENGINER_MASK_KEY") {
+        Ok(k) if !k.is_empty() => k.into_bytes(),
+        _ => {
+            tracing::warn!(
+                "ENGINER_MASK_KEY unset — tokenize masks use an ephemeral key"
+            );
+            let mut k = uuid::Uuid::new_v4().as_bytes().to_vec();
+            k.extend_from_slice(uuid::Uuid::new_v4().as_bytes());
+            k
+        }
+    })
+}
+
+/// Deterministic token for the `tokenize` mask — keyed HMAC-SHA256 bound
+/// to the tenant, so low-entropy values resist dictionary attacks and
+/// equal values in different tenants yield different pseudonyms.
+pub(crate) fn tokenize(tenant: uuid::Uuid, s: &str) -> String {
+    use hmac::{Hmac, Mac};
+    use sha2::Sha256;
+    let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(mask_key())
+        .expect("hmac accepts any key length");
+    mac.update(tenant.as_bytes());
+    mac.update(&[0]);
+    mac.update(s.as_bytes());
+    let digest = mac.finalize().into_bytes();
     format!("tok_{}", &hex_lower(&digest[..8]))
 }
 
@@ -894,7 +946,7 @@ fn hex_lower(bytes: &[u8]) -> String {
 }
 
 /// Keep the outer two characters of a string, mask the middle.
-fn partial_mask(s: &str) -> String {
+pub(crate) fn partial_mask(s: &str) -> String {
     let chars: Vec<char> = s.chars().collect();
     if chars.len() <= 4 {
         return "*".repeat(chars.len());

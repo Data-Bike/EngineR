@@ -41,8 +41,8 @@ const systemFields = computed(() => [
   { label: 'Class', value: props.entity.entity_class },
   { label: 'Revision', value: String(props.entity.revision) },
   { label: 'Status', value: props.entity.status },
-  { label: 'Created at', value: props.entity.created_at },
-  { label: 'Retired at', value: props.entity.retired_at ?? '—' },
+  { label: 'Created at', value: formatDateTime(props.entity.created_at) },
+  { label: 'Retired at', value: props.entity.retired_at ? formatDateTime(props.entity.retired_at) : '—' },
 ]);
 
 // Entity data fields from the API response (entity.fields)

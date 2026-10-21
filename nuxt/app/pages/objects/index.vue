@@ -7,23 +7,30 @@
 
     <div v-if="loading" class="py-8 text-center text-[var(--ui-text-muted)]">{{ t('common.loading') }}</div>
     <div v-else class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-      <UCard v-for="typ in types" :key="`${typ.catalog ?? ''}:${typ.id}`" class="hover:border-[var(--ui-primary)] transition-colors cursor-pointer" @click="openType(typ)">
-        <template #header>
-          <div class="flex items-center gap-3">
-            <UIcon :name="typeIcon(typ.id)" class="text-2xl text-[var(--ui-primary)]" />
-            <div>
-              <h3 class="font-semibold">{{ typ.display_name }}</h3>
-              <p class="text-xs text-[var(--ui-text-muted)] font-mono">
-                {{ typ.id }}<template v-if="typ.catalog"> · {{ typ.catalog }}</template>
-              </p>
+      <NuxtLink
+        v-for="typ in types"
+        :key="`${typ.catalog ?? ''}:${typ.id}`"
+        :to="typeLink(typ)"
+        class="block rounded-lg focus-visible:outline-2 focus-visible:outline-[var(--ui-primary)]"
+      >
+        <UCard class="h-full hover:border-[var(--ui-primary)] transition-colors">
+          <template #header>
+            <div class="flex items-center gap-3">
+              <UIcon :name="typeIcon(typ.id)" class="text-2xl text-[var(--ui-primary)]" />
+              <div>
+                <h3 class="font-semibold">{{ typ.display_name }}</h3>
+                <p class="text-xs text-[var(--ui-text-muted)] font-mono">
+                  {{ typ.id }}<template v-if="typ.catalog"> · {{ typ.catalog }}</template>
+                </p>
+              </div>
             </div>
+          </template>
+          <div class="flex items-center justify-between text-sm">
+            <span class="text-[var(--ui-text-muted)]">{{ t('objects.count') }}: {{ typ.count ?? '—' }}</span>
+            <UBadge variant="subtle" size="sm">{{ t(`objects.status.${typ.status}`) }}</UBadge>
           </div>
-        </template>
-        <div class="flex items-center justify-between text-sm">
-          <span class="text-[var(--ui-text-muted)]">{{ t('objects.count') }}: {{ typ.count ?? '—' }}</span>
-          <UBadge variant="subtle" size="sm">{{ t(`objects.status.${typ.status}`) }}</UBadge>
-        </div>
-      </UCard>
+        </UCard>
+      </NuxtLink>
     </div>
   </div>
 </template>
@@ -35,7 +42,7 @@ import { useI18n } from 'vue-i18n';
 
 definePageMeta({ middleware: ['auth', capability('entity.read')] });
 
-const { t } = useI18n();
+const { t, te } = useI18n();
 const toast = useToast();
 const api = useApi();
 const { catalogParams, selected } = useCatalog();
@@ -69,11 +76,11 @@ function typeIcon(typeId: string): string {
   }
 }
 
-function openType(typ: TypeRow) {
-  navigateTo({
+function typeLink(typ: TypeRow) {
+  return {
     path: `/objects/${typ.id}`,
     query: typ.catalog ? { catalog: typ.catalog } : {},
-  });
+  };
 }
 
 async function fetchTypes() {
@@ -86,7 +93,7 @@ async function fetchTypes() {
       count: schemaType.entity_count ?? schemaType.count ?? 0,
     }));
   } catch (err) {
-    toast.add({ title: t('common.error'), description: err instanceof Error ? err.message : String(err), color: 'error' });
+    toast.add({ title: t('common.error'), description: displayError(err, t, te), color: 'error' });
   } finally {
     loading.value = false;
   }

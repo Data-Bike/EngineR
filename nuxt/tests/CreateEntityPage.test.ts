@@ -9,9 +9,11 @@ const UButton = {
   template: '<button @click="$emit(\'click\')"><slot /></button>',
 };
 
+const markSaved = vi.fn();
 const EntityFormRenderer = {
   props: ['view', 'submitting'],
   emits: ['submit', 'cancel', 'save-draft'],
+  methods: { markSaved },
   template: `
     <button class="submit" @click="$emit('submit', {
       type_id: 'wh_warehouse',
@@ -100,6 +102,7 @@ describe('EntityCreatePage', () => {
       }),
       expect.anything(),
     );
+    expect(markSaved).toHaveBeenCalled();
     expect((globalThis as any).navigateTo).toHaveBeenCalledWith('/entities/p9');
   });
 });

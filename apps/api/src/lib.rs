@@ -36,6 +36,12 @@ mod workspace_routes;
 pub use config::ApiConfig;
 pub use state::AppState;
 
+/// Fail any dump/restore runs left marked `running`/`restoring` by a
+/// previous process. Called once at boot; see `dump_routes::sweep_dead_markers`.
+pub fn sweep_orphaned_dump_runs() {
+    dump_routes::sweep_dead_markers();
+}
+
 use rocket::serde::json::Json;
 use rocket::{catch, catchers, get, options, routes, Build, Rocket};
 
@@ -53,6 +59,7 @@ pub fn rocket_build(state: AppState) -> Rocket<Build> {
         .attach(AuditFairing)
         .mount("/health", routes![health::live, health::ready])
         .mount("/health", routes![options_preflight])
+        .mount("/api/v1/health", routes![health::live, health::ready])
         .mount("/api/v1", routes![version])
         .mount("/api/v1", routes![options_preflight])
         .mount("/api/v1", auth_routes::routes())
@@ -174,6 +181,159 @@ fn api_error(code: &str, message: &str) -> Json<serde_json::Value> {
     }))
 }
 
+/// Route error responder carrying the machine-readable `error.code` —
+/// same envelope shape as the top-level catchers but preserving the
+/// specific code (`catalog.unknown`, `cursor.invalid`, …) instead of the
+/// generic per-status one. `http_err` encodes `HTTP{status}:{detail}`
+/// inside `DbError`; `of_db` decodes it back.
+#[derive(Debug)]
+pub struct ApiError {
+    pub status: rocket::http::Status,
+    pub code: String,
+    pub message: String,
+}
+
+impl ApiError {
+    fn default_code(status: rocket::http::Status) -> &'static str {
+        match status.code {
+            400 => "bad_request",
+            401 => "unauthorized",
+            403 => "forbidden",
+            404 => "not_found",
+            409 => "conflict",
+            422 => "unprocessable_entity",
+            _ => "internal_error",
+        }
+    }
+
+    pub(crate) fn default_message(status: rocket::http::Status) -> &'static str {
+        match status.code {
+            400 => "Некорректный запрос",
+            401 => "Требуется аутентификация",
+            403 => "Доступ запрещён",
+            404 => "Ресурс не найден",
+            409 => "Конфликт версии или состояния",
+            422 => "Запрос не прошёл валидацию",
+            _ => "Внутренняя ошибка сервера",
+        }
+    }
+
+    /// The message when it carries specifics beyond the generic per-status
+    /// text — clients localize `message_key` and append this detail.
+    pub fn detail(&self) -> Option<&str> {
+        let msg = self.message.trim();
+        (!msg.is_empty() && msg != Self::default_message(self.status)).then_some(msg)
+    }
+
+    /// Structured error with an explicit machine code (`cursor.invalid`,
+    /// `catalog.denied`, …) and the generic per-status message.
+    pub fn coded(status: rocket::http::Status, code: &str) -> Self {
+        Self {
+            status,
+            code: code.to_string(),
+            message: Self::default_message(status).to_string(),
+        }
+    }
+
+    /// Decode a `DbError` produced by `http_err` (`HTTP{status}:{detail}`)
+    /// or `sf_err` (`SF|{status}|{code}|{message}`). A detail that looks
+    /// like a machine token (`catalog.unknown`) becomes `code`; free text
+    /// becomes `message` under the generic per-status code.
+    pub fn of_db(e: &enginer_db_runtime::DbError) -> Self {
+        if let enginer_db_runtime::DbError::Other { message } = e {
+            if let Some(rest) = message.strip_prefix("SF|") {
+                let mut parts = rest.splitn(3, '|');
+                let status = parts
+                    .next()
+                    .and_then(|s| s.parse::<u16>().ok())
+                    .and_then(rocket::http::Status::from_code)
+                    .unwrap_or(rocket::http::Status::InternalServerError);
+                if status.code >= 500 {
+                    tracing::error!(error = %e, status = %status, "sf error mapped to status");
+                }
+                return Self {
+                    status,
+                    code: parts.next().unwrap_or("internal_error").to_string(),
+                    message: parts.next().unwrap_or("error").to_string(),
+                };
+            }
+            if let Some(rest) = message.strip_prefix("HTTP") {
+                if let Some((status_s, detail)) = rest.split_once(':') {
+                    if let Some(status) = status_s
+                        .parse::<u16>()
+                        .ok()
+                        .and_then(rocket::http::Status::from_code)
+                    {
+                        if status.code >= 500 {
+                            tracing::error!(error = %e, status = %status, "db error mapped to status");
+                        }
+                        // Dotted/underscored single tokens are machine
+                        // codes (`catalog.unknown`); bare words (`group`)
+                        // stay human messages under the generic code.
+                        let machine_token = !detail.is_empty()
+                            && (detail.contains('.') || detail.contains('_'))
+                            && detail.chars().all(|c| {
+                                c.is_ascii_lowercase()
+                                    || c.is_ascii_digit()
+                                    || matches!(c, '.' | '_' | '-')
+                            });
+                        return if machine_token {
+                            Self {
+                                status,
+                                code: detail.to_string(),
+                                message: Self::default_message(status).to_string(),
+                            }
+                        } else {
+                            Self {
+                                status,
+                                code: Self::default_code(status).to_string(),
+                                message: detail.to_string(),
+                            }
+                        };
+                    }
+                }
+            }
+        }
+        tracing::error!(error = %e, "unhandled db error");
+        Self::from(rocket::http::Status::InternalServerError)
+    }
+}
+
+impl From<rocket::http::Status> for ApiError {
+    fn from(status: rocket::http::Status) -> Self {
+        if status.code >= 500 {
+            tracing::error!(status = %status, "api error mapped to 5xx");
+        }
+        Self {
+            status,
+            code: Self::default_code(status).to_string(),
+            message: Self::default_message(status).to_string(),
+        }
+    }
+}
+
+impl<'r> rocket::response::Responder<'r, 'static> for ApiError {
+    fn respond_to(
+        self,
+        request: &'r rocket::Request<'_>,
+    ) -> rocket::response::Result<'static> {
+        let mut body = serde_json::json!({
+            "error": {
+                "code": self.code,
+                "message_key": format!("errors.{}", self.code),
+                "request_id": uuid::Uuid::now_v7().to_string(),
+                "message": self.message,
+            }
+        });
+        if let Some(detail) = self.detail() {
+            body["error"]["detail"] = serde_json::Value::String(detail.to_string());
+        }
+        let mut response = Json(body).respond_to(request)?;
+        response.set_status(self.status);
+        Ok(response)
+    }
+}
+
 #[catch(400)]
 fn api_bad_request() -> Json<serde_json::Value> {
     api_error("bad_request", "Некорректный запрос")
@@ -218,4 +378,60 @@ fn version() -> Json<serde_json::Value> {
 #[options("/<_..>")]
 fn options_preflight() -> rocket::http::Status {
     rocket::http::Status::NoContent
+}
+
+#[cfg(test)]
+mod api_error_tests {
+    use super::ApiError;
+    use enginer_db_runtime::DbError;
+    use rocket::http::Status;
+
+    fn other(msg: &str) -> DbError {
+        DbError::Other {
+            message: msg.to_string(),
+        }
+    }
+
+    #[test]
+    fn of_db_decodes_http_machine_code() {
+        let e = ApiError::of_db(&other("HTTP422:catalog.unknown"));
+        assert_eq!(e.status, Status::UnprocessableEntity);
+        assert_eq!(e.code, "catalog.unknown");
+    }
+
+    #[test]
+    fn of_db_decodes_sf_envelope() {
+        let e = ApiError::of_db(&other("SF|422|cursor.invalid|bad cursor"));
+        assert_eq!(e.status, Status::UnprocessableEntity);
+        assert_eq!(e.code, "cursor.invalid");
+        assert_eq!(e.message, "bad cursor");
+    }
+
+    #[test]
+    fn of_db_keeps_free_text_as_message() {
+        let e = ApiError::of_db(&other("HTTP404:group not found"));
+        assert_eq!(e.status, Status::NotFound);
+        assert_eq!(e.code, "not_found");
+        assert_eq!(e.message, "group not found");
+    }
+
+    #[test]
+    fn detail_only_when_message_is_specific() {
+        assert_eq!(
+            ApiError::of_db(&other("HTTP422:required fields missing: name")).detail(),
+            Some("required fields missing: name")
+        );
+        assert_eq!(ApiError::of_db(&other("HTTP422:due_date.invalid")).detail(), None);
+        assert_eq!(ApiError::from(Status::NotFound).detail(), None);
+        assert_eq!(
+            ApiError::of_db(&other("SF|409|catalog.retired|Каталог погашен")).detail(),
+            Some("Каталог погашен")
+        );
+    }
+
+    #[test]
+    fn of_db_unrecognised_falls_back_to_500() {
+        let e = ApiError::of_db(&other("some driver failure"));
+        assert_eq!(e.status, Status::InternalServerError);
+    }
 }

@@ -5,6 +5,14 @@
       <p class="text-[var(--ui-text-muted)] mt-1">{{ t('docs.subtitle') }}</p>
     </div>
 
+    <UAlert
+      v-if="locale !== 'ru'"
+      color="info"
+      variant="subtle"
+      icon="i-lucide-languages"
+      :title="t('docs.ru_only')"
+    />
+
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-4">
       <!-- Doc sections sidebar -->
       <div class="lg:col-span-1 space-y-3">
@@ -57,7 +65,7 @@ import { useI18n } from 'vue-i18n';
 
 definePageMeta({ middleware: 'auth' });
 
-const { t } = useI18n();
+const { t, locale } = useI18n();
 
 interface DocItem {
   id: string;

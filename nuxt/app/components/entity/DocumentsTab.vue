@@ -94,7 +94,7 @@ const props = defineProps<{
   entityId: string;
 }>();
 
-const { t } = useI18n();
+const { t, te } = useI18n();
 const toast = useToast();
 const api = useApi();
 
@@ -167,7 +167,7 @@ async function fetchDocuments() {
       source: doc.source,
     }));
   } catch (e: unknown) {
-    toast.add({ title: t('common.error'), description: e instanceof Error ? e.message : String(e), color: 'error' });
+    toast.add({ title: t('common.error'), description: displayError(e, t, te), color: 'error' });
     documents.value = [];
   }
 }
@@ -190,7 +190,7 @@ async function uploadDoc() {
     newFile.value = null;
     await fetchDocuments();
   } catch (e: unknown) {
-    toast.add({ title: t('common.error'), description: e instanceof Error ? e.message : String(e), color: 'error' });
+    toast.add({ title: t('common.error'), description: displayError(e, t, te), color: 'error' });
   } finally {
     uploading.value = false;
   }
@@ -210,7 +210,7 @@ async function downloadDoc(doc: DocumentItem) {
     window.URL.revokeObjectURL(url);
     toast.add({ title: t('entity.documents.download'), color: 'success' });
   } catch (e: unknown) {
-    toast.add({ title: t('common.error'), description: e instanceof Error ? e.message : String(e), color: 'error' });
+    toast.add({ title: t('common.error'), description: displayError(e, t, te), color: 'error' });
   }
 }
 
@@ -221,7 +221,7 @@ async function previewDoc(doc: DocumentItem) {
     window.open(url, '_blank', 'noopener,noreferrer');
     window.setTimeout(() => window.URL.revokeObjectURL(url), 60_000);
   } catch (e: unknown) {
-    toast.add({ title: t('common.error'), description: e instanceof Error ? e.message : String(e), color: 'error' });
+    toast.add({ title: t('common.error'), description: displayError(e, t, te), color: 'error' });
   }
 }
 
@@ -231,7 +231,7 @@ async function removeDoc(doc: DocumentItem) {
     toast.add({ title: t('entity.documents.removed'), color: 'success' });
     await fetchDocuments();
   } catch (e: unknown) {
-    toast.add({ title: t('common.error'), description: e instanceof Error ? e.message : String(e), color: 'error' });
+    toast.add({ title: t('common.error'), description: displayError(e, t, te), color: 'error' });
   }
 }
 

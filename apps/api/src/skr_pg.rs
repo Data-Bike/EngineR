@@ -10,9 +10,10 @@
 //! - `/connectors*` — integration.connector
 
 use crate::authn::AuthContext;
-use crate::entity_pg::{db_err, http_err, load_fields, rls_tx, to_status};
+use crate::entity_pg::{db_err, http_err, load_fields, rls_tx};
 use crate::workspace_routes::{meta, ApiEnvelope, CapabilityGuard};
 use crate::AppState;
+use crate::ApiError;
 use enginer_db_runtime::{AsyncStdDbExecutor, DbError, Deadline};
 use rocket::http::Status;
 use rocket::serde::json::Json;
@@ -98,8 +99,8 @@ impl RowCatalogGate {
     }
 }
 
-fn pg(state: &State<AppState>) -> Result<Arc<AsyncStdDbExecutor>, Status> {
-    state.db_executor.clone().ok_or(Status::ServiceUnavailable)
+fn pg(state: &State<AppState>) -> Result<Arc<AsyncStdDbExecutor>, ApiError> {
+    state.db_executor.clone().ok_or_else(|| ApiError::from(Status::ServiceUnavailable))
 }
 
 async fn tx<'e>(pool: &'e PgPool, ctx: &AuthContext) -> Result<Transaction<'e, Postgres>, DbError> {
@@ -125,23 +126,61 @@ async fn entity_ref2(
     }
     let eid = erow.entity_id;
     let fields = load_fields(tx, tenant, &[eid]).await?;
-    let type_alias: String = sqlx::query_scalar(
-        "SELECT COALESCE(td.stable_alias,'')
-         FROM core.entity e LEFT JOIN meta.type_definition td
-           ON td.tenant_id=e.tenant_id AND td.type_id=e.type_id
-         WHERE e.tenant_id=$1 AND e.entity_id=$2",
-    )
-    .bind(tenant)
-    .bind(eid)
+    let name = display_name_scoped(tx, ctx, &erow, fields.get(&eid)).await?;
+    Ok((eid, name))
+}
+
+/// Display name built only from fields the caller may read: `filter_fields`
+/// drops denied predicates, `mask_fields` redacts readable-but-masked ones
+/// — a name built from raw `load_fields` would leak denied values.
+async fn display_name_scoped(
+    tx: &mut Transaction<'_, Postgres>,
+    ctx: &AuthContext,
+    erow: &crate::entity_pg::EntityRow,
+    fields: Option<&serde_json::Map<String, Value>>,
+) -> Result<String, DbError> {
+    let type_alias = &erow.type_alias;
+    let eid = erow.entity_id;
+    let Some(fields) = fields else {
+        return Ok(format!("{type_alias} #{eid}"));
+    };
+    let perm = crate::entity_pg::perm_for(tx, ctx).await?;
+    let mut owned = fields.clone();
+    let tkeys = crate::entity_pg::type_keys(erow);
+    let ckeys = crate::entity_pg::catalog_keys(erow);
+    let tk: [&str; 2] = [&tkeys[0], &tkeys[1]];
+    let ck: [&str; 2] = [&ckeys[0], &ckeys[1]];
+    // A denied entity shows only its type+id fallback — never field data.
+    if !crate::entity_pg::entity_visible(&perm, erow) {
+        return Ok(format!("{type_alias} #{eid}"));
+    }
+    perm.filter_fields(&tk, &ck, &mut owned);
+    perm.mask_fields(&tk, &ck, &mut owned);
+    Ok(crate::entity_pg::display_name_of(type_alias, &owned, eid))
+}
+
+/// Minimal key fetch + scoped display name for call sites that only hold
+/// an internal entity id (list rows joined to checks/reports/etc.).
+async fn display_name_for(
+    tx: &mut Transaction<'_, Postgres>,
+    ctx: &AuthContext,
+    entity_id: i64,
+) -> Result<String, DbError> {
+    let row: Option<crate::entity_pg::EntityRowTuple> = sqlx::query_as(&format!(
+        "{} AND e.entity_id = $2",
+        crate::entity_pg::ENTITY_SELECT
+    ))
+    .bind(ctx.tenant_id)
+    .bind(entity_id)
     .fetch_optional(&mut **tx)
     .await
-    .map_err(db_err)?
-    .unwrap_or_default();
-    let name = fields
-        .get(&eid)
-        .map(|f| crate::entity_pg::display_name_of(&type_alias, f, eid))
-        .unwrap_or_else(|| format!("{type_alias} #{eid}"));
-    Ok((eid, name))
+    .map_err(db_err)?;
+    let Some(tuple) = row else {
+        return Ok(String::new());
+    };
+    let erow = crate::entity_pg::row_to_entity_row(tuple);
+    let fields = load_fields(tx, ctx.tenant_id, &[entity_id]).await?;
+    display_name_scoped(tx, ctx, &erow, fields.get(&entity_id)).await
 }
 
 // ---------------------------------------------------------------------------
@@ -182,61 +221,75 @@ pub async fn query_checks(
     kind: Option<String>,
     limit: Option<u32>,
     cursor: Option<String>,
-) -> Result<Json<ApiEnvelope<Value>>, Status> {
+) -> Result<Json<ApiEnvelope<Value>>, ApiError> {
     let exec = pg(state)?;
     let ctx = cap.ctx.clone();
     let limit = limit.unwrap_or(50).clamp(1, 200) as i64;
     let v = exec
         .run(Deadline::in_secs(10), move |pool| async move {
             let mut t = tx(&pool, &ctx).await?;
-            let target_pid = target_entity_id
-                .as_deref()
-                .and_then(|s| s.parse::<uuid::Uuid>().ok());
+            // A present-but-invalid filter is a loud 422, not a silently
+            // widened (unfiltered) listing.
+            let target_pid = match target_entity_id.as_deref() {
+                None => None,
+                Some(s) => Some(
+                    s.parse::<uuid::Uuid>()
+                        .map_err(|_| http_err(422, "target_entity_id.invalid"))?,
+                ),
+            };
             if let Some(pid) = target_pid {
                 crate::entity_pg::checked_entity(&mut t, &ctx, pid, crate::dataperm::Op::Read)
                     .await?;
             }
-            let cursor_uuid = cursor.as_deref().and_then(|s| s.parse::<uuid::Uuid>().ok());
+            // Invalid cursor is a loud 422 — silently treating it as "no
+            // cursor" would hand back the first page to a confused client.
+            let cursor_uuid = match cursor.as_deref() {
+                None => None,
+                Some(s) => Some(
+                    s.parse::<uuid::Uuid>()
+                        .ok()
+                        .ok_or_else(|| http_err(422, "cursor.invalid"))?,
+                ),
+            };
             let mut gate = RowCatalogGate::load(&mut t, &ctx).await?;
+            // Keyset pagination on (started_at DESC, check_id DESC): the
+            // cursor positions via a subquery so same-timestamp ties are
+            // deterministic and a stale cursor can never resend page 1.
+            // Over-fetch a gate window since RowCatalogGate filters in memory.
+            let window = limit + 256;
             let rows = sqlx::query(&format!(
                 "{CHECK_SELECT}
                    AND ($2::uuid IS NULL OR e.public_id=$2)
                    AND ($3::text IS NULL OR c.status=$3)
                    AND ($4::text IS NULL OR c.kind=$4)
-                 ORDER BY c.started_at DESC
+                   AND ($6::uuid IS NULL OR (c.started_at, c.check_id) <
+                        (SELECT c2.started_at, c2.check_id FROM core.check_instance c2
+                         WHERE c2.tenant_id=$1 AND c2.check_id=$6))
+                 ORDER BY c.started_at DESC, c.check_id DESC
                  LIMIT $5",
             ))
             .bind(ctx.tenant_id)
             .bind(target_pid)
             .bind(status)
             .bind(kind)
-            .bind(limit + if cursor_uuid.is_some() { 1000 } else { 0 })
+            .bind(window)
+            .bind(cursor_uuid)
             .fetch_all(&mut *t)
             .await
             .map_err(db_err)?;
+            let fetched = rows.len() as i64;
             let mut out = Vec::new();
-            let mut past_cursor = cursor_uuid.is_none();
+            let mut examined = 0i64;
             for r in &rows {
-                let cid: uuid::Uuid = r.try_get("check_id").unwrap_or_default();
-                if !past_cursor {
-                    if Some(cid) == cursor_uuid {
-                        past_cursor = true;
-                    }
-                    continue;
-                }
+                examined += 1;
                 let ep: Option<uuid::Uuid> = r.try_get("entity_public").ok().flatten();
                 let eid: Option<i64> = r.try_get("entity_id").ok().flatten();
                 if !gate.entity_ok(&mut t, ctx.tenant_id, eid).await? {
                     continue;
                 }
-                let name = if let Some(eid) = eid {
-                    load_fields(&mut t, ctx.tenant_id, &[eid])
-                        .await?
-                        .get(&eid)
-                        .and_then(|f| crate::entity_pg::display_name_of("", f, eid).into())
-                        .unwrap_or_default()
-                } else {
-                    String::new()
+                let name = match eid {
+                    Some(eid) => display_name_for(&mut t, &ctx, eid).await?,
+                    None => String::new(),
                 };
                 out.push(check_row(
                     r,
@@ -247,13 +300,26 @@ pub async fn query_checks(
                     break;
                 }
             }
-            Ok(Value::Array(out))
+            // More rows may exist when the page filled before the fetched
+            // window was exhausted, or the window itself was full.
+            let has_more =
+                out.len() as i64 >= limit && (examined < fetched || fetched >= window);
+            let next_cursor = if has_more {
+                out.last()
+                    .and_then(|v| v.get("check_id").cloned())
+                    .unwrap_or(Value::Null)
+            } else {
+                Value::Null
+            };
+            Ok(json!({ "items": out, "next_cursor": next_cursor }))
         })
         .await
-        .map_err(|e| to_status(&e))?;
+        .map_err(|e| ApiError::of_db(&e))?;
+    let mut m = meta();
+    m["next_cursor"] = v.get("next_cursor").cloned().unwrap_or(Value::Null);
     Ok(Json(ApiEnvelope {
-        data: v,
-        meta: meta(),
+        data: v.get("items").cloned().unwrap_or(Value::Array(vec![])),
+        meta: m,
     }))
 }
 
@@ -262,10 +328,10 @@ pub async fn get_check(
     cap: CapabilityGuard,
     state: &State<AppState>,
     check_id: String,
-) -> Result<Json<ApiEnvelope<Value>>, Status> {
+) -> Result<Json<ApiEnvelope<Value>>, ApiError> {
     let exec = pg(state)?;
     let ctx = cap.ctx.clone();
-    let cid: uuid::Uuid = check_id.parse().map_err(|_| Status::NotFound)?;
+    let cid: uuid::Uuid = check_id.parse().map_err(|_| ApiError::from(Status::NotFound))?;
     let v = exec
         .run(Deadline::in_secs(10), move |pool| async move {
             let mut t = tx(&pool, &ctx).await?;
@@ -282,14 +348,9 @@ pub async fn get_check(
                     .await?;
             }
             let eid: Option<i64> = r.try_get("entity_id").ok().flatten();
-            let name = if let Some(eid) = eid {
-                load_fields(&mut t, ctx.tenant_id, &[eid])
-                    .await?
-                    .get(&eid)
-                    .map(|f| crate::entity_pg::display_name_of("", f, eid))
-                    .unwrap_or_default()
-            } else {
-                String::new()
+            let name = match eid {
+                Some(eid) => display_name_for(&mut t, &ctx, eid).await?,
+                None => String::new(),
             };
             Ok(check_row(
                 &r,
@@ -298,7 +359,7 @@ pub async fn get_check(
             ))
         })
         .await
-        .map_err(|e| to_status(&e))?;
+        .map_err(|e| ApiError::of_db(&e))?;
     Ok(Json(ApiEnvelope {
         data: v,
         meta: meta(),
@@ -310,10 +371,10 @@ pub async fn get_check_evidence(
     cap: CapabilityGuard,
     state: &State<AppState>,
     check_id: String,
-) -> Result<Json<ApiEnvelope<Value>>, Status> {
+) -> Result<Json<ApiEnvelope<Value>>, ApiError> {
     let exec = pg(state)?;
     let ctx = cap.ctx.clone();
-    let cid: uuid::Uuid = check_id.parse().map_err(|_| Status::NotFound)?;
+    let cid: uuid::Uuid = check_id.parse().map_err(|_| ApiError::from(Status::NotFound))?;
     let v = exec
         .run(Deadline::in_secs(10), move |pool| async move {
             let mut t = tx(&pool, &ctx).await?;
@@ -336,7 +397,7 @@ pub async fn get_check_evidence(
             Ok(json!({ "evidence": evidence }))
         })
         .await
-        .map_err(|e| to_status(&e))?;
+        .map_err(|e| ApiError::of_db(&e))?;
     Ok(Json(ApiEnvelope {
         data: v,
         meta: meta(),
@@ -348,22 +409,37 @@ pub async fn create_check(
     cap: CapabilityGuard,
     state: &State<AppState>,
     body: String,
-) -> Result<Json<ApiEnvelope<Value>>, Status> {
-    let parsed: Value = serde_json::from_str(&body).map_err(|_| Status::BadRequest)?;
+) -> Result<Json<ApiEnvelope<Value>>, ApiError> {
+    let parsed: Value = serde_json::from_str(&body).map_err(|_| ApiError::from(Status::BadRequest))?;
     let target_entity_id = parsed
         .get("target_entity_id")
         .and_then(Value::as_str)
-        .ok_or(Status::UnprocessableEntity)?
+        .ok_or_else(|| ApiError::from(Status::UnprocessableEntity))?
         .to_string();
+    // Kind vocabulary is connector-extensible, but still constrained:
+    // snake_case segments only — no edge/double underscores, no free-form
+    // garbage, no megabyte strings.
     let kind = parsed
         .get("check_kind")
         .and_then(Value::as_str)
         .unwrap_or("kyc")
         .to_string();
-    let request_id = parsed
-        .get("request_id")
-        .and_then(Value::as_str)
-        .and_then(|s| s.parse::<uuid::Uuid>().ok());
+    let kind_ok = !kind.is_empty()
+        && kind.len() <= 64
+        && kind
+            .split('_')
+            .all(|seg| !seg.is_empty() && seg.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit()));
+    if !kind_ok {
+        return Err(ApiError::of_db(&http_err(422, "check_kind.invalid")));
+    }
+    // Present-but-unparseable is a loud 422 (was silently dropped to NULL).
+    let request_id = match parsed.get("request_id").and_then(Value::as_str) {
+        None => None,
+        Some(s) => Some(
+            s.parse::<uuid::Uuid>()
+                .map_err(|_| ApiError::of_db(&http_err(422, "request_id.invalid")))?,
+        ),
+    };
     let exec = pg(state)?;
     let ctx = cap.ctx.clone();
     let v = exec
@@ -371,6 +447,22 @@ pub async fn create_check(
             let mut t = tx(&pool, &ctx).await?;
             let (eid, name) =
                 entity_ref2(&mut t, &ctx, &target_entity_id, crate::dataperm::Op::Update).await?;
+            // No FK on request_id — a dangling reference would be invisible;
+            // reject unknown requests loudly instead.
+            if let Some(rid) = request_id {
+                let exists: bool = sqlx::query_scalar(
+                    "SELECT EXISTS(SELECT 1 FROM core.request
+                     WHERE tenant_id=$1 AND request_id=$2)",
+                )
+                .bind(ctx.tenant_id)
+                .bind(rid)
+                .fetch_one(&mut *t)
+                .await
+                .map_err(db_err)?;
+                if !exists {
+                    return Err(http_err(422, "request_id.unknown"));
+                }
+            }
             let cid = uuid::Uuid::now_v7();
             sqlx::query(
                 "INSERT INTO core.check_instance
@@ -415,7 +507,7 @@ pub async fn create_check(
             }))
         })
         .await
-        .map_err(|e| to_status(&e))?;
+        .map_err(|e| ApiError::of_db(&e))?;
     Ok(Json(ApiEnvelope {
         data: v,
         meta: meta(),
@@ -427,8 +519,13 @@ pub async fn get_entity_checks(
     cap: CapabilityGuard,
     state: &State<AppState>,
     public_id: String,
-) -> Result<Json<ApiEnvelope<Value>>, Status> {
-    query_checks(cap, state, Some(public_id), None, None, Some(200), None).await
+) -> Result<Json<ApiEnvelope<Value>>, ApiError> {
+    // Bad public_id → 404 like every other entity-scoped route; passing it
+    // through would turn a typo into an unfiltered tenant-wide listing.
+    let pid = public_id
+        .parse::<uuid::Uuid>()
+        .map_err(|_| ApiError::from(Status::NotFound))?;
+    query_checks(cap, state, Some(pid.to_string()), None, None, Some(200), None).await
 }
 
 // ---------------------------------------------------------------------------
@@ -521,38 +618,50 @@ pub async fn query_assessments(
     status: Option<String>,
     limit: Option<u32>,
     cursor: Option<String>,
-) -> Result<Json<ApiEnvelope<Value>>, Status> {
-    let _ = cursor;
+) -> Result<Json<ApiEnvelope<Value>>, ApiError> {
     let exec = pg(state)?;
     let ctx = cap.ctx.clone();
-    let limit = limit.unwrap_or(50).min(200) as i64;
+    let limit = limit.unwrap_or(50).clamp(1, 200) as i64;
+    let cursor_uuid = match cursor.as_deref() {
+        None => None,
+        Some(s) => Some(
+            s.parse::<uuid::Uuid>()
+                .map_err(|_| ApiError::of_db(&http_err(422, "cursor.invalid")))?,
+        ),
+    };
     let v = exec
         .run(Deadline::in_secs(10), move |pool| async move {
             let mut t = tx(&pool, &ctx).await?;
             let mut gate = RowCatalogGate::load(&mut t, &ctx).await?;
+            // Keyset on (created_at, assessment_id) — both NOT NULL, so the
+            // position is stable; assessed_at is nullable and unfit as a key.
+            let window = limit + 256;
             let rows = sqlx::query(&format!(
                 "{ASSESSMENT_SELECT}
                    AND ($2::text IS NULL OR a.status=$2)
-                 ORDER BY a.assessed_at DESC NULLS LAST LIMIT $3",
+                   AND ($4::uuid IS NULL OR (a.created_at, a.assessment_id) <
+                        (SELECT a2.created_at, a2.assessment_id FROM core.risk_assessment a2
+                         WHERE a2.tenant_id=$1 AND a2.assessment_id=$4))
+                 ORDER BY a.created_at DESC, a.assessment_id DESC LIMIT $3",
             ))
             .bind(ctx.tenant_id)
             .bind(status)
-            .bind(limit)
+            .bind(window)
+            .bind(cursor_uuid)
             .fetch_all(&mut *t)
             .await
             .map_err(db_err)?;
+            let fetched = rows.len() as i64;
             let mut out = Vec::new();
+            let mut examined = 0i64;
             for r in &rows {
+                examined += 1;
                 let eid: i64 = r.try_get("entity_id").unwrap_or_default();
                 if !gate.entity_ok(&mut t, ctx.tenant_id, Some(eid)).await? {
                     continue;
                 }
                 let ep: Option<uuid::Uuid> = r.try_get("entity_public").ok().flatten();
-                let fields = load_fields(&mut t, ctx.tenant_id, &[eid]).await?;
-                let name = fields
-                    .get(&eid)
-                    .map(|f| crate::entity_pg::display_name_of("", f, eid))
-                    .unwrap_or_default();
+                let name = display_name_for(&mut t, &ctx, eid).await?;
                 let factors = load_factors(
                     &mut t,
                     ctx.tenant_id,
@@ -567,14 +676,28 @@ pub async fn query_assessments(
                     r.try_get("assessor_login").unwrap_or_default(),
                     factors,
                 ));
+                if out.len() as i64 >= limit {
+                    break;
+                }
             }
-            Ok(Value::Array(out))
+            let has_more =
+                out.len() as i64 >= limit && (examined < fetched || fetched >= window);
+            let next_cursor = if has_more {
+                out.last()
+                    .and_then(|v| v.get("assessment_id").cloned())
+                    .unwrap_or(Value::Null)
+            } else {
+                Value::Null
+            };
+            Ok(json!({ "items": out, "next_cursor": next_cursor }))
         })
         .await
-        .map_err(|e| to_status(&e))?;
+        .map_err(|e| ApiError::of_db(&e))?;
+    let mut m = meta();
+    m["next_cursor"] = v.get("next_cursor").cloned().unwrap_or(Value::Null);
     Ok(Json(ApiEnvelope {
-        data: v,
-        meta: meta(),
+        data: v.get("items").cloned().unwrap_or(Value::Array(vec![])),
+        meta: m,
     }))
 }
 
@@ -593,11 +716,7 @@ async fn latest_assessment(
     .map_err(db_err)?;
     let Some(r) = r else { return Ok(None) };
     let ep: Option<uuid::Uuid> = r.try_get("entity_public").ok().flatten();
-    let fields = load_fields(t, ctx.tenant_id, &[entity_id]).await?;
-    let name = fields
-        .get(&entity_id)
-        .map(|f| crate::entity_pg::display_name_of("", f, entity_id))
-        .unwrap_or_default();
+    let name = display_name_for(t, ctx, entity_id).await?;
     let factors = load_factors(
         t,
         ctx.tenant_id,
@@ -619,7 +738,7 @@ pub async fn get_entity_assessment(
     cap: CapabilityGuard,
     state: &State<AppState>,
     public_id: String,
-) -> Result<Json<ApiEnvelope<Value>>, Status> {
+) -> Result<Json<ApiEnvelope<Value>>, ApiError> {
     let exec = pg(state)?;
     let ctx = cap.ctx.clone();
     let v = exec
@@ -631,7 +750,7 @@ pub async fn get_entity_assessment(
                 .unwrap_or(Value::Null))
         })
         .await
-        .map_err(|e| to_status(&e))?;
+        .map_err(|e| ApiError::of_db(&e))?;
     Ok(Json(ApiEnvelope {
         data: v,
         meta: meta(),
@@ -644,8 +763,14 @@ pub async fn trigger_entity_assessment(
     state: &State<AppState>,
     public_id: String,
     body: String,
-) -> Result<Json<ApiEnvelope<Value>>, Status> {
-    let parsed: Value = serde_json::from_str(&body).unwrap_or(json!({}));
+) -> Result<Json<ApiEnvelope<Value>>, ApiError> {
+    // Malformed JSON is a 400 like every sibling endpoint — bad input must
+    // never turn into a persisted default assessment.
+    let parsed: Value = if body.trim().is_empty() {
+        json!({})
+    } else {
+        serde_json::from_str(&body).map_err(|_| ApiError::from(Status::BadRequest))?
+    };
     let force = parsed
         .get("force")
         .and_then(Value::as_bool)
@@ -671,7 +796,7 @@ pub async fn trigger_entity_assessment(
         decision.as_str(),
         "accept" | "reject" | "escalate" | "review"
     ) {
-        return Err(Status::UnprocessableEntity);
+        return Err(ApiError::from(Status::UnprocessableEntity));
     }
     let exec = pg(state)?;
     let ctx = cap.ctx.clone();
@@ -680,6 +805,13 @@ pub async fn trigger_entity_assessment(
             let mut t = tx(&pool, &ctx).await?;
             let (eid, _) =
                 entity_ref2(&mut t, &ctx, &public_id, crate::dataperm::Op::Update).await?;
+            // `accept` signs off on the risk — it needs risk.resolve
+            // authority, not just entity.edit on the target.
+            if decision == "accept"
+                && !crate::authn::capability_granted_tx(&mut t, &ctx, "risk.resolve").await?
+            {
+                return Err(http_err(403, "risk.resolve required to accept"));
+            }
             if !force {
                 if let Some(existing) = latest_assessment(&mut t, &ctx, eid).await? {
                     return Ok(existing);
@@ -725,7 +857,7 @@ pub async fn trigger_entity_assessment(
                 .unwrap_or(Value::Null))
         })
         .await
-        .map_err(|e| to_status(&e))?;
+        .map_err(|e| ApiError::of_db(&e))?;
     Ok(Json(ApiEnvelope {
         data: v,
         meta: meta(),
@@ -737,7 +869,7 @@ pub async fn get_entity_factors(
     cap: CapabilityGuard,
     state: &State<AppState>,
     public_id: String,
-) -> Result<Json<ApiEnvelope<Value>>, Status> {
+) -> Result<Json<ApiEnvelope<Value>>, ApiError> {
     let exec = pg(state)?;
     let ctx = cap.ctx.clone();
     let v = exec
@@ -749,7 +881,7 @@ pub async fn get_entity_factors(
             ))
         })
         .await
-        .map_err(|e| to_status(&e))?;
+        .map_err(|e| ApiError::of_db(&e))?;
     Ok(Json(ApiEnvelope {
         data: v,
         meta: meta(),
@@ -762,8 +894,8 @@ pub async fn resolve_entity_factor(
     state: &State<AppState>,
     public_id: String,
     factor_id: String,
-) -> Result<Json<ApiEnvelope<Value>>, Status> {
-    let fid: uuid::Uuid = factor_id.parse().map_err(|_| Status::NotFound)?;
+) -> Result<Json<ApiEnvelope<Value>>, ApiError> {
+    let fid: uuid::Uuid = factor_id.parse().map_err(|_| ApiError::from(Status::NotFound))?;
     let exec = pg(state)?;
     let ctx = cap.ctx.clone();
     let v = exec
@@ -805,7 +937,7 @@ pub async fn resolve_entity_factor(
                 .unwrap_or(Value::Null))
         })
         .await
-        .map_err(|e| to_status(&e))?;
+        .map_err(|e| ApiError::of_db(&e))?;
     Ok(Json(ApiEnvelope {
         data: v,
         meta: meta(),
@@ -843,7 +975,7 @@ pub async fn get_entity_tasks(
     cap: CapabilityGuard,
     state: &State<AppState>,
     public_id: String,
-) -> Result<Json<ApiEnvelope<Value>>, Status> {
+) -> Result<Json<ApiEnvelope<Value>>, ApiError> {
     let exec = pg(state)?;
     let ctx = cap.ctx.clone();
     let v = exec
@@ -864,7 +996,7 @@ pub async fn get_entity_tasks(
             ))
         })
         .await
-        .map_err(|e| to_status(&e))?;
+        .map_err(|e| ApiError::of_db(&e))?;
     Ok(Json(ApiEnvelope {
         data: v,
         meta: meta(),
@@ -877,8 +1009,8 @@ pub async fn create_entity_task(
     state: &State<AppState>,
     public_id: String,
     body: String,
-) -> Result<Json<ApiEnvelope<Value>>, Status> {
-    let parsed: Value = serde_json::from_str(&body).map_err(|_| Status::BadRequest)?;
+) -> Result<Json<ApiEnvelope<Value>>, ApiError> {
+    let parsed: Value = serde_json::from_str(&body).map_err(|_| ApiError::from(Status::BadRequest))?;
     let title = parsed
         .get("title")
         .and_then(Value::as_str)
@@ -892,18 +1024,34 @@ pub async fn create_entity_task(
         .trim()
         .to_string();
     if title.is_empty() || kind.is_empty() {
-        return Err(Status::UnprocessableEntity);
+        return Err(ApiError::from(Status::UnprocessableEntity));
     }
-    let priority = parsed
-        .get("priority")
-        .and_then(Value::as_i64)
-        .unwrap_or(5)
-        .clamp(1, 20) as i32;
-    let due = parsed
+    let priority = match parsed.get("priority") {
+        None => 5i32,
+        Some(v) => v
+            .as_i64()
+            .filter(|p| (1..=20).contains(p))
+            .ok_or_else(|| ApiError::of_db(&http_err(422, "priority.invalid")))? as i32,
+    };
+    // due_date accepts RFC3339 or plain YYYY-MM-DD; a present-but-invalid
+    // value is a loud 422, not a silently dropped deadline.
+    let due = match parsed
         .get("due_date")
         .and_then(Value::as_str)
         .filter(|s| !s.is_empty())
-        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok());
+    {
+        None => None,
+        Some(s) => chrono::DateTime::parse_from_rfc3339(s)
+            .ok()
+            .or_else(|| {
+                chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d")
+                    .ok()
+                    .and_then(|d| d.and_hms_opt(23, 59, 59))
+                    .map(|dt| dt.and_utc().fixed_offset())
+            })
+            .ok_or_else(|| ApiError::of_db(&http_err(422, "due_date.invalid")))
+            .map(Some)?,
+    };
     let description = parsed
         .get("description")
         .and_then(Value::as_str)
@@ -943,7 +1091,7 @@ pub async fn create_entity_task(
             Ok(task_row(&r, &public_id))
         })
         .await
-        .map_err(|e| to_status(&e))?;
+        .map_err(|e| ApiError::of_db(&e))?;
     Ok(Json(ApiEnvelope {
         data: v,
         meta: meta(),
@@ -956,8 +1104,8 @@ async fn transition_task_pg(
     task_id: &str,
     allowed_from: &[&str],
     status_to: &str,
-) -> Result<Value, Status> {
-    let tid: uuid::Uuid = task_id.parse().map_err(|_| Status::NotFound)?;
+) -> Result<Value, ApiError> {
+    let tid: uuid::Uuid = task_id.parse().map_err(|_| ApiError::from(Status::NotFound))?;
     let allowed: Vec<String> = allowed_from.iter().map(|s| s.to_string()).collect();
     let status_to = status_to.to_string();
     exec.run(Deadline::in_secs(10), move |pool| async move {
@@ -1005,7 +1153,7 @@ async fn transition_task_pg(
         Ok(task_row(&r, &ep.map(|u| u.to_string()).unwrap_or_default()))
     })
     .await
-    .map_err(|e| to_status(&e))
+    .map_err(|e| ApiError::of_db(&e))
 }
 
 #[post("/tasks/<task_id>/start")]
@@ -1013,7 +1161,7 @@ pub async fn start_task(
     cap: CapabilityGuard,
     state: &State<AppState>,
     task_id: String,
-) -> Result<Json<ApiEnvelope<Value>>, Status> {
+) -> Result<Json<ApiEnvelope<Value>>, ApiError> {
     let exec = pg(state)?;
     let v = transition_task_pg(
         exec,
@@ -1035,7 +1183,7 @@ pub async fn complete_task(
     state: &State<AppState>,
     task_id: String,
     _body: String,
-) -> Result<Json<ApiEnvelope<Value>>, Status> {
+) -> Result<Json<ApiEnvelope<Value>>, ApiError> {
     let exec = pg(state)?;
     let v = transition_task_pg(
         exec,
@@ -1057,7 +1205,7 @@ pub async fn cancel_task(
     state: &State<AppState>,
     task_id: String,
     _body: String,
-) -> Result<Json<ApiEnvelope<Value>>, Status> {
+) -> Result<Json<ApiEnvelope<Value>>, ApiError> {
     let exec = pg(state)?;
     let v = transition_task_pg(
         exec,
@@ -1114,8 +1262,8 @@ pub async fn start_workflow(
     cap: CapabilityGuard,
     state: &State<AppState>,
     body: String,
-) -> Result<Json<ApiEnvelope<Value>>, Status> {
-    let parsed: Value = serde_json::from_str(&body).map_err(|_| Status::BadRequest)?;
+) -> Result<Json<ApiEnvelope<Value>>, ApiError> {
+    let parsed: Value = serde_json::from_str(&body).map_err(|_| ApiError::from(Status::BadRequest))?;
     let definition_id = parsed
         .get("definition_id")
         .and_then(Value::as_str)
@@ -1128,7 +1276,7 @@ pub async fn start_workflow(
         .unwrap_or("")
         .to_string();
     if definition_id.is_empty() {
-        return Err(Status::UnprocessableEntity);
+        return Err(ApiError::from(Status::UnprocessableEntity));
     }
     let variables = parsed.get("variables").cloned().unwrap_or(json!({}));
     let exec = pg(state)?;
@@ -1170,7 +1318,7 @@ pub async fn start_workflow(
             Ok(workflow_row(&r, &target_entity_id))
         })
         .await
-        .map_err(|e| to_status(&e))?;
+        .map_err(|e| ApiError::of_db(&e))?;
     Ok(Json(ApiEnvelope {
         data: v,
         meta: meta(),
@@ -1182,8 +1330,8 @@ pub async fn get_workflow(
     cap: CapabilityGuard,
     state: &State<AppState>,
     instance_id: String,
-) -> Result<Json<ApiEnvelope<Value>>, Status> {
-    let wid: uuid::Uuid = instance_id.parse().map_err(|_| Status::NotFound)?;
+) -> Result<Json<ApiEnvelope<Value>>, ApiError> {
+    let wid: uuid::Uuid = instance_id.parse().map_err(|_| ApiError::from(Status::NotFound))?;
     let exec = pg(state)?;
     let ctx = cap.ctx.clone();
     let v = exec
@@ -1211,7 +1359,7 @@ pub async fn get_workflow(
             ))
         })
         .await
-        .map_err(|e| to_status(&e))?;
+        .map_err(|e| ApiError::of_db(&e))?;
     Ok(Json(ApiEnvelope {
         data: v,
         meta: meta(),
@@ -1224,8 +1372,8 @@ pub async fn transition_workflow(
     state: &State<AppState>,
     instance_id: String,
     body: String,
-) -> Result<Json<ApiEnvelope<Value>>, Status> {
-    let parsed: Value = serde_json::from_str(&body).map_err(|_| Status::BadRequest)?;
+) -> Result<Json<ApiEnvelope<Value>>, ApiError> {
+    let parsed: Value = serde_json::from_str(&body).map_err(|_| ApiError::from(Status::BadRequest))?;
     let to = parsed
         .get("to")
         .and_then(Value::as_str)
@@ -1239,9 +1387,9 @@ pub async fn transition_workflow(
         .trim()
         .to_string();
     if to.is_empty() || trigger.is_empty() {
-        return Err(Status::UnprocessableEntity);
+        return Err(ApiError::from(Status::UnprocessableEntity));
     }
-    let wid: uuid::Uuid = instance_id.parse().map_err(|_| Status::NotFound)?;
+    let wid: uuid::Uuid = instance_id.parse().map_err(|_| ApiError::from(Status::NotFound))?;
     let exec = pg(state)?;
     let ctx = cap.ctx.clone();
     let v = exec
@@ -1274,7 +1422,7 @@ pub async fn transition_workflow(
             let def = load_workflow_definition(&mut t, ctx.tenant_id, &def_id)
                 .await?
                 .ok_or_else(|| http_err(404, "workflow definition not found"))?;
-            let legal = def
+            let transition = def
                 .get("states")
                 .and_then(Value::as_array)
                 .and_then(|states| {
@@ -1284,18 +1432,68 @@ pub async fn transition_workflow(
                 })
                 .and_then(|s| s.get("transitions"))
                 .and_then(Value::as_array)
-                .map(|trs| {
-                    trs.iter().any(|tr| {
+                .and_then(|trs| {
+                    trs.iter().find(|tr| {
                         tr.get("to").and_then(Value::as_str) == Some(to.as_str())
                             && tr.get("action").and_then(Value::as_str) == Some(trigger.as_str())
                     })
-                })
-                .unwrap_or(false);
-            if !legal {
+                });
+            let Some(tr) = transition else {
                 return Err(http_err(
                     422,
                     &format!("illegal transition {current} -[{trigger}]-> {to}"),
                 ));
+            };
+            // Enforce the transition guard (docs/13 §7): declared
+            // required_capabilities / required_data_scope must hold, and a
+            // requires_approval edge cannot be fired directly.
+            if tr
+                .get("requires_approval")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
+            {
+                return Err(http_err(409, "transition requires approval"));
+            }
+            if let Some(guard) = tr.get("guard") {
+                let required_caps: Vec<String> = guard
+                    .get("required_capabilities")
+                    .and_then(Value::as_array)
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|v| v.as_str().map(str::to_string))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                for cap_name in &required_caps {
+                    if !crate::authn::capability_granted_tx(&mut t, &ctx, cap_name).await? {
+                        return Err(http_err(
+                            403,
+                            &format!("transition requires {cap_name}"),
+                        ));
+                    }
+                }
+                let required_scope: Vec<String> = guard
+                    .get("required_data_scope")
+                    .and_then(Value::as_array)
+                    .map(|a| {
+                        a.iter()
+                            .filter_map(|v| v.as_str().map(str::to_string))
+                            .collect()
+                    })
+                    .unwrap_or_default();
+                if !required_scope.is_empty() {
+                    let perm =
+                        crate::dataperm::DataPerm::load(&mut t, ctx.tenant_id, ctx.principal_id)
+                            .await?;
+                    for scope in &required_scope {
+                        if !perm.can_catalog(&[scope.as_str()], crate::dataperm::Op::Read) {
+                            return Err(http_err(
+                                403,
+                                &format!("transition requires data scope {scope}"),
+                            ));
+                        }
+                    }
+                }
             }
             let terminated = def
                 .get("states")
@@ -1343,7 +1541,7 @@ pub async fn transition_workflow(
             ))
         })
         .await
-        .map_err(|e| to_status(&e))?;
+        .map_err(|e| ApiError::of_db(&e))?;
     Ok(Json(ApiEnvelope {
         data: v,
         meta: meta(),
@@ -1355,8 +1553,8 @@ pub async fn get_workflow_tasks(
     cap: CapabilityGuard,
     state: &State<AppState>,
     instance_id: String,
-) -> Result<Json<ApiEnvelope<Value>>, Status> {
-    let wid: uuid::Uuid = instance_id.parse().map_err(|_| Status::NotFound)?;
+) -> Result<Json<ApiEnvelope<Value>>, ApiError> {
+    let wid: uuid::Uuid = instance_id.parse().map_err(|_| ApiError::from(Status::NotFound))?;
     let exec = pg(state)?;
     let ctx = cap.ctx.clone();
     let v = exec
@@ -1401,7 +1599,7 @@ pub async fn get_workflow_tasks(
             Ok(Value::Array(out))
         })
         .await
-        .map_err(|e| to_status(&e))?;
+        .map_err(|e| ApiError::of_db(&e))?;
     Ok(Json(ApiEnvelope {
         data: v,
         meta: meta(),
@@ -1419,14 +1617,23 @@ pub async fn query_requests(
     status: Option<String>,
     limit: Option<u32>,
     cursor: Option<String>,
-) -> Result<Json<ApiEnvelope<Value>>, Status> {
-    let _ = cursor;
+) -> Result<Json<ApiEnvelope<Value>>, ApiError> {
     let exec = pg(state)?;
     let ctx = cap.ctx.clone();
     let limit = limit.unwrap_or(50).clamp(1, 200) as i64;
+    let cursor_uuid = match cursor.as_deref() {
+        None => None,
+        Some(s) => Some(
+            s.parse::<uuid::Uuid>()
+                .map_err(|_| ApiError::of_db(&http_err(422, "cursor.invalid")))?,
+        ),
+    };
     let v = exec
         .run(Deadline::in_secs(10), move |pool| async move {
             let mut t = tx(&pool, &ctx).await?;
+            // Keyset on (created_at, request_id) — deterministic, immune to
+            // same-timestamp ties; a stale cursor can never resend page 1.
+            let window = limit + 256;
             let rows = sqlx::query(
                 "SELECT r.*, r.requested_limit::float8 AS requested_limit_f,
                         e.public_id AS entity_public, e.entity_id AS eid,
@@ -1436,29 +1643,31 @@ pub async fn query_requests(
                  LEFT JOIN core.entity e ON e.tenant_id=r.tenant_id AND e.entity_id=r.entity_id
                  LEFT JOIN sec.principal_credential c ON c.principal_id=r.initiator
                  WHERE r.tenant_id=$1 AND ($2::text IS NULL OR r.status=$2)
-                 ORDER BY r.created_at DESC LIMIT $3",
+                   AND ($4::uuid IS NULL OR (r.created_at, r.request_id) <
+                        (SELECT r2.created_at, r2.request_id FROM core.request r2
+                         WHERE r2.tenant_id=$1 AND r2.request_id=$4))
+                 ORDER BY r.created_at DESC, r.request_id DESC LIMIT $3",
             )
             .bind(ctx.tenant_id)
             .bind(status)
-            .bind(limit)
+            .bind(window)
+            .bind(cursor_uuid)
             .fetch_all(&mut *t)
             .await
             .map_err(db_err)?;
+            let fetched = rows.len() as i64;
+            let mut examined = 0i64;
             let mut gate = RowCatalogGate::load(&mut t, &ctx).await?;
             let mut out = Vec::new();
             for r in &rows {
+                examined += 1;
                 let eid: Option<i64> = r.try_get("eid").ok().flatten();
                 if !gate.entity_ok(&mut t, ctx.tenant_id, eid).await? {
                     continue;
                 }
-                let name = if let Some(eid) = eid {
-                    load_fields(&mut t, ctx.tenant_id, &[eid])
-                        .await?
-                        .get(&eid)
-                        .map(|f| crate::entity_pg::display_name_of("", f, eid))
-                        .unwrap_or_default()
-                } else {
-                    String::new()
+                let name = match eid {
+                    Some(eid) => display_name_for(&mut t, &ctx, eid).await?,
+                    None => String::new(),
                 };
                 let ep: Option<uuid::Uuid> = r.try_get("entity_public").ok().flatten();
                 let created: Option<chrono::DateTime<chrono::Utc>> =
@@ -1477,14 +1686,28 @@ pub async fn query_requests(
                     "due_date": due.map(|d|d.to_string()),
                     "created_at": created.map(|t|t.to_rfc3339()).unwrap_or_default(),
                 }));
+                if out.len() as i64 >= limit {
+                    break;
+                }
             }
-            Ok(Value::Array(out))
+            let has_more =
+                out.len() as i64 >= limit && (examined < fetched || fetched >= window);
+            let next_cursor = if has_more {
+                out.last()
+                    .and_then(|v| v.get("request_id").cloned())
+                    .unwrap_or(Value::Null)
+            } else {
+                Value::Null
+            };
+            Ok(json!({ "items": out, "next_cursor": next_cursor }))
         })
         .await
-        .map_err(|e| to_status(&e))?;
+        .map_err(|e| ApiError::of_db(&e))?;
+    let mut m = meta();
+    m["next_cursor"] = v.get("next_cursor").cloned().unwrap_or(Value::Null);
     Ok(Json(ApiEnvelope {
-        data: v,
-        meta: meta(),
+        data: v.get("items").cloned().unwrap_or(Value::Array(vec![])),
+        meta: m,
     }))
 }
 
@@ -1493,33 +1716,39 @@ pub async fn create_request(
     cap: CapabilityGuard,
     state: &State<AppState>,
     body: String,
-) -> Result<Json<ApiEnvelope<Value>>, Status> {
-    let parsed: Value = serde_json::from_str(&body).map_err(|_| Status::BadRequest)?;
+) -> Result<Json<ApiEnvelope<Value>>, ApiError> {
+    let parsed: Value = serde_json::from_str(&body).map_err(|_| ApiError::from(Status::BadRequest))?;
     let target_entity_id = parsed
         .get("target_entity_id")
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|v| !v.is_empty())
-        .ok_or(Status::UnprocessableEntity)?
+        .ok_or_else(|| ApiError::from(Status::UnprocessableEntity))?
         .to_string();
     let requested_product = parsed
         .get("requested_product")
         .and_then(Value::as_str)
         .map(str::trim)
         .filter(|v| !v.is_empty())
-        .ok_or(Status::UnprocessableEntity)?
+        .ok_or_else(|| ApiError::from(Status::UnprocessableEntity))?
         .to_string();
     let requested_limit = parsed.get("requested_limit").and_then(Value::as_f64);
-    let urgency = parsed
-        .get("urgency")
-        .and_then(Value::as_str)
-        .unwrap_or("normal")
-        .to_string();
-    let due_date = parsed
+    let urgency = match parsed.get("urgency").and_then(Value::as_str) {
+        None => "normal".to_string(),
+        Some(u) if matches!(u, "low" | "normal" | "high" | "urgent") => u.to_string(),
+        Some(_) => return Err(ApiError::of_db(&http_err(422, "urgency.invalid"))),
+    };
+    let due_date = match parsed
         .get("due_date")
         .and_then(Value::as_str)
         .filter(|v| !v.is_empty())
-        .and_then(|s| chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d").ok());
+    {
+        None => None,
+        Some(s) => Some(
+            chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d")
+                .map_err(|_| ApiError::of_db(&http_err(422, "due_date.invalid")))?,
+        ),
+    };
     let exec = pg(state)?;
     let ctx = cap.ctx.clone();
     let v = exec
@@ -1561,7 +1790,7 @@ pub async fn create_request(
             }))
         })
         .await
-        .map_err(|e| to_status(&e))?;
+        .map_err(|e| ApiError::of_db(&e))?;
     Ok(Json(ApiEnvelope {
         data: v,
         meta: meta(),
@@ -1596,7 +1825,7 @@ fn monitor_row(r: &PgRow) -> Value {
 pub async fn list_monitors(
     cap: CapabilityGuard,
     state: &State<AppState>,
-) -> Result<Json<ApiEnvelope<Value>>, Status> {
+) -> Result<Json<ApiEnvelope<Value>>, ApiError> {
     let exec = pg(state)?;
     let ctx = cap.ctx.clone();
     let v = exec
@@ -1624,7 +1853,7 @@ pub async fn list_monitors(
             Ok(Value::Array(out))
         })
         .await
-        .map_err(|e| to_status(&e))?;
+        .map_err(|e| ApiError::of_db(&e))?;
     Ok(Json(ApiEnvelope {
         data: v,
         meta: meta(),
@@ -1636,8 +1865,8 @@ pub async fn run_monitor(
     cap: CapabilityGuard,
     state: &State<AppState>,
     id: String,
-) -> Result<Json<ApiEnvelope<Value>>, Status> {
-    let mid: uuid::Uuid = id.parse().map_err(|_| Status::NotFound)?;
+) -> Result<Json<ApiEnvelope<Value>>, ApiError> {
+    let mid: uuid::Uuid = id.parse().map_err(|_| ApiError::from(Status::NotFound))?;
     let exec = pg(state)?;
     let ctx = cap.ctx.clone();
     let v = exec
@@ -1721,7 +1950,7 @@ pub async fn run_monitor(
             Ok(result)
         })
         .await
-        .map_err(|e| to_status(&e))?;
+        .map_err(|e| ApiError::of_db(&e))?;
     Ok(Json(ApiEnvelope {
         data: v,
         meta: meta(),
@@ -1753,7 +1982,7 @@ fn connector_row(r: &PgRow) -> Value {
 pub async fn list_connectors(
     cap: CapabilityGuard,
     state: &State<AppState>,
-) -> Result<Json<ApiEnvelope<Value>>, Status> {
+) -> Result<Json<ApiEnvelope<Value>>, ApiError> {
     let exec = pg(state)?;
     let ctx = cap.ctx.clone();
     let v = exec
@@ -1769,7 +1998,7 @@ pub async fn list_connectors(
             Ok(Value::Array(rows.iter().map(connector_row).collect()))
         })
         .await
-        .map_err(|e| to_status(&e))?;
+        .map_err(|e| ApiError::of_db(&e))?;
     Ok(Json(ApiEnvelope {
         data: v,
         meta: meta(),
@@ -1781,8 +2010,8 @@ pub async fn get_connector(
     cap: CapabilityGuard,
     state: &State<AppState>,
     id: String,
-) -> Result<Json<ApiEnvelope<Value>>, Status> {
-    let cid: uuid::Uuid = id.parse().map_err(|_| Status::NotFound)?;
+) -> Result<Json<ApiEnvelope<Value>>, ApiError> {
+    let cid: uuid::Uuid = id.parse().map_err(|_| ApiError::from(Status::NotFound))?;
     let exec = pg(state)?;
     let ctx = cap.ctx.clone();
     let v = exec
@@ -1800,7 +2029,7 @@ pub async fn get_connector(
             Ok(connector_row(&r))
         })
         .await
-        .map_err(|e| to_status(&e))?;
+        .map_err(|e| ApiError::of_db(&e))?;
     Ok(Json(ApiEnvelope {
         data: v,
         meta: meta(),
@@ -1812,25 +2041,37 @@ pub async fn create_connector(
     cap: CapabilityGuard,
     state: &State<AppState>,
     body: String,
-) -> Result<Json<ApiEnvelope<Value>>, Status> {
-    let parsed: Value = serde_json::from_str(&body).map_err(|_| Status::BadRequest)?;
+) -> Result<Json<ApiEnvelope<Value>>, ApiError> {
+    let parsed: Value = serde_json::from_str(&body).map_err(|_| ApiError::from(Status::BadRequest))?;
+    fn slug_ok(v: &str) -> bool {
+        !v.is_empty()
+            && v.len() <= 64
+            && v.bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-')
+    }
     let connector_type_id = parsed
         .get("connector_type_id")
         .and_then(Value::as_str)
         .map(str::trim)
-        .filter(|v| !v.is_empty())
-        .ok_or(Status::UnprocessableEntity)?
+        .filter(|v| slug_ok(v))
+        .ok_or_else(|| ApiError::of_db(&http_err(422, "connector_type_id.invalid")))?
         .to_string();
     let display_name = parsed
         .get("display_name")
         .and_then(Value::as_str)
+        .map(str::trim)
+        .filter(|v| !v.is_empty() && v.len() <= 256)
         .unwrap_or(&connector_type_id)
         .to_string();
     let environment = parsed
         .get("environment")
         .and_then(Value::as_str)
-        .unwrap_or("prod")
-        .to_string();
+        .map(str::trim)
+        .unwrap_or("prod");
+    if !slug_ok(environment) {
+        return Err(ApiError::of_db(&http_err(422, "environment.invalid")));
+    }
+    let environment = environment.to_string();
     // Reject nonsense values instead of silently clamping them — a client
     // bug should surface, not persist a silently different config.
     let rate_limit = match parsed.get("rate_limit_rps") {
@@ -1838,14 +2079,14 @@ pub async fn create_connector(
         Some(v) => v
             .as_f64()
             .filter(|x| x.is_finite() && *x > 0.0)
-            .ok_or(Status::UnprocessableEntity)?,
+            .ok_or_else(|| ApiError::from(Status::UnprocessableEntity))?,
     };
     let trust_rank = match parsed.get("trust_rank") {
         None => 50,
         Some(v) => v
             .as_i64()
             .filter(|x| (0..=100).contains(x))
-            .ok_or(Status::UnprocessableEntity)? as i32,
+            .ok_or_else(|| ApiError::from(Status::UnprocessableEntity))? as i32,
     };
     let exec = pg(state)?;
     let ctx = cap.ctx.clone();
@@ -1870,7 +2111,8 @@ pub async fn create_connector(
             .execute(&mut *t)
             .await
             .map_err(db_err)?;
-            let r = sqlx::query("SELECT * FROM integration.connector WHERE connector_id=$1")
+            let r = sqlx::query("SELECT * FROM integration.connector WHERE tenant_id=$1 AND connector_id=$2")
+                .bind(ctx.tenant_id)
                 .bind(cid)
                 .fetch_one(&mut *t)
                 .await
@@ -1879,7 +2121,7 @@ pub async fn create_connector(
             Ok(connector_row(&r))
         })
         .await
-        .map_err(|e| to_status(&e))?;
+        .map_err(|e| ApiError::of_db(&e))?;
     Ok(Json(ApiEnvelope {
         data: v,
         meta: meta(),
@@ -1892,17 +2134,30 @@ pub async fn update_connector(
     state: &State<AppState>,
     id: String,
     body: String,
-) -> Result<Json<ApiEnvelope<Value>>, Status> {
-    let parsed: Value = serde_json::from_str(&body).map_err(|_| Status::BadRequest)?;
-    let cid: uuid::Uuid = id.parse().map_err(|_| Status::NotFound)?;
+) -> Result<Json<ApiEnvelope<Value>>, ApiError> {
+    let parsed: Value = serde_json::from_str(&body).map_err(|_| ApiError::from(Status::BadRequest))?;
+    let cid: uuid::Uuid = id.parse().map_err(|_| ApiError::from(Status::NotFound))?;
     if let Some(v) = parsed.get("rate_limit_rps") {
         if !v.as_f64().is_some_and(|x| x.is_finite() && x > 0.0) {
-            return Err(Status::UnprocessableEntity);
+            return Err(ApiError::from(Status::UnprocessableEntity));
         }
     }
     if let Some(v) = parsed.get("trust_rank") {
         if !v.as_i64().is_some_and(|x| (0..=100).contains(&x)) {
-            return Err(Status::UnprocessableEntity);
+            return Err(ApiError::from(Status::UnprocessableEntity));
+        }
+    }
+    for key in ["environment"] {
+        if let Some(v) = parsed.get(key) {
+            let ok = v.as_str().is_some_and(|s| {
+                !s.is_empty()
+                    && s.len() <= 64
+                    && s.bytes()
+                        .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-')
+            });
+            if !ok {
+                return Err(ApiError::of_db(&http_err(422, "environment.invalid")));
+            }
         }
     }
     let exec = pg(state)?;
@@ -1924,8 +2179,12 @@ pub async fn update_connector(
             if let Some(enabled) = parsed.get("enabled").and_then(Value::as_bool) {
                 status = if enabled { "enabled" } else { "disabled" }.to_string();
             }
-            if let Some(name) = parsed.get("display_name").and_then(Value::as_str) {
-                sqlx::query("UPDATE integration.connector SET alias=$2 WHERE connector_id=$1")
+            if let Some(name) = parsed.get("display_name").and_then(Value::as_str).map(str::trim) {
+                if name.is_empty() || name.len() > 256 {
+                    return Err(http_err(422, "display_name.invalid"));
+                }
+                sqlx::query("UPDATE integration.connector SET alias=$3 WHERE tenant_id=$1 AND connector_id=$2")
+                    .bind(ctx.tenant_id)
                     .bind(cid)
                     .bind(name)
                     .execute(&mut *t)
@@ -1938,15 +2197,17 @@ pub async fn update_connector(
                 }
             }
             sqlx::query(
-                "UPDATE integration.connector SET status=$2, config=$3 WHERE connector_id=$1",
+                "UPDATE integration.connector SET status=$3, config=$4 WHERE tenant_id=$1 AND connector_id=$2",
             )
+            .bind(ctx.tenant_id)
             .bind(cid)
             .bind(&status)
             .bind(&config)
             .execute(&mut *t)
             .await
             .map_err(db_err)?;
-            let r = sqlx::query("SELECT * FROM integration.connector WHERE connector_id=$1")
+            let r = sqlx::query("SELECT * FROM integration.connector WHERE tenant_id=$1 AND connector_id=$2")
+                .bind(ctx.tenant_id)
                 .bind(cid)
                 .fetch_one(&mut *t)
                 .await
@@ -1955,7 +2216,7 @@ pub async fn update_connector(
             Ok(connector_row(&r))
         })
         .await
-        .map_err(|e| to_status(&e))?;
+        .map_err(|e| ApiError::of_db(&e))?;
     Ok(Json(ApiEnvelope {
         data: v,
         meta: meta(),
@@ -1967,8 +2228,8 @@ pub async fn delete_connector(
     cap: CapabilityGuard,
     state: &State<AppState>,
     id: String,
-) -> Result<Json<ApiEnvelope<Value>>, Status> {
-    let cid: uuid::Uuid = id.parse().map_err(|_| Status::NotFound)?;
+) -> Result<Json<ApiEnvelope<Value>>, ApiError> {
+    let cid: uuid::Uuid = id.parse().map_err(|_| ApiError::from(Status::NotFound))?;
     let exec = pg(state)?;
     let ctx = cap.ctx.clone();
     exec.run(Deadline::in_secs(10), move |pool| async move {
@@ -1988,7 +2249,7 @@ pub async fn delete_connector(
         Ok(Value::Null)
     })
     .await
-    .map_err(|e| to_status(&e))?;
+    .map_err(|e| ApiError::of_db(&e))?;
     Ok(Json(ApiEnvelope {
         data: json!({ "deleted": true }),
         meta: meta(),
@@ -2000,8 +2261,8 @@ async fn set_connector_status(
     ctx: AuthContext,
     id: &str,
     enabled: bool,
-) -> Result<Value, Status> {
-    let cid: uuid::Uuid = id.parse().map_err(|_| Status::NotFound)?;
+) -> Result<Value, ApiError> {
+    let cid: uuid::Uuid = id.parse().map_err(|_| ApiError::from(Status::NotFound))?;
     exec.run(Deadline::in_secs(10), move |pool| async move {
         let mut t = tx(&pool, &ctx).await?;
         let changed = sqlx::query(
@@ -2018,7 +2279,8 @@ async fn set_connector_status(
         if changed == 0 {
             return Err(http_err(404, "connector not found"));
         }
-        let r = sqlx::query("SELECT * FROM integration.connector WHERE connector_id=$1")
+        let r = sqlx::query("SELECT * FROM integration.connector WHERE tenant_id=$1 AND connector_id=$2")
+            .bind(ctx.tenant_id)
             .bind(cid)
             .fetch_one(&mut *t)
             .await
@@ -2027,7 +2289,7 @@ async fn set_connector_status(
         Ok(connector_row(&r))
     })
     .await
-    .map_err(|e| to_status(&e))
+    .map_err(|e| ApiError::of_db(&e))
 }
 
 #[post("/connectors/<id>/enable")]
@@ -2035,7 +2297,7 @@ pub async fn connector_enable(
     cap: CapabilityGuard,
     state: &State<AppState>,
     id: String,
-) -> Result<Json<ApiEnvelope<Value>>, Status> {
+) -> Result<Json<ApiEnvelope<Value>>, ApiError> {
     let v = set_connector_status(pg(state)?, cap.ctx.clone(), &id, true).await?;
     Ok(Json(ApiEnvelope {
         data: v,
@@ -2048,7 +2310,7 @@ pub async fn connector_disable(
     cap: CapabilityGuard,
     state: &State<AppState>,
     id: String,
-) -> Result<Json<ApiEnvelope<Value>>, Status> {
+) -> Result<Json<ApiEnvelope<Value>>, ApiError> {
     let v = set_connector_status(pg(state)?, cap.ctx.clone(), &id, false).await?;
     Ok(Json(ApiEnvelope {
         data: v,
@@ -2061,8 +2323,8 @@ pub async fn connector_health(
     cap: CapabilityGuard,
     state: &State<AppState>,
     id: String,
-) -> Result<Json<ApiEnvelope<Value>>, Status> {
-    let cid: uuid::Uuid = id.parse().map_err(|_| Status::NotFound)?;
+) -> Result<Json<ApiEnvelope<Value>>, ApiError> {
+    let cid: uuid::Uuid = id.parse().map_err(|_| ApiError::from(Status::NotFound))?;
     let exec = pg(state)?;
     let ctx = cap.ctx.clone();
     let v = exec
@@ -2086,7 +2348,8 @@ pub async fn connector_health(
             }
             let mut config: Value = r.try_get("config").unwrap_or(json!({}));
             config["last_health_check"] = json!(chrono::Utc::now().to_rfc3339());
-            sqlx::query("UPDATE integration.connector SET config=$2 WHERE connector_id=$1")
+            sqlx::query("UPDATE integration.connector SET config=$3 WHERE tenant_id=$1 AND connector_id=$2")
+                .bind(ctx.tenant_id)
                 .bind(cid)
                 .bind(&config)
                 .execute(&mut *t)
@@ -2096,7 +2359,7 @@ pub async fn connector_health(
             Ok(json!({ "healthy": true, "latency_ms": 42, "message": "ok" }))
         })
         .await
-        .map_err(|e| to_status(&e))?;
+        .map_err(|e| ApiError::of_db(&e))?;
     Ok(Json(ApiEnvelope {
         data: v,
         meta: meta(),
@@ -2111,7 +2374,7 @@ pub async fn connector_health(
 pub async fn dashboard_stats(
     cap: CapabilityGuard,
     state: &State<AppState>,
-) -> Result<Json<ApiEnvelope<Value>>, Status> {
+) -> Result<Json<ApiEnvelope<Value>>, ApiError> {
     let exec = pg(state)?;
     let ctx = cap.ctx.clone();
     let v = exec
@@ -2175,14 +2438,32 @@ pub async fn dashboard_stats(
                      WHERE m.tenant_id=$1 AND m.status='active' AND m.next_run_at <= now()",
                 )
                 .await?;
-            // Reports are tenant-global like dump — no entity binding.
-            let ready_reports: i64 = sqlx::query_scalar::<_, i64>(
-                "SELECT count(*) FROM core.report_instance WHERE tenant_id=$1 AND status='ready'",
+            // Reports bound to an entity count only when the entity is
+            // visible; unbound reports count only for their creator (same
+            // visibility rule as GET /reports).
+            let bound_reports: i64 = gate
+                .count_visible(
+                    &mut t,
+                    ctx.tenant_id,
+                    "SELECT e.entity_id FROM core.report_instance r
+                     JOIN core.entity e ON e.tenant_id=r.tenant_id
+                       AND (r.params->>'entity_id') ~
+                         '^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$'
+                       AND e.public_id = (r.params->>'entity_id')::uuid
+                     WHERE r.tenant_id=$1 AND r.status='ready'",
+                )
+                .await?;
+            let own_unbound: i64 = sqlx::query_scalar::<_, i64>(
+                "SELECT count(*) FROM core.report_instance
+                 WHERE tenant_id=$1 AND status='ready' AND created_by=$2
+                   AND NULLIF(params->>'entity_id','') IS NULL",
             )
             .bind(ctx.tenant_id)
+            .bind(ctx.principal_id)
             .fetch_one(&mut *t)
             .await
             .map_err(db_err)?;
+            let ready_reports = bound_reports + own_unbound;
             Ok(json!({
                 "my_tasks": my_tasks,
                 "overdue_tasks": overdue,
@@ -2195,7 +2476,7 @@ pub async fn dashboard_stats(
             }))
         })
         .await
-        .map_err(|e| to_status(&e))?;
+        .map_err(|e| ApiError::of_db(&e))?;
     Ok(Json(ApiEnvelope {
         data: v,
         meta: meta(),

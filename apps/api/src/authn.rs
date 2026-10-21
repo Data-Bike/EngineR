@@ -482,6 +482,58 @@ pub async fn end_session(
     .map(|_| ())
 }
 
+/// In-transaction check of a single capability action against the
+/// published policy revision — the same rule evaluation
+/// [`principal_profile`] performs, reduced to allow-minus-deny for one
+/// action. Special roles are NOT handled here; callers combine with
+/// `DataPerm::can_capability`, which resolves superadmin/superuser.
+pub async fn capability_granted_tx(
+    t: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    ctx: &AuthContext,
+    action: &str,
+) -> Result<bool, DbError> {
+    let tenant = ctx.tenant_id;
+    let principal = ctx.principal_id;
+    let action = action.to_string();
+    let granted: bool = sqlx::query_scalar(
+        "WITH RECURSIVE eff AS (
+             SELECT g.group_id, g.parent_id
+             FROM sec.principal_group_membership m
+             JOIN sec.\"group\" g ON g.group_id = m.group_id
+             WHERE m.tenant_id = $1 AND m.principal_id = $2
+               AND (m.valid_to IS NULL OR m.valid_to >= now())
+               AND (m.valid_from <= now() + interval '120 seconds')
+             UNION
+             SELECT p.group_id, p.parent_id
+             FROM sec.\"group\" p JOIN eff e ON e.parent_id = p.group_id
+             WHERE p.tenant_id = $1
+         ),
+         rules AS (
+             SELECT DISTINCT pr.action, pr.effect
+             FROM sec.policy_rule pr
+             JOIN sec.\"group\" g
+               ON g.group_id = pr.group_id AND g.tenant_id = pr.tenant_id
+             WHERE pr.tenant_id = $1
+               AND pr.policy_revision = (SELECT revision_id FROM sec.policy_revision
+                   WHERE tenant_id = $1 AND state = 'published'
+                   ORDER BY published_at DESC NULLS LAST LIMIT 1)
+               AND g.class = 'capability'
+               AND pr.group_id IN (SELECT group_id FROM eff)
+               AND (pr.valid_to IS NULL OR pr.valid_to >= now())
+               AND pr.valid_from <= now() + interval '120 seconds'
+         )
+         SELECT EXISTS(SELECT 1 FROM rules WHERE action=$3 AND effect='allow')
+            AND NOT EXISTS(SELECT 1 FROM rules WHERE action=$3 AND effect='deny')",
+    )
+    .bind(tenant)
+    .bind(principal)
+    .bind(action)
+    .fetch_one(&mut **t)
+    .await
+    .map_err(to_db_error)?;
+    Ok(granted)
+}
+
 /// Compute the effective capability set for `/me/context`:
 /// actions allowed by the published policy revision through the principal's
 /// capability-group memberships, minus explicitly denied ones.
@@ -662,10 +714,31 @@ pub async fn principal_profile(
             let ui_rules = if flags.iter().any(|f| f == "superadmin") {
                 serde_json::json!({"rules": [], "blanket": false})
             } else if flags.iter().any(|f| f == "superuser") {
-                serde_json::json!({
-                    "rules": [{"path": "/admin", "allow": false}],
-                    "blanket": false,
-                })
+                // Mirror dataperm::can_url for superuser: admin URL
+                // prefixes deny BEFORE user rules, so a user rule nested
+                // inside an admin prefix can never override the deny.
+                // Drop such nested rules, then add the admin denies.
+                // The /admin UI area is denied wholesale — superuser holds
+                // no admin.pages.access capability.
+                let mut merged: Vec<serde_json::Value> = rules
+                    .into_iter()
+                    .filter(|r| {
+                        let p = r["path"].as_str().unwrap_or_default();
+                        !crate::dataperm::ADMIN_URL_PREFIXES.iter().any(|ap| {
+                            p == *ap || p.starts_with(&format!("{ap}/"))
+                        })
+                    })
+                    .collect();
+                merged.push(serde_json::json!({"path": "/admin", "allow": false}));
+                for ap in crate::dataperm::ADMIN_URL_PREFIXES {
+                    merged.push(serde_json::json!({"path": ap, "allow": false}));
+                }
+                merged.sort_by(|a, b| {
+                    let la = a["path"].as_str().map(str::len).unwrap_or(0);
+                    let lb = b["path"].as_str().map(str::len).unwrap_or(0);
+                    lb.cmp(&la)
+                });
+                serde_json::json!({"rules": merged, "blanket": blanket})
             } else {
                 serde_json::json!({"rules": rules, "blanket": blanket})
             };

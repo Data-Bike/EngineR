@@ -12,6 +12,7 @@ use crate::audit_pg::audit_tx;
 use crate::entity_pg::{db_err, http_err};
 use crate::workspace_routes::{meta, ApiEnvelope, CapabilityGuard};
 use crate::AppState;
+use crate::ApiError;
 use enginer_db_runtime::{AsyncStdDbExecutor, DbError, Deadline};
 use rocket::http::Status;
 use rocket::serde::json::Json;
@@ -21,19 +22,12 @@ use serde_json::{json, Value};
 use sqlx::Row;
 use std::sync::Arc;
 
-fn pg(state: &State<AppState>) -> Result<Arc<AsyncStdDbExecutor>, Status> {
-    state.db_executor.clone().ok_or(Status::ServiceUnavailable)
+fn pg(state: &State<AppState>) -> Result<Arc<AsyncStdDbExecutor>, ApiError> {
+    state.db_executor.clone().ok_or_else(|| ApiError::from(Status::ServiceUnavailable))
 }
 
-fn run_err(e: &DbError) -> Status {
-    if let DbError::Other { message } = e {
-        if let Some(rest) = message.strip_prefix("HTTP") {
-            if let Some(code) = rest.split(':').next().and_then(|c| c.parse::<u16>().ok()) {
-                return Status::from_code(code).unwrap_or(Status::InternalServerError);
-            }
-        }
-    }
-    Status::InternalServerError
+fn run_err(e: &DbError) -> ApiError {
+    ApiError::of_db(e)
 }
 
 // ---------------------------------------------------------------------------
@@ -45,7 +39,7 @@ fn run_err(e: &DbError) -> Status {
 pub async fn list_role_groups(
     cap: CapabilityGuard,
     state: &State<AppState>,
-) -> Result<Json<ApiEnvelope<Value>>, Status> {
+) -> Result<Json<ApiEnvelope<Value>>, ApiError> {
     let exec = pg(state)?;
     let ctx = cap.ctx.clone();
     let v = exec
@@ -104,14 +98,22 @@ pub async fn list_users(
     ip: Option<String>,
     status: Option<String>,
     limit: Option<u32>,
-) -> Result<Json<ApiEnvelope<Value>>, Status> {
+) -> Result<Json<ApiEnvelope<Value>>, ApiError> {
     let exec = pg(state)?;
     let ctx = cap.ctx.clone();
     let q = q.unwrap_or_default().trim().to_lowercase();
     let ip = ip.unwrap_or_default().trim().to_string();
     let status = status.unwrap_or_default().trim().to_string();
     let with_inherited = matches!(inherited.as_deref(), Some("1") | Some("true") | Some("yes"));
-    let group_filter: Option<uuid::Uuid> = group_id.and_then(|g| g.parse::<uuid::Uuid>().ok());
+    // Present-but-invalid group filter must not silently widen to an
+    // unfiltered user listing.
+    let group_filter: Option<uuid::Uuid> = match group_id {
+        None => None,
+        Some(g) => Some(
+            g.parse::<uuid::Uuid>()
+                .map_err(|_| ApiError::from(Status::UnprocessableEntity))?,
+        ),
+    };
     let limit = limit.unwrap_or(200).clamp(1, 1000) as i64;
     let v = exec
         .run(Deadline::in_secs(15), move |pool| async move {
@@ -380,12 +382,12 @@ async fn set_memberships(
     Ok(())
 }
 
-fn hash_password(password: &str) -> Result<String, Status> {
+fn hash_password(password: &str) -> Result<String, ApiError> {
     use argon2::password_hash::{rand_core::OsRng, SaltString};
     let salt = SaltString::generate(&mut OsRng);
     argon2::PasswordHasher::hash_password(&argon2::Argon2::default(), password.as_bytes(), &salt)
         .map(|h| h.to_string())
-        .map_err(|_| Status::InternalServerError)
+        .map_err(|_| ApiError::from(Status::InternalServerError))
 }
 
 #[post("/users", data = "<body>")]
@@ -393,7 +395,7 @@ pub async fn create_user(
     cap: CapabilityGuard,
     state: &State<AppState>,
     body: Json<UserInput>,
-) -> Result<Json<ApiEnvelope<Value>>, Status> {
+) -> Result<Json<ApiEnvelope<Value>>, ApiError> {
     let exec = pg(state)?;
     let ctx = cap.ctx.clone();
     let body = body.into_inner();
@@ -408,7 +410,7 @@ pub async fn create_user(
         password.len() >= 8
     };
     if login.is_empty() || name.is_empty() || !pw_ok {
-        return Err(Status::UnprocessableEntity);
+        return Err(ApiError::from(Status::UnprocessableEntity));
     }
     // Password-less service accounts get a syntactically invalid PHC string —
     // `verify_password` can never match it, so the login cannot be used for
@@ -431,12 +433,13 @@ pub async fn create_user(
                 return Err(http_err(409, "login already exists"));
             }
             let pid = uuid::Uuid::now_v7();
-            let status = body
-                .status
-                .as_deref()
-                .filter(|s| matches!(*s, "active" | "disabled" | "locked"))
-                .unwrap_or("active")
-                .to_string();
+            // Present-but-invalid status must not silently create an
+            // *active* account the admin meant to disable.
+            let status = match body.status.as_deref().map(str::trim) {
+                None => "active".to_string(),
+                Some(s) if matches!(s, "active" | "disabled" | "locked") => s.to_string(),
+                Some(_) => return Err(http_err(422, "status.invalid")),
+            };
             let email = body
                 .email
                 .as_deref()
@@ -467,7 +470,14 @@ pub async fn create_user(
             .bind(&hash)
             .execute(&mut *tx)
             .await
-            .map_err(db_err)?;
+            // TOCTOU: a racing create slips past the pre-check and hits the
+            // unique index — map it to the same 409, not a generic 500.
+            .map_err(|e| match &e {
+                sqlx::Error::Database(dbe) if dbe.is_unique_violation() => {
+                    http_err(409, "login already exists")
+                }
+                _ => db_err(e),
+            })?;
             set_memberships(&mut tx, ctx.tenant_id, pid, &body.groups, ctx.principal_id).await?;
             tx.commit().await.map_err(db_err)?;
             Ok(json!({
@@ -491,10 +501,10 @@ pub async fn get_user(
     cap: CapabilityGuard,
     state: &State<AppState>,
     principal_id: String,
-) -> Result<Json<ApiEnvelope<Value>>, Status> {
+) -> Result<Json<ApiEnvelope<Value>>, ApiError> {
     let exec = pg(state)?;
     let ctx = cap.ctx.clone();
-    let pid: uuid::Uuid = principal_id.parse().map_err(|_| Status::NotFound)?;
+    let pid: uuid::Uuid = principal_id.parse().map_err(|_| ApiError::from(Status::NotFound))?;
     let v = exec
         .run(Deadline::in_secs(10), move |pool| async move {
             let mut tx = audit_tx(&pool, &ctx, "users.get").await?;
@@ -623,10 +633,10 @@ pub async fn update_user(
     state: &State<AppState>,
     principal_id: String,
     body: Json<Value>,
-) -> Result<Json<ApiEnvelope<Value>>, Status> {
+) -> Result<Json<ApiEnvelope<Value>>, ApiError> {
     let exec = pg(state)?;
     let ctx = cap.ctx.clone();
-    let pid: uuid::Uuid = principal_id.parse().map_err(|_| Status::NotFound)?;
+    let pid: uuid::Uuid = principal_id.parse().map_err(|_| ApiError::from(Status::NotFound))?;
     let body = body.into_inner();
     let groups: Vec<String> = body
         .get("groups")
@@ -645,7 +655,7 @@ pub async fn update_user(
     let hash = match &password {
         Some(p) if !p.is_empty() => {
             if p.len() < 8 {
-                return Err(Status::UnprocessableEntity);
+                return Err(ApiError::from(Status::UnprocessableEntity));
             }
             Some(hash_password(p)?)
         }
@@ -759,6 +769,27 @@ pub async fn update_user(
                 .execute(&mut *tx)
                 .await
                 .map_err(db_err)?;
+                // An admin reset means the old credential may be
+                // compromised — kill live sessions and API tokens exactly
+                // like the disable path does.
+                sqlx::query(
+                    "UPDATE sec.session SET ended_at=now()
+                     WHERE tenant_id=$1 AND principal_id=$2 AND ended_at IS NULL",
+                )
+                .bind(ctx.tenant_id)
+                .bind(pid)
+                .execute(&mut *tx)
+                .await
+                .map_err(db_err)?;
+                sqlx::query(
+                    "UPDATE sec.api_token SET revoked_at=now()
+                     WHERE tenant_id=$1 AND principal_id=$2 AND revoked_at IS NULL",
+                )
+                .bind(ctx.tenant_id)
+                .bind(pid)
+                .execute(&mut *tx)
+                .await
+                .map_err(db_err)?;
             }
             if has_groups {
                 set_memberships(&mut tx, ctx.tenant_id, pid, &groups, ctx.principal_id).await?;
@@ -781,14 +812,14 @@ pub async fn delete_user(
     cap: CapabilityGuard,
     state: &State<AppState>,
     principal_id: String,
-) -> Result<Json<ApiEnvelope<Value>>, Status> {
+) -> Result<Json<ApiEnvelope<Value>>, ApiError> {
     let exec = pg(state)?;
     let ctx = cap.ctx.clone();
-    let pid: uuid::Uuid = principal_id.parse().map_err(|_| Status::NotFound)?;
+    let pid: uuid::Uuid = principal_id.parse().map_err(|_| ApiError::from(Status::NotFound))?;
     if pid == ctx.principal_id {
         // Disabling your own account mid-session kills the session and locks
         // the admin out — require a different principal to do it.
-        return Err(Status::UnprocessableEntity);
+        return Err(ApiError::from(Status::UnprocessableEntity));
     }
     let v = exec
         .run(Deadline::in_secs(10), move |pool| async move {
@@ -867,10 +898,10 @@ pub async fn user_activity(
     principal_id: String,
     q: Option<String>,
     limit: Option<u32>,
-) -> Result<Json<ApiEnvelope<Value>>, Status> {
+) -> Result<Json<ApiEnvelope<Value>>, ApiError> {
     let exec = pg(state)?;
     let ctx = cap.ctx.clone();
-    let pid: uuid::Uuid = principal_id.parse().map_err(|_| Status::NotFound)?;
+    let pid: uuid::Uuid = principal_id.parse().map_err(|_| ApiError::from(Status::NotFound))?;
     let needle = q.unwrap_or_default().trim().to_lowercase();
     let limit = limit.unwrap_or(50).clamp(1, 500) as i64;
     let v = exec
@@ -1087,17 +1118,17 @@ pub async fn create_token(
     state: &State<AppState>,
     principal_id: String,
     body: Json<TokenInput>,
-) -> Result<Json<ApiEnvelope<Value>>, Status> {
+) -> Result<Json<ApiEnvelope<Value>>, ApiError> {
     let exec = pg(state)?;
     let ctx = cap.ctx.clone();
-    let pid: uuid::Uuid = principal_id.parse().map_err(|_| Status::NotFound)?;
+    let pid: uuid::Uuid = principal_id.parse().map_err(|_| ApiError::from(Status::NotFound))?;
     let name = body.name.trim().to_string();
     if name.is_empty() || name.len() > 128 {
-        return Err(Status::UnprocessableEntity);
+        return Err(ApiError::from(Status::UnprocessableEntity));
     }
     let days = body.expires_in_days;
     if matches!(days, Some(d) if d <= 0 || d > 3650) {
-        return Err(Status::UnprocessableEntity);
+        return Err(ApiError::from(Status::UnprocessableEntity));
     }
     let token = generate_api_token();
     let hash = crate::authn::hash_api_token(&token);
@@ -1169,10 +1200,10 @@ pub async fn list_tokens(
     cap: CapabilityGuard,
     state: &State<AppState>,
     principal_id: String,
-) -> Result<Json<ApiEnvelope<Value>>, Status> {
+) -> Result<Json<ApiEnvelope<Value>>, ApiError> {
     let exec = pg(state)?;
     let ctx = cap.ctx.clone();
-    let pid: uuid::Uuid = principal_id.parse().map_err(|_| Status::NotFound)?;
+    let pid: uuid::Uuid = principal_id.parse().map_err(|_| ApiError::from(Status::NotFound))?;
     let v = exec
         .run(Deadline::in_secs(10), move |pool| async move {
             let mut tx = audit_tx(&pool, &ctx, "users.token.list").await?;
@@ -1236,11 +1267,11 @@ pub async fn revoke_token(
     state: &State<AppState>,
     principal_id: String,
     token_id: String,
-) -> Result<Json<ApiEnvelope<Value>>, Status> {
+) -> Result<Json<ApiEnvelope<Value>>, ApiError> {
     let exec = pg(state)?;
     let ctx = cap.ctx.clone();
-    let pid: uuid::Uuid = principal_id.parse().map_err(|_| Status::NotFound)?;
-    let tid: uuid::Uuid = token_id.parse().map_err(|_| Status::NotFound)?;
+    let pid: uuid::Uuid = principal_id.parse().map_err(|_| ApiError::from(Status::NotFound))?;
+    let tid: uuid::Uuid = token_id.parse().map_err(|_| ApiError::from(Status::NotFound))?;
     let v = exec
         .run(Deadline::in_secs(10), move |pool| async move {
             let mut tx = audit_tx(&pool, &ctx, "users.token.revoke").await?;

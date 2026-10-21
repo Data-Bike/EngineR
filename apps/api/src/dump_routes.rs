@@ -15,6 +15,7 @@
 //! `{"confirm":"RESTORE"}` body — replaying a dump mutates the database.
 
 use crate::workspace_routes::{meta, ApiEnvelope, CapabilityGuard};
+use crate::ApiError;
 use rocket::data::{Data, ToByteUnit};
 use rocket::fs::NamedFile;
 use rocket::http::Status;
@@ -131,6 +132,34 @@ fn is_active(dir: &Path) -> bool {
     !touched.is_some_and(|t| t.elapsed().unwrap_or_default() > STALE_AFTER)
 }
 
+/// Called once at process start: any `running`/`restoring` marker that
+/// survived a previous process belongs to a dead run — the executor was
+/// killed with it. Without the sweep such orphans wedge every future dump
+/// and restore behind the busy check for up to `STALE_AFTER`.
+/// Single-replica assumption: a live dump owned by another replica would be
+/// marked failed, so only run this where one API instance owns the dir.
+pub fn sweep_dead_markers() {
+    if let Ok(rd) = std::fs::read_dir(dump_root()) {
+        for e in rd.flatten().map(|e| e.path()).filter(|p| p.is_dir()) {
+            if matches!(
+                status_of(&e)["status"].as_str(),
+                Some("running" | "restoring")
+            ) {
+                let _ = write_status(
+                    &e,
+                    &json!({
+                        "status": "failed",
+                        "exit_code": -1,
+                        "finished_at": chrono::Utc::now().to_rfc3339(),
+                        "error": "crashed: API process restarted",
+                    }),
+                );
+                tracing::warn!(dir = %e.display(), "dump run marked failed: orphaned by restart");
+            }
+        }
+    }
+}
+
 /// Export and restore share the same database — never run concurrently.
 fn any_busy() -> bool {
     std::fs::read_dir(dump_root()).is_ok_and(|rd| {
@@ -180,7 +209,7 @@ fn unique_dir(prefix: &str) -> Option<(String, PathBuf)> {
 }
 
 #[post("/admin/dump")]
-pub fn run_dump(cap: CapabilityGuard) -> Result<Json<ApiEnvelope<Value>>, Status> {
+pub fn run_dump(cap: CapabilityGuard) -> Result<Json<ApiEnvelope<Value>>, ApiError> {
     let _ = &cap.ctx;
     let dsn = std::env::var("ENGINER_DUMP_DATABASE_URL").map_err(|_| {
         tracing::warn!("dump requested but ENGINER_DUMP_DATABASE_URL is unset");
@@ -188,14 +217,14 @@ pub fn run_dump(cap: CapabilityGuard) -> Result<Json<ApiEnvelope<Value>>, Status
     })?;
     let _guard = BUSY_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     if any_busy() {
-        return Err(Status::Conflict);
+        return Err(ApiError::from(Status::Conflict));
     }
 
     let base = chrono::Utc::now().format("dump-%Y%m%dT%H%M%SZ").to_string();
     let Some((dump_id, dir)) = unique_dir(&base) else {
-        return Err(Status::Conflict);
+        return Err(ApiError::from(Status::Conflict));
     };
-    std::fs::create_dir_all(&dir).map_err(|_| Status::InternalServerError)?;
+    std::fs::create_dir_all(&dir).map_err(|_| ApiError::from(Status::InternalServerError))?;
     // Mark busy before unlocking — the thread may outlive the request.
     write_status(
         &dir,
@@ -253,7 +282,7 @@ pub fn run_dump(cap: CapabilityGuard) -> Result<Json<ApiEnvelope<Value>>, Status
 }
 
 #[get("/admin/dump")]
-pub fn list_dumps(cap: CapabilityGuard) -> Result<Json<ApiEnvelope<Value>>, Status> {
+pub fn list_dumps(cap: CapabilityGuard) -> Result<Json<ApiEnvelope<Value>>, ApiError> {
     let _ = &cap.ctx;
     let mut out = Vec::new();
     if let Ok(rd) = std::fs::read_dir(dump_root()) {
@@ -276,14 +305,14 @@ pub async fn download_dump_part(
     cap: CapabilityGuard,
     dump_id: &str,
     file: &str,
-) -> Result<NamedFile, Status> {
+) -> Result<NamedFile, ApiError> {
     let _ = &cap.ctx;
     if !valid_dump_id(dump_id) || !PART_FILES.contains(&file) {
-        return Err(Status::NotFound);
+        return Err(ApiError::from(Status::NotFound));
     }
     NamedFile::open(dump_root().join(dump_id).join(file))
         .await
-        .map_err(|_| Status::NotFound)
+        .map_err(|_| ApiError::from(Status::NotFound))
 }
 
 /// Store an uploaded dump file as `upload-<ts>/dump.ndjson[.xz]`.
@@ -292,42 +321,45 @@ pub async fn download_dump_part(
 pub async fn upload_dump(
     cap: CapabilityGuard,
     data: Data<'_>,
-) -> Result<Json<ApiEnvelope<Value>>, Status> {
+) -> Result<Json<ApiEnvelope<Value>>, ApiError> {
     let _ = &cap.ctx;
     let base = chrono::Utc::now()
         .format("upload-%Y%m%dT%H%M%SZ")
         .to_string();
     let Some((dump_id, dir)) = unique_dir(&base) else {
-        return Err(Status::Conflict);
+        return Err(ApiError::from(Status::Conflict));
     };
-    std::fs::create_dir_all(&dir).map_err(|_| Status::InternalServerError)?;
+    std::fs::create_dir_all(&dir).map_err(|_| ApiError::from(Status::InternalServerError))?;
 
     let tmp = dir.join("upload.part");
     {
-        let mut stream = data.open(100_u64.gibibytes());
+        // 2 GiB is already far beyond a realistic tenant dump; an
+        // unbounded stream would let `security.manage` fill the host's
+        // disk via a single upload.
+        let mut stream = data.open(2_u64.gibibytes());
         let mut file = rocket::tokio::fs::File::create(&tmp)
             .await
-            .map_err(|_| Status::InternalServerError)?;
+            .map_err(|_| ApiError::from(Status::InternalServerError))?;
         rocket::tokio::io::copy(&mut stream, &mut file)
             .await
-            .map_err(|_| Status::InternalServerError)?;
+            .map_err(|_| ApiError::from(Status::InternalServerError))?;
     }
 
     // Sniff the container type, then verify the first NDJSON line.
     let mut magic = [0u8; 6];
     let n = std::fs::File::open(&tmp)
         .and_then(|mut f| f.read(&mut magic))
-        .map_err(|_| Status::InternalServerError)?;
+        .map_err(|_| ApiError::from(Status::InternalServerError))?;
     let name = if n == 6 && magic == XZ_MAGIC {
         "dump.ndjson.xz"
     } else {
         "dump.ndjson"
     };
     let target = dir.join(name);
-    std::fs::rename(&tmp, &target).map_err(|_| Status::InternalServerError)?;
+    std::fs::rename(&tmp, &target).map_err(|_| ApiError::from(Status::InternalServerError))?;
     if !validate_dump_file(&target) {
         let _ = std::fs::remove_dir_all(&dir);
-        return Err(Status::UnprocessableEntity);
+        return Err(ApiError::from(Status::UnprocessableEntity));
     }
 
     let size = target.metadata().map_or(0, |m| m.len());
@@ -358,25 +390,25 @@ pub fn restore_dump(
     cap: CapabilityGuard,
     dump_id: &str,
     body: Json<Value>,
-) -> Result<Json<ApiEnvelope<Value>>, Status> {
+) -> Result<Json<ApiEnvelope<Value>>, ApiError> {
     let _ = &cap.ctx;
     if body["confirm"].as_str() != Some("RESTORE") {
-        return Err(Status::UnprocessableEntity);
+        return Err(ApiError::from(Status::UnprocessableEntity));
     }
     let dsn = std::env::var("ENGINER_DUMP_DATABASE_URL").map_err(|_| {
         tracing::warn!("restore requested but ENGINER_DUMP_DATABASE_URL is unset");
         Status::ServiceUnavailable
     })?;
     if !valid_dump_id(dump_id) {
-        return Err(Status::NotFound);
+        return Err(ApiError::from(Status::NotFound));
     }
     let dir = dump_root().join(dump_id);
     if !dir.is_dir() || !has_dump_payload(&dir) {
-        return Err(Status::NotFound);
+        return Err(ApiError::from(Status::NotFound));
     }
     let _guard = BUSY_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     if any_busy() {
-        return Err(Status::Conflict);
+        return Err(ApiError::from(Status::Conflict));
     }
 
     write_status(
@@ -426,19 +458,19 @@ pub fn restore_dump(
 pub fn delete_dump(
     cap: CapabilityGuard,
     dump_id: &str,
-) -> Result<Json<ApiEnvelope<Value>>, Status> {
+) -> Result<Json<ApiEnvelope<Value>>, ApiError> {
     let _ = &cap.ctx;
     if !valid_dump_id(dump_id) {
-        return Err(Status::NotFound);
+        return Err(ApiError::from(Status::NotFound));
     }
     let dir = dump_root().join(dump_id);
     if !dir.is_dir() {
-        return Err(Status::NotFound);
+        return Err(ApiError::from(Status::NotFound));
     }
     if is_active(&dir) {
-        return Err(Status::Conflict);
+        return Err(ApiError::from(Status::Conflict));
     }
-    std::fs::remove_dir_all(&dir).map_err(|_| Status::InternalServerError)?;
+    std::fs::remove_dir_all(&dir).map_err(|_| ApiError::from(Status::InternalServerError))?;
     Ok(Json(ApiEnvelope {
         data: json!({"deleted": true}),
         meta: meta(),

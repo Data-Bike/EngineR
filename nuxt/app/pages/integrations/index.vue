@@ -90,6 +90,8 @@
                   size="xs"
                   variant="outline"
                   icon="i-lucide-heart-pulse"
+                  :aria-label="t('integrations.health_check')"
+                  :title="t('integrations.health_check')"
                   @click="runHealthCheck(conn.instance_id)"
                   :loading="healthChecking === conn.instance_id"
                 />
@@ -98,6 +100,8 @@
                   size="xs"
                   variant="outline"
                   icon="i-lucide-pause"
+                  :aria-label="t('integrations.disable')"
+                  :title="t('integrations.disable')"
                   @click="toggleConnector(conn, false)"
                 />
                 <UButton
@@ -105,6 +109,8 @@
                   size="xs"
                   variant="outline"
                   icon="i-lucide-play"
+                  :aria-label="t('integrations.enable')"
+                  :title="t('integrations.enable')"
                   @click="toggleConnector(conn, true)"
                 />
               </div>
@@ -168,7 +174,7 @@ definePageMeta({
   middleware: ['auth', capability('connector.manage')],
 });
 
-const { t } = useI18n();
+const { t, te } = useI18n();
 const api = useApi();
 const toast = useToast();
 
@@ -213,7 +219,7 @@ async function fetchConnectors() {
   } catch (err) {
     toast.add({
       title: t('common.error'),
-      description: err instanceof Error ? err.message : String(err),
+      description: displayError(err, t, te),
       color: 'error',
     });
   } finally {
@@ -236,7 +242,7 @@ async function toggleConnector(conn: ConnectorInstance, enable: boolean) {
   } catch (err) {
     toast.add({
       title: t('common.error'),
-      description: err instanceof Error ? err.message : String(err),
+      description: displayError(err, t, te),
       color: 'error',
     });
   }
@@ -254,7 +260,7 @@ async function runHealthCheck(id: string) {
   } catch (err) {
     toast.add({
       title: t('common.error'),
-      description: err instanceof Error ? err.message : String(err),
+      description: displayError(err, t, te),
       color: 'error',
     });
   } finally {
@@ -277,7 +283,7 @@ async function submitNew() {
   } catch (err) {
     toast.add({
       title: t('common.error'),
-      description: err instanceof Error ? err.message : String(err),
+      description: displayError(err, t, te),
       color: 'error',
     });
   } finally {

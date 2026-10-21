@@ -23,7 +23,7 @@
         <div class="text-right">
           <p class="text-sm text-[var(--ui-text-muted)]">{{ t('entity.risks.assessed_by') }}</p>
           <p class="font-medium">{{ currentAssessment.assessor }}</p>
-          <p class="text-xs text-[var(--ui-text-muted)]">{{ currentAssessment.assessed_at }}</p>
+          <p class="text-xs text-[var(--ui-text-muted)]">{{ formatDateTime(currentAssessment.assessed_at) }}</p>
         </div>
       </div>
       <!-- Decision -->
@@ -62,8 +62,8 @@
             </div>
             <p class="text-sm text-[var(--ui-text-muted)] mt-1">{{ factor.explanation }}</p>
             <p class="text-xs text-[var(--ui-text-muted)] mt-1">
-              {{ t('entity.risks.detected') }}: {{ factor.detected_at }}
-              <span v-if="factor.resolved_at"> · {{ t('entity.risks.resolved_at') }}: {{ factor.resolved_at }}</span>
+              {{ t('entity.risks.detected') }}: {{ formatDateTime(factor.detected_at) }}
+              <span v-if="factor.resolved_at"> · {{ t('entity.risks.resolved_at') }}: {{ formatDateTime(factor.resolved_at) }}</span>
             </p>
             <!-- Source checks -->
             <div v-if="factor.source_checks.length > 0" class="flex flex-wrap gap-1 mt-1">
@@ -124,7 +124,7 @@ const props = defineProps<{
   entityId: string;
 }>();
 
-const { t } = useI18n();
+const { t, te } = useI18n();
 const { hasCapability } = useCapability();
 const toast = useToast();
 const api = useApi();
@@ -190,7 +190,7 @@ async function fetchRisks() {
       currentAssessment.value = null;
     }
   } catch (e: unknown) {
-    toast.add({ title: t('common.error'), description: e instanceof Error ? e.message : String(e), color: 'error' });
+    toast.add({ title: t('common.error'), description: displayError(e, t, te), color: 'error' });
     factors.value = [];
     currentAssessment.value = null;
   }
@@ -202,7 +202,7 @@ async function resolveFactor(factorId: string) {
     toast.add({ title: t('entity.risks.resolved'), color: 'success' });
     await fetchRisks();
   } catch (e: unknown) {
-    toast.add({ title: t('common.error'), description: e instanceof Error ? e.message : String(e), color: 'error' });
+    toast.add({ title: t('common.error'), description: displayError(e, t, te), color: 'error' });
   }
 }
 
@@ -220,7 +220,7 @@ async function submitAssessment() {
     newRationale.value = '';
     await fetchRisks();
   } catch (e: unknown) {
-    toast.add({ title: t('common.error'), description: e instanceof Error ? e.message : String(e), color: 'error' });
+    toast.add({ title: t('common.error'), description: displayError(e, t, te), color: 'error' });
   } finally {
     submitting.value = false;
   }

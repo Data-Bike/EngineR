@@ -60,7 +60,7 @@
               <UBadge :color="statusColor(req.status)" size="sm">{{ t(`requests.status.${req.status}`) }}</UBadge>
             </td>
             <td class="py-2 px-3">
-              <UBadge :color="urgencyColor(req.urgency)" size="sm">{{ t(`requests.urgency.${req.urgency}`) }}</UBadge>
+              <UBadge :color="urgencyColor(req.urgency)" size="sm">{{ enumLabel(t, te, 'requests.urgency', req.urgency) }}</UBadge>
             </td>
             <td class="py-2 px-3 text-[var(--ui-text-muted)]">{{ req.due_date ? formatDate(req.due_date) : '—' }}</td>
             <td class="py-2 px-3 text-[var(--ui-text-muted)]">{{ formatDate(req.created_at) }}</td>
@@ -70,6 +70,9 @@
           </tr>
         </tbody>
       </table></div>
+      <div v-if="nextCursor" class="flex justify-center pt-3">
+        <UButton variant="outline" :loading="loadingMore" @click="loadMore">{{ t('entity.load_more') }}</UButton>
+      </div>
     </UCard>
 
     <!-- New request dialog -->
@@ -93,7 +96,7 @@
               <USelect v-model="newRequest.urgency" :items="urgencyOptions" value-key="value" class="w-full" />
             </UFormField>
             <UFormField :label="t('requests.form.due_date')">
-              <UInput v-model="newRequest.due_date" type="datetime-local" class="w-full" />
+              <UInput v-model="newRequest.due_date" type="date" class="w-full" />
             </UFormField>
           </div>
           <template #footer>
@@ -119,10 +122,11 @@ import { capability } from '~/middleware/capability';
 import { ref, reactive, computed, onMounted } from 'vue';
 import { useI18n } from 'vue-i18n';
 import StatCard from '~/components/common/StatCard.vue';
+import { nextCursorOf } from '~/utils/pagination';
 
 definePageMeta({ middleware: ['auth', capability('entity.read')] });
 
-const { t } = useI18n();
+const { t, te } = useI18n();
 const toast = useToast();
 const api = useApi();
 
@@ -210,15 +214,37 @@ function resetFilters() {
   fetchRequests();
 }
 
+const nextCursor = ref<string | null>(null);
+const loadingMore = ref(false);
+
+function listQuery(cursor?: string) {
+  return { status: filters.status === 'all' ? undefined : filters.status, cursor };
+}
+
 async function fetchRequests() {
   loading.value = true;
   try {
-    const res = await api.requests.list();
+    const res = await api.requests.list(listQuery());
     requests.value = res.data as RequestRow[];
+    nextCursor.value = nextCursorOf(res.meta);
   } catch (err) {
-    toast.add({ title: t('common.error'), description: err instanceof Error ? err.message : String(err), color: 'error' });
+    toast.add({ title: t('common.error'), description: displayError(err, t, te), color: 'error' });
   } finally {
     loading.value = false;
+  }
+}
+
+async function loadMore() {
+  if (!nextCursor.value) return;
+  loadingMore.value = true;
+  try {
+    const res = await api.requests.list(listQuery(nextCursor.value));
+    requests.value.push(...(res.data as RequestRow[]));
+    nextCursor.value = nextCursorOf(res.meta);
+  } catch (err) {
+    toast.add({ title: t('common.error'), description: displayError(err, t, te), color: 'error' });
+  } finally {
+    loadingMore.value = false;
   }
 }
 
@@ -235,7 +261,7 @@ async function submitNewRequest() {
     toast.add({ title: t('requests.new_success'), color: 'success' });
     await fetchRequests();
   } catch (err) {
-    toast.add({ title: t('common.error'), description: err instanceof Error ? err.message : String(err), color: 'error' });
+    toast.add({ title: t('common.error'), description: displayError(err, t, te), color: 'error' });
   } finally {
     submitting.value = false;
   }

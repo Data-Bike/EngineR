@@ -56,7 +56,7 @@ export function useSchemaMutation() {
 
     const validation = await api.schemas.validateDraft(draftId);
     if (!validation.data.valid) {
-      throw new Error('schema.validation_failed');
+      throw new Error('errors.schema.validation_failed');
     }
     await api.schemas.impactDraft(draftId);
 

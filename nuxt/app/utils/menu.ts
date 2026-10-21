@@ -38,7 +38,7 @@ export const MENU_ITEMS: MenuItem[] = [
  *  itself is gated by admin.pages.access, so cards only add finer-grained
  *  capability + URL-rule checks on top. */
 export const ADMIN_ITEMS: MenuItem[] = [
-  { to: '/admin/schema', label: 'schema.title', icon: 'i-lucide-database', desc: 'admin.schema_desc' },
+  { to: '/admin/schema', label: 'schema.title', icon: 'i-lucide-database', capabilities: ['schema.draft', 'schema.publish'], desc: 'admin.schema_desc' },
   { to: '/admin/types', label: 'admin.types_title', icon: 'i-lucide-boxes', desc: 'admin.types_desc' },
   { to: '/admin/catalogs', label: 'catalog.title', icon: 'i-lucide-layers', desc: 'catalog.desc' },
   { to: '/admin/predicates', label: 'admin.predicates_title', icon: 'i-lucide-share-2', desc: 'admin.predicates_desc' },
@@ -63,6 +63,7 @@ export const SEGMENT_LABEL_KEYS: Record<string, string> = {
   audit: 'nav.audit',
   search: 'entity.search',
   create: 'entity.create',
+  edit: 'entity.edit',
   schema: 'schema.title',
   types: 'admin.types_title',
   catalogs: 'catalog.title',
